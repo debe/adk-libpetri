@@ -1,0 +1,29 @@
+digraph StaleResultValidation {
+    rankdir=LR;
+    nodesep=0.5;
+    ranksep=0.75;
+    forcelabels="true";
+    overlap="false";
+    fontname="Helvetica,Arial,sans-serif";
+    outputorder="edgesfirst";
+    compound="true";
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=12];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=10];
+
+    p_INCOMING_RESULT [label="", shape="circle", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, width=0.35, xlabel="INCOMING_RESULT", fixedsize="true"];
+    p_COMMITTED [label="", shape="circle", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, width=0.35, xlabel="COMMITTED", fixedsize="true"];
+    p_DISCARDED [label="", shape="circle", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, width=0.35, xlabel="DISCARDED", fixedsize="true"];
+    p_LATEST_GENERATION [label="", shape="circle", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, width=0.35, xlabel="LATEST_GENERATION", fixedsize="true"];
+    p_USER_NEW_TURN [label="", shape="circle", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, width=0.35, xlabel="USER_NEW_TURN", fixedsize="true"];
+    t_CommitResult [label="CommitResult [0, ∞]ms", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_BumpGeneration [label="BumpGeneration [0, ∞]ms", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    j_CommitResult__xor_0 [label="✕", shape="diamond", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1, height=0.3, width=0.3, fixedsize="true", fontsize=14];
+
+    p_INCOMING_RESULT -> t_CommitResult [color="#333333", style="solid", arrowhead="normal"];
+    t_CommitResult -> j_CommitResult__xor_0 [color="#333333", style="solid", arrowhead="normal"];
+    j_CommitResult__xor_0 -> p_COMMITTED [color="#333333", style="solid", arrowhead="normal", label="COMMITTED"];
+    j_CommitResult__xor_0 -> p_DISCARDED [color="#333333", style="solid", arrowhead="normal", label="DISCARDED"];
+    p_LATEST_GENERATION -> t_CommitResult [color="#6c757d", style="dashed", arrowhead="normal", label="read"];
+    p_USER_NEW_TURN -> t_BumpGeneration [color="#333333", style="solid", arrowhead="normal"];
+    t_BumpGeneration -> p_LATEST_GENERATION [color="#fd7e14", style="bold", arrowhead="normal", label="reset+out", penwidth=2];
+}

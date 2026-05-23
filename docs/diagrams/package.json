@@ -1,0 +1,17 @@
+{
+  "name": "adk-libpetri-diagrams",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Diagram-generation scripts that build the canonical adk-libpetri net topologies via the libpetri npm package and render them to SVG via graphviz.",
+  "scripts": {
+    "build": "tsx src/index.ts && for f in dot/*.dot; do dot -Tsvg \"$f\" -o \"svg/$(basename \"$f\" .dot).svg\"; done"
+  },
+  "dependencies": {
+    "libpetri": "^2.5.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

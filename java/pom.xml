@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.libpetri</groupId>
+    <artifactId>adk-libpetri</artifactId>
+    <version>1.2.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>adk-libpetri (Java)</name>
+    <description>Replaces Google ADK Java's orchestration core with a coloured Petri net runtime built on libpetri. Compose multi-agent flows as typed subnets; verify with Z3.</description>
+    <url>https://github.com/debe/adk-libpetri</url>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>Dennis Berger</name>
+            <email>dbgh@knownhosts.org</email>
+            <url>https://github.com/debe</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/debe/adk-libpetri.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/debe/adk-libpetri.git</developerConnection>
+        <url>https://github.com/debe/adk-libpetri</url>
+    </scm>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.release>25</maven.compiler.release>
+
+        <libpetri.version>2.5.0</libpetri.version>
+        <google-adk.version>1.3.0</google-adk.version>
+        <rxjava.version>3.1.12</rxjava.version>
+        <!--
+          Protobuf floor required by ADK 1.3.0 transitives. Gencode in
+          com.google.cloud:google-cloud-dlp and com.google.longrunning is
+          compiled against 4.33.x; a runtime older than the linked gencode
+          throws ProtobufRuntimeVersionException at first class-load. The
+          failure is silent until first hit, so we pin via dependencyManagement
+          to fail loudly at resolution. Consumers using an enforced platform
+          BOM must add an explicit `force` for the same version. See README.
+        -->
+        <protobuf.version>4.33.2</protobuf.version>
+
+        <junit.version>6.0.3</junit.version>
+        <truth.version>1.4.5</truth.version>
+        <mockito.version>5.23.0</mockito.version>
+
+        <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
+        <maven-surefire-plugin.version>3.5.5</maven-surefire-plugin.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java</artifactId>
+                <version>${protobuf.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java-util</artifactId>
+                <version>${protobuf.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>${junit.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.libpetri</groupId>
+            <artifactId>libpetri</artifactId>
+            <version>${libpetri.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk</artifactId>
+            <version>${google-adk.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.reactivex.rxjava3</groupId>
+            <artifactId>rxjava</artifactId>
+            <version>${rxjava.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.google.truth</groupId>
+            <artifactId>truth</artifactId>
+            <version>${truth.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <version>1.51.0</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven-compiler-plugin.version}</version>
+                <configuration>
+                    <release>25</release>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${maven-surefire-plugin.version}</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>

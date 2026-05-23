@@ -1,0 +1,26 @@
+digraph ReaskBudgetPattern {
+    rankdir=LR;
+    nodesep=0.5;
+    ranksep=0.75;
+    forcelabels="true";
+    overlap="false";
+    fontname="Helvetica,Arial,sans-serif";
+    outputorder="edgesfirst";
+    compound="true";
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=12];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=10];
+
+    p_TOOL_RESULTS [label="", shape="circle", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, width=0.35, xlabel="TOOL_RESULTS", fixedsize="true"];
+    p_REASK_BUDGET [label="", shape="circle", style="filled", fillcolor="#d4edda", color="#28a745", penwidth=2, width=0.35, xlabel="REASK_BUDGET", fixedsize="true"];
+    p_LLM_REQUEST [label="", shape="circle", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, width=0.35, xlabel="LLM_REQUEST", fixedsize="true"];
+    p_EVENT_OUT [label="", shape="circle", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, width=0.35, xlabel="EVENT_OUT", fixedsize="true"];
+    t_ReAsk_priority_10 [label="ReAsk_priority_10 [0, ∞]ms prio=10", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_ReAskExhausted_priority_minus_10 [label="ReAskExhausted_priority_minus_10 [0, ∞]ms prio=-10", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+
+    p_TOOL_RESULTS -> t_ReAsk_priority_10 [color="#333333", style="solid", arrowhead="normal"];
+    p_REASK_BUDGET -> t_ReAsk_priority_10 [color="#333333", style="solid", arrowhead="normal"];
+    t_ReAsk_priority_10 -> p_LLM_REQUEST [color="#333333", style="solid", arrowhead="normal"];
+    p_TOOL_RESULTS -> t_ReAskExhausted_priority_minus_10 [color="#333333", style="solid", arrowhead="normal"];
+    t_ReAskExhausted_priority_minus_10 -> p_EVENT_OUT [color="#333333", style="solid", arrowhead="normal"];
+    p_REASK_BUDGET -> t_ReAskExhausted_priority_minus_10 [color="#dc3545", style="solid", arrowhead="odot"];
+}

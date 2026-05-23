@@ -1,0 +1,56 @@
+digraph LlmAgentSubnet {
+    rankdir=LR;
+    nodesep=0.5;
+    ranksep=0.75;
+    forcelabels="true";
+    overlap="false";
+    fontname="Helvetica,Arial,sans-serif";
+    outputorder="edgesfirst";
+    compound="true";
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=12];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=10];
+
+    p_USER_IN [label="", shape="circle", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, width=0.35, xlabel="USER_IN", fixedsize="true"];
+    p_LLM_REQUEST [label="", shape="circle", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, width=0.35, xlabel="LLM_REQUEST", fixedsize="true"];
+    p_REASK_BUDGET [label="", shape="circle", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, width=0.35, xlabel="REASK_BUDGET", fixedsize="true"];
+    p_LLM_RESPONSE [label="", shape="circle", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, width=0.35, xlabel="LLM_RESPONSE", fixedsize="true"];
+    p_TOOL_CALLS [label="", shape="circle", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, width=0.35, xlabel="TOOL_CALLS", fixedsize="true"];
+    p_TRANSFER [label="", shape="doublecircle", style="filled", fillcolor="#cce5ff", color="#004085", penwidth=2, width=0.35, xlabel="TRANSFER", fixedsize="true"];
+    p_EVENT_OUT [label="", shape="circle", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, width=0.35, xlabel="EVENT_OUT", fixedsize="true"];
+    p_LEGACY_SESSION_WRITE [label="", shape="doublecircle", style="filled", fillcolor="#cce5ff", color="#004085", penwidth=2, width=0.35, xlabel="LEGACY_SESSION_WRITE", fixedsize="true"];
+    p_TOOL_RESULTS [label="", shape="circle", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, width=0.35, xlabel="TOOL_RESULTS", fixedsize="true"];
+    t_BuildPrompt [label="BuildPrompt [0, ∞]ms", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_LlmStep_Call [label="LlmStep_Call [0, ∞]ms", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_Router_Route [label="Router_Route [0, ∞]ms", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_ToolDispatch [label="ToolDispatch [0, ∞]ms", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_ReAsk [label="ReAsk [0, ∞]ms prio=10", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_ReAskExhausted [label="ReAskExhausted [0, ∞]ms prio=-10", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    j_BuildPrompt__and_0 [label="✚", shape="diamond", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1, height=0.3, width=0.3, fixedsize="true", fontsize=14];
+    j_Router_Route__xor_0 [label="✕", shape="diamond", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1, height=0.3, width=0.3, fixedsize="true", fontsize=14];
+    j_Router_Route__and_1 [label="✚", shape="diamond", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1, height=0.3, width=0.3, fixedsize="true", fontsize=14];
+    j_ReAskExhausted__and_0 [label="✚", shape="diamond", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1, height=0.3, width=0.3, fixedsize="true", fontsize=14];
+
+    p_USER_IN -> t_BuildPrompt [color="#333333", style="solid", arrowhead="normal"];
+    t_BuildPrompt -> j_BuildPrompt__and_0 [color="#333333", style="solid", arrowhead="normal"];
+    j_BuildPrompt__and_0 -> p_LLM_REQUEST [color="#333333", style="solid", arrowhead="normal"];
+    j_BuildPrompt__and_0 -> p_REASK_BUDGET [color="#fd7e14", style="bold", arrowhead="normal", label="reset+out", penwidth=2];
+    p_LLM_REQUEST -> t_LlmStep_Call [color="#333333", style="solid", arrowhead="normal"];
+    t_LlmStep_Call -> p_LLM_RESPONSE [color="#333333", style="solid", arrowhead="normal"];
+    p_LLM_RESPONSE -> t_Router_Route [color="#333333", style="solid", arrowhead="normal"];
+    t_Router_Route -> j_Router_Route__xor_0 [color="#333333", style="solid", arrowhead="normal"];
+    j_Router_Route__xor_0 -> p_TOOL_CALLS [color="#333333", style="solid", arrowhead="normal", label="TOOL_CALLS"];
+    j_Router_Route__xor_0 -> p_TRANSFER [color="#333333", style="solid", arrowhead="normal", label="TRANSFER"];
+    j_Router_Route__xor_0 -> j_Router_Route__and_1 [color="#333333", style="solid", arrowhead="normal"];
+    j_Router_Route__and_1 -> p_EVENT_OUT [color="#333333", style="solid", arrowhead="normal"];
+    j_Router_Route__and_1 -> p_LEGACY_SESSION_WRITE [color="#333333", style="solid", arrowhead="normal"];
+    p_TOOL_CALLS -> t_ToolDispatch [color="#333333", style="solid", arrowhead="normal"];
+    t_ToolDispatch -> p_TOOL_RESULTS [color="#333333", style="solid", arrowhead="normal"];
+    p_TOOL_RESULTS -> t_ReAsk [color="#333333", style="solid", arrowhead="normal"];
+    t_ReAsk -> p_LLM_REQUEST [color="#333333", style="solid", arrowhead="normal"];
+    p_REASK_BUDGET -> t_ReAsk [color="#6c757d", style="dashed", arrowhead="normal", label="read"];
+    p_TOOL_RESULTS -> t_ReAskExhausted [color="#333333", style="solid", arrowhead="normal"];
+    t_ReAskExhausted -> j_ReAskExhausted__and_0 [color="#333333", style="solid", arrowhead="normal"];
+    j_ReAskExhausted__and_0 -> p_EVENT_OUT [color="#333333", style="solid", arrowhead="normal"];
+    j_ReAskExhausted__and_0 -> p_LEGACY_SESSION_WRITE [color="#333333", style="solid", arrowhead="normal"];
+    p_REASK_BUDGET -> t_ReAskExhausted [color="#dc3545", style="solid", arrowhead="odot"];
+}
