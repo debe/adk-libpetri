@@ -1,5 +1,8 @@
 # adk-libpetri
 
+[![CI](https://github.com/debe/adk-libpetri/actions/workflows/ci.yml/badge.svg)](https://github.com/debe/adk-libpetri/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+
 adk-libpetri replaces Google ADK Java's orchestration core with a
 Coloured Time Petri Net runtime built on
 [libpetri](https://github.com/debe/libpetri). The pieces it replaces
@@ -609,7 +612,7 @@ watch-item: shipped at 33.5.0 but commonly managed to 32.x).
 ## Relationship to libpetri
 
 adk-libpetri consumes libpetri from Maven Central
-(`org.libpetri:libpetri:2.5.0`). It is a sibling project, not a fork.
+(`org.libpetri:libpetri:2.6.1`). It is a sibling project, not a fork.
 The shared design principles (env-place-only interaction, typed colours
 per concept, marking-as-state, EventStore-decorated observability) come
 from libpetri and apply identically here.
