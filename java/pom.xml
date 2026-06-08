@@ -39,10 +39,10 @@
         <maven.compiler.release>25</maven.compiler.release>
 
         <libpetri.version>2.7.1</libpetri.version>
-        <google-adk.version>1.3.0</google-adk.version>
+        <google-adk.version>1.4.0</google-adk.version>
         <rxjava.version>3.1.12</rxjava.version>
         <!--
-          Protobuf floor required by ADK 1.3.0 transitives. Gencode in
+          Protobuf floor required by ADK 1.4.0 transitives. Gencode in
           com.google.cloud:google-cloud-dlp and com.google.longrunning is
           compiled against 4.33.x; a runtime older than the linked gencode
           throws ProtobufRuntimeVersionException at first class-load. The
@@ -50,7 +50,7 @@
           to fail loudly at resolution. Consumers using an enforced platform
           BOM must add an explicit `force` for the same version. See README.
         -->
-        <protobuf.version>4.33.2</protobuf.version>
+        <protobuf.version>4.33.5</protobuf.version>
 
         <junit.version>6.0.3</junit.version>
         <truth.version>1.4.5</truth.version>

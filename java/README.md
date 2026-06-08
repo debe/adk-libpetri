@@ -21,7 +21,7 @@ Java 25, Maven 3.9.x via wrapper.
 | | Version |
 |---|---|
 | `org.libpetri:libpetri`              | 2.6.1  (Maven Central) |
-| `com.google.adk:google-adk`          | 1.3.0  (Maven Central) |
+| `com.google.adk:google-adk`          | 1.4.0  (Maven Central) |
 | `io.reactivex.rxjava3:rxjava`        | 3.1.12 |
 | `io.opentelemetry:opentelemetry-*`   | 1.51.0 (transitive via google-adk and libpetri) |
 

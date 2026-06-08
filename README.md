@@ -222,6 +222,40 @@ with the state-class graph bounded under 256 reachable markings. The
 composed topology is rendered in
 [`bidi-composition.svg`](docs/diagrams/svg/bidi-composition.svg).
 
+### Relation to ADK 2.0's workflow runtime
+
+The same shape argument is now visible in ADK's own direction. ADK 2.0
+(the Python line; the Java SDK remains on the 1.x contract this project
+targets) replaces the hierarchical agent executor (the nesting of
+`SequentialAgent`, `ParallelAgent`, and `LoopAgent`) with a *workflow
+runtime* that evaluates agents, tools, and functions as nodes in an
+execution graph. The move off the tree is itself an acknowledgement that
+nesting sequence and parallel shapes projects a concurrent process onto
+a structure too narrow to hold it.
+
+A coloured timed Petri net is a superset of that graph model on the axes
+that govern orchestration correctness. Concurrency is the firing rule
+rather than a coordinator layered onto the graph: a marking holds many
+tokens across many places at once, a transition with several input
+places *is* an AND-join, and a shared place feeding competing
+transitions *is* a race. Synchronization, choice, mutual exclusion,
+bounded loops, and pre-emption are expressed structurally (through
+input and inhibitor arcs, priorities, and read arcs) rather than as
+imperative checks inside node bodies.
+
+The decisive difference is when correctness is established. A graph
+runtime tracks graph state at run time and reports it after the fact;
+the marking lets the same properties be proved before execution.
+`AdkNetInvariants` runs three structural validators on every build, and
+Z3 proves the assembled demo nets deadlock-free with the state-class
+graph bounded to a finite reachable space. The trade is modelling
+discipline: a plain graph is simpler to author for linear or fan-out
+flows, and a managed runtime supplies retries, telemetry, and hosted
+execution out of the box. Where the ordering, exclusion, and
+cancellation guarantees of the orchestration are load-bearing, a
+verifiable net is the stronger foundation, and `PetriAgent` keeps it
+inside the ADK contract.
+
 ## What this looks like for ADK
 
 The whole control flow is one user-designed coloured Petri net composed
@@ -585,7 +619,7 @@ composition patterns and the two end-to-end demos.
 
 ### Consuming from a project: protobuf version floor
 
-ADK 1.3.0's transitives (notably `com.google.cloud:google-cloud-dlp`
+ADK 1.4.0's transitives (notably `com.google.cloud:google-cloud-dlp`
 and `com.google.longrunning`) ship protobuf gencode compiled against
 4.33.x. The protobuf runtime contract is "runtime at least linked
 gencode," so consumers that pin protobuf-java to an older version hit
@@ -594,7 +628,7 @@ an apparently-unrelated dependency. The failure is silent until that
 load, and the stack trace points at the consumer's code rather than at
 the version pin that caused the downgrade.
 
-adk-libpetri pins protobuf-java to 4.33.2 via `dependencyManagement` in
+adk-libpetri pins protobuf-java to 4.33.5 via `dependencyManagement` in
 its own POM, so direct consumers get the right version transitively.
 Consumers using an enforced platform BOM (Helidon's `enforcedPlatform`,
 Spring Boot's BOM in strict mode) must add an explicit override to undo
@@ -603,8 +637,8 @@ the BOM's downgrade. Gradle:
 ```groovy
 configurations.all {
     resolutionStrategy {
-        force 'com.google.protobuf:protobuf-java:4.33.2'
-        force 'com.google.protobuf:protobuf-java-util:4.33.2'
+        force 'com.google.protobuf:protobuf-java:4.33.5'
+        force 'com.google.protobuf:protobuf-java-util:4.33.5'
     }
 }
 ```
