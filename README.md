@@ -3,6 +3,12 @@
 [![CI](https://github.com/debe/adk-libpetri/actions/workflows/ci.yml/badge.svg)](https://github.com/debe/adk-libpetri/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
+<p align="center">
+  <img src="docs/assets/best-of-both-worlds-cover.svg"
+       alt="Two worlds fusing: Google's ADK ecosystem (Vertex AI, Cloud Run, A2A, OpenTelemetry) on the left and a libpetri Petri-net runtime on the right, joined by a token crossing the seam"
+       width="1000">
+</p>
+
 adk-libpetri replaces Google ADK Java's orchestration core with a
 Coloured Time Petri Net runtime built on
 [libpetri](https://github.com/debe/libpetri). The pieces it replaces

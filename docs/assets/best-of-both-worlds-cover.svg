@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a1124"/>
+      <stop offset="1" stop-color="#0c1c3a"/>
+    </linearGradient>
+    <radialGradient id="centerGlow" cx="0.5" cy="0.6" r="0.55">
+      <stop offset="0" stop-color="#1b305e" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#0a1124" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="seam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7dd3fc" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#cfeaff" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#fde68a" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="token" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fff7e0"/>
+      <stop offset="0.45" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#b45309"/>
+    </radialGradient>
+    <linearGradient id="chip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#102a4c"/>
+      <stop offset="1" stop-color="#0a1d38"/>
+    </linearGradient>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <filter id="tokenGlow" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9fc6e8"/>
+    </marker>
+    <marker id="arrowA" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fcd34d"/>
+    </marker>
+  </defs>
+
+  <!-- background -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#centerGlow)"/>
+  <rect x="8" y="8" width="1184" height="614" rx="18" fill="none" stroke="#22324f" stroke-width="1.5"/>
+
+  <!-- 'both worlds' venn behind the diagram -->
+  <g>
+    <circle cx="540" cy="388" r="150" fill="#38bdf8" fill-opacity="0.06" stroke="#38bdf8" stroke-opacity="0.30" stroke-width="1.5"/>
+    <circle cx="660" cy="388" r="150" fill="#fbbf24" fill-opacity="0.06" stroke="#fbbf24" stroke-opacity="0.30" stroke-width="1.5"/>
+  </g>
+
+  <!-- central fusion seam -->
+  <rect x="596" y="250" width="8" height="278" fill="url(#seam)" filter="url(#soft)"/>
+  <rect x="599" y="252" width="2" height="274" fill="#e7f4ff" opacity="0.5"/>
+
+  <!-- title -->
+  <text x="600" y="98" text-anchor="middle" font-size="62" font-weight="700" fill="#f4f8ff" letter-spacing="0.5">The Best of Both Worlds</text>
+  <text x="600" y="143" text-anchor="middle" font-size="23" font-weight="400" fill="#9fb6d8">A Coloured Petri-net orchestration core for Google's ADK</text>
+
+  <!-- section labels -->
+  <text x="287" y="232" text-anchor="middle" font-size="16" font-weight="600" fill="#7dd3fc" letter-spacing="3.5">GOOGLE ADK ECOSYSTEM</text>
+  <text x="880" y="232" text-anchor="middle" font-size="16" font-weight="600" fill="#fcd34d" letter-spacing="3.5">LIBPETRI RUNTIME</text>
+
+  <!-- left world: ADK ecosystem mesh -->
+  <g stroke="#3aa0e0" stroke-opacity="0.30" stroke-width="1.5">
+    <line x1="202" y1="310" x2="372" y2="310"/>
+    <line x1="202" y1="384" x2="372" y2="384"/>
+    <line x1="202" y1="334" x2="202" y2="360"/>
+    <line x1="372" y1="334" x2="372" y2="360"/>
+    <line x1="372" y1="372" x2="452" y2="372"/>
+  </g>
+  <g font-size="18" font-weight="600" fill="#cfe6fb" text-anchor="middle">
+    <rect x="126" y="286" width="152" height="48" rx="11" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
+    <text x="202" y="316">Vertex AI</text>
+    <rect x="296" y="286" width="152" height="48" rx="11" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
+    <text x="372" y="316">Cloud Run</text>
+    <rect x="126" y="360" width="152" height="48" rx="11" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
+    <text x="202" y="390">A2A</text>
+    <rect x="296" y="360" width="152" height="48" rx="11" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
+    <text x="372" y="390">OpenTelemetry</text>
+  </g>
+  <text x="287" y="488" text-anchor="middle" font-size="15" fill="#7089ad">deploy · observe · interoperate</text>
+
+  <!-- fusion connector with a token crossing the seam -->
+  <path d="M452,372 C 560,372 540,386 733,386" fill="none" stroke="#fcd34d" stroke-opacity="0.35" stroke-width="2" stroke-dasharray="2 7" stroke-linecap="round"/>
+  <path d="M452,372 C 560,372 540,386 733,386" fill="none" stroke="#fcd34d" stroke-opacity="0.55" stroke-width="2.5" marker-end="url(#arrowA)"/>
+  <circle cx="600" cy="375" r="16" fill="url(#token)" filter="url(#tokenGlow)"/>
+  <circle cx="600" cy="375" r="9.5" fill="url(#token)"/>
+
+  <!-- right world: a Petri net -->
+  <g stroke="#9fc6e8" stroke-width="2.6" fill="none">
+    <line x1="787" y1="386" x2="838" y2="386" marker-end="url(#arrow)"/>
+    <path d="M858,386 C 892,386 902,344 916,344" marker-end="url(#arrow)"/>
+    <path d="M858,386 C 892,386 902,430 916,430" marker-end="url(#arrow)"/>
+  </g>
+  <!-- transition -->
+  <rect x="840" y="346" width="16" height="80" rx="3" fill="#cfe0f2" stroke="#9fc6e8" stroke-width="1.5"/>
+  <!-- places -->
+  <circle cx="760" cy="386" r="27" fill="#0e1c34" stroke="#9fc6e8" stroke-width="2.6"/>
+  <circle cx="946" cy="344" r="27" fill="#0e1c34" stroke="#9fc6e8" stroke-width="2.6"/>
+  <circle cx="946" cy="430" r="27" fill="#0e1c34" stroke="#9fc6e8" stroke-width="2.6"/>
+  <!-- token resting in the first place -->
+  <circle cx="760" cy="386" r="11" fill="url(#token)"/>
+  <text x="880" y="488" text-anchor="middle" font-size="15" fill="#7089ad">places · transitions · tokens</text>
+
+  <!-- footer -->
+  <text x="60" y="598" font-size="19" font-weight="700" fill="#7089ad" letter-spacing="0.5">adk-libpetri</text>
+  <text x="1140" y="598" text-anchor="end" font-size="17" fill="#7089ad">an experiment, not a product</text>
+</svg>
