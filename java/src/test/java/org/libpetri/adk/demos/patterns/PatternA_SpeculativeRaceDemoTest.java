@@ -138,7 +138,7 @@ class PatternA_SpeculativeRaceDemoTest {
                 Duration.ofMillis(120),  // medium
                 Duration.ofMillis(300)));// slow
 
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
         var agent = PetriAgent.of(
                 "race_agent",

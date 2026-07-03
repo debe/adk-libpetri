@@ -234,15 +234,15 @@ class LlmAgentSubnetTest {
     }
 
     // ============================================================
-    //  Interface shape — the N-port surface
+    //  Interface shape — public agent subnet ports
     // ============================================================
 
     @Test
-    void subnet_interface_exposes_four_ports() {
+    void subnet_interface_exposes_public_agent_ports() {
         var portNames = LlmAgentSubnet.DEF.iface().ports().stream()
                 .map(p -> p.name()).sorted().toList();
         assertThat(portNames).containsExactly(
-                "eventOut", "legacySessionWrite", "transfer", "userIn").inOrder();
+                "eventOut", "transfer", "userIn").inOrder();
     }
 
     @Test

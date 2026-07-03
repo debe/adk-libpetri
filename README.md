@@ -16,7 +16,8 @@ are `SequentialAgent`, `ParallelAgent`, `LoopAgent`, `BaseLlmFlow`,
 `AgentTransfer`, and the `Runner` that drives them over an RxJava
 pipeline. In their place, the whole control flow of a session is one
 coloured Petri net you compose from typed subnets. Stock ADK `Runner`
-consumes it through an ~80-line `PetriAgent extends BaseAgent` adapter.
+consumes turn-based sessions through `PetriAgent`; Live/BIDI paths use
+the provider-neutral `BidiPetriAgent` bridge over `LiveConnection`.
 There is no fork of ADK and no fork of genai.
 
 Both shipped demo nets are Z3-proved deadlock-free on every
@@ -338,6 +339,31 @@ voice needs no fork either. ADK's `Gemini.generateContent` and
 `GeminiLlmConnection` wrappers, which add the `commonPool` hops and drop
 the VAD signals, are bypassed in thin user code rather than patched.
 
+The BIDI plumbing splits into a shipped half and a consumer half. The
+shipped half is `BidiPetriAgent.bridge(liveRequestQueue, connection,
+runner, author, onServerMessage)`: it owns the generic bidirectional
+pump, forwarding inbound `LiveRequest` frames to the connection, tapping
+the raw server stream into your `onServerMessage` decode/inject callback,
+and merging model content with the net's `adkEvents()` into one
+`Flowable<Event>`. The connection is a `LiveConnection` (shipped
+interface: `BaseLlmConnection` plus `rawReceive()`, the raw
+`LiveServerMessage` stream ADK's `LlmResponse` drops). Voice signals
+reach the net through `runner.signal(place)`, the unit-token injection the
+env-place model needs for every `Place<Void>` edge (speech start/stop,
+barge-in, `END_INVOCATION`).
+
+The consumer half stays an exemplar. `SyncGeminiLiveConnection` (under
+`demos/`, the BIDI sibling of `SyncGeminiLlm`) is the copy-and-adapt
+`LiveConnection` over `client.async.live`, with a
+`voiceSignals(LiveServerMessage)` decoder and explicit `turnComplete`
+control; the connection is genai-SDK-specific (down to the websocket
+close quirk), so it is yours to own. **Do not shadow-fork ADK to get a
+live connection**: never drop copies of `com.google.adk.models.Gemini` /
+`GeminiLlmConnection` onto the classpath at ADK's own fully-qualified
+names to fix the `commonPool` hops or surface the VAD edges. That is a
+fork by classpath shadowing and breaks design commitment #4; implement
+`LiveConnection` and call `bridge(...)` instead.
+
 ### Boundary colour catalog (`AdkColours`)
 
 A fixed set of typed places that all stock subnets share. Compose-time
@@ -447,8 +473,8 @@ updated.
 ### Stock ADK Runner integration without a source change
 
 `PetriAgent extends BaseAgent` (in
-`java/src/main/java/org/libpetri/adk/runner/`) is the integration seam,
-roughly 80 lines in two halves:
+`java/src/main/java/org/libpetri/adk/runner/`) is the turn-based
+integration seam. Its core run paths are:
 
 ```java
 @Override
@@ -468,8 +494,8 @@ protected Flowable<Event> runAsyncImpl(InvocationContext ctx) {
 
 @Override
 protected Flowable<Event> runLiveImpl(InvocationContext ctx) {
-    // BIDI bridge: ADK Runner.runLive(...) drives the live channel;
-    // the net provides the orchestration brain underneath.
+    // Egress half only; BidiPetriAgent.bridge handles the raw Live pump
+    // when a consumer wires a provider-specific LiveConnection.
     SessionKey key = SessionKey.from(ctx.session());
     Object owner  = ownerExtractor.apply(ctx);
     PetriRunner runner = registry.getOrCreate(key, owner, runnerFactory);
@@ -479,23 +505,31 @@ protected Flowable<Event> runLiveImpl(InvocationContext ctx) {
 
 The two paths divide cleanly. `runAsyncImpl` replaces ADK
 orchestration: the net is the brain for the whole request/response.
-`runLiveImpl` is a bridge: ADK owns the BIDI runtime (WebSocket, audio
-framing, turn detection), the adapter wires its hot event stream into
-ADK's pipeline, and the caller forwards `LiveRequestQueue` frames into
-`runner.inject(...)` from its WebSocket handler. Input wiring stays
-caller-side because frame transformation varies per transport.
+`runLiveImpl` is deliberately only the egress half: it exposes the
+net's ADK event stream to `Runner`. Full Live/BIDI uses
+`BidiPetriAgent.bridge(...)` with a provider-specific `LiveConnection`:
+the helper forwards `LiveRequestQueue` frames to the connection, maps
+model-content server frames to ADK `Event`s, and invokes the consumer
+callback to inject raw VAD/barge-in/tool signals into the `PetriRunner`.
+Provider-specific frame decoding stays caller-side because signal names,
+tool routing, and reconnect policy vary per transport.
 
 `SessionExecutorRegistry` lazily creates one `PetriRunner` per
 `(appName, userId, sessionId)`, so consecutive `runAsync` calls reuse
 the same long-lived executor. Stock `InMemoryRunner(agent)` consumes a
 `PetriAgent` like any other `BaseAgent`, so existing apps swap
 orchestrators without touching the rest. The registry ships in two
-modes: `cleanerOwned()` (default, `Cleaner`-based auto-teardown when the
-lifetime owner is GC'd) and `strongOwned()` (explicit `close(SessionKey)`
-for frameworks with no stable strong-reference owner). The
-`Cleaner`-bound lifetime means an orphaned session runner (orchestrator
-thread, hot processor, marking state) cannot leak: there is no API path
-that registers a runner without attaching its teardown hook.
+modes. `strongOwned()` is the recommended default: entries live until an
+explicit `close(SessionKey)`, and a forgotten close is a *visible* leak
+(`size()` grows monotonically). `cleanerOwned()` is opt-in, for callers
+that genuinely hold a stable strong owner whose GC tracks session end; it
+adds `Cleaner`-based auto-teardown so an orphaned session runner
+(orchestrator thread, hot processor, marking state) cannot leak: there is
+no API path that registers a runner without attaching its teardown hook.
+The catch that makes it opt-in rather than the default (a too-weakly-held
+owner is collected mid-session and the runner is torn down *silently*,
+turning every later `inject(...)` into a no-op) is exactly why a
+framework without a clean strong owner should pick `strongOwned()`.
 
 ### Why ADK and not pure libpetri?
 
@@ -565,10 +599,10 @@ discouraged.
    `SubnetDef.fromNet(...)`). The seven stock subnets are convenient
    starting points; you are expected to compose your own.
 8. **Per-session executor lifetime is caller-owned.** A session runner
-   is bound to a caller-owned object via `java.lang.ref.Cleaner` (or
-   closed explicitly in `strongOwned` mode). There is no shared executor
-   singleton and no API path that registers a runner without its
-   teardown hook, so orphaned threads and marking state cannot leak.
+   lives in `strongOwned()` until the caller invokes `close(SessionKey)`,
+   or in `cleanerOwned()` until a stable caller-owned lifetime object is
+   collected. There is no shared executor singleton; runner shutdown
+   drains the net and completes the hot ADK event stream.
 
 ## Verification
 
@@ -611,11 +645,12 @@ cd java
 ./mvnw verify
 ```
 
-173 tests across 29 test classes. Z3 (`com.microsoft.z3`) is pulled
-transitively for the deadlock-free and bounded-state tests; those carry
-`@EnabledIf("z3Available")` so the build passes even without native Z3
-libs installed. See [`java/README.md`](java/README.md) for
-composition patterns and the two end-to-end demos.
+The Java suite includes unit, integration, demo, and verification tests.
+Z3 (`com.microsoft.z3`) is pulled transitively for the deadlock-free and
+bounded-state tests; those carry `@EnabledIf("z3Available")` so the build
+passes even without native Z3 libs installed. See
+[`java/README.md`](java/README.md) for composition patterns and the two
+end-to-end demos.
 
 ### Consuming from a project: protobuf version floor
 
@@ -652,7 +687,7 @@ watch-item: shipped at 33.5.0 but commonly managed to 32.x).
 ## Relationship to libpetri
 
 adk-libpetri consumes libpetri from Maven Central
-(`org.libpetri:libpetri:2.6.1`). It is a sibling project, not a fork.
+(`org.libpetri:libpetri:2.10.4`). It is a sibling project, not a fork.
 The shared design principles (env-place-only interaction, typed colours
 per concept, marking-as-state, EventStore-decorated observability) come
 from libpetri and apply identically here.

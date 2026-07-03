@@ -367,7 +367,7 @@ class PatternC_OptimisticCommitDemoTest {
     // ============================================================
 
     private static List<Event> runOneInvocation(PetriNet bound, String userText) {
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
         var agent = PetriAgent.of(
                 "opt_agent",

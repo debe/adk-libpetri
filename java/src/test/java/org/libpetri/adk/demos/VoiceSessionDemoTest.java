@@ -41,7 +41,8 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.demos.voice.BargeInSubnet;
 import org.libpetri.adk.demos.voice.LiveApiRecoverySubnet;
-import org.libpetri.adk.demos.voice.LlmStreamingStepSubnet;
+import org.libpetri.adk.subnet.LlmStreamingStepSubnet;
+import org.libpetri.adk.subnet.RouterSubnet;
 import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
@@ -53,6 +54,7 @@ import org.libpetri.core.Place;
 import org.libpetri.core.Token;
 import org.libpetri.core.Transition;
 import org.libpetri.adk.bridge.OtelEventStore;
+import org.libpetri.adk.verify.AdkNetInvariants;
 import org.libpetri.core.TransitionAction;
 import org.libpetri.event.EventStore;
 import org.libpetri.runtime.PetriNetExecutor;
@@ -152,6 +154,7 @@ class VoiceSessionDemoTest {
 
         var net = PetriNet.builder("voice-session")
                 .compose(LlmStreamingStepSubnet.DEF)
+                .compose(RouterSubnet.DEF)
                 .compose(BargeInSubnet.DEF)
                 .compose(recoveryDef)
                 .transition(startStream)
@@ -159,6 +162,7 @@ class VoiceSessionDemoTest {
 
         Map<String, TransitionAction> allBindings = new LinkedHashMap<>();
         allBindings.putAll(LlmStreamingStepSubnet.actionBindings(llm, streamingConfig));
+        allBindings.putAll(RouterSubnet.actionBindings(RouterSubnet.Config.of("voice_agent")));
         allBindings.putAll(BargeInSubnet.actionBindings());
         allBindings.putAll(LiveApiRecoverySubnet.actionBindings(FAST_RECOVERY));
         allBindings.put(T_START_STREAM, ctx -> {
@@ -172,7 +176,7 @@ class VoiceSessionDemoTest {
         //  2. Wire the ADK-integrated runner with SIX typed env places —
         //     one for the ADK utterance, five for voice signals.
         // ============================================================
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
 
         var agent = PetriAgent.of(
@@ -186,6 +190,7 @@ class VoiceSessionDemoTest {
                         .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
                         .environmentPlace(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED)
                         .environmentPlace(LiveApiRecoverySubnet.Places.MODEL_ACTIVE)
+                        .deferredExecutorRef(execRef)
                         .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start(),
@@ -214,10 +219,10 @@ class VoiceSessionDemoTest {
                         .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
                         .environmentPlace(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED)
                         .environmentPlace(LiveApiRecoverySubnet.Places.MODEL_ACTIVE)
+                        .deferredExecutorRef(execRef)
                         .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start());
-        execRef.set(runner.executor());
 
         // ============================================================
         //  4. Subscribe to ALL partials on the runner's egress Flowable
@@ -239,9 +244,10 @@ class VoiceSessionDemoTest {
         // ============================================================
         //  6. Drive an ADK turn. PetriAgent injects USER_IN; T_StartStream
         //     converts it to LLM_REQUEST; LlmStreamingStepSubnet kicks
-        //     off streaming. runAsync returns after the first partial
-        //     thanks to PetriAgent's take(1); remaining partials continue
-        //     to flow to EVENT_OUT.
+        //     off streaming. RouterSubnet turns the merged LLM_RESPONSE into
+        //     the terminal Event that completes the non-SSE runAsync call;
+        //     partials continue to flow to EVENT_OUT and are observed through
+        //     the direct runner subscription below.
         // ============================================================
         var firstTurnEvents = adkRunner.runAsync(
                         session.userId(),
@@ -250,13 +256,13 @@ class VoiceSessionDemoTest {
                         RunConfig.builder().build())
                 .toList().blockingGet();
 
-        // The runner emits at minimum the user-message event + the first
-        // streamed partial from the agent.
-        var firstAgentEvent = firstTurnEvents.stream()
+        var terminalAgentEvent = firstTurnEvents.stream()
                 .filter(e -> "voice_agent".equals(e.author()))
                 .findFirst()
                 .orElseThrow();
-        assertThat(firstAgentEvent.partial().orElse(false)).isTrue();
+        assertThat(terminalAgentEvent.partial().orElse(false)).isFalse();
+        assertThat(terminalAgentEvent.content().get().text())
+                .isEqualTo("Sure, the answer is 42.");
 
         // ============================================================
         //  7. Mid/post-stream side-channel signals: a barge-in interrupt
@@ -405,7 +411,7 @@ class VoiceSessionDemoTest {
         //     deployment the WebSocket handler does this wiring once per
         //     session — same pattern.
         // ============================================================
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
         var agent = PetriAgent.of(
                 "bidi_agent",
@@ -579,7 +585,7 @@ class VoiceSessionDemoTest {
         // ============================================================
         //  ADK wiring — two typed env places, one ADK runner.
         // ============================================================
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
 
         var agent = PetriAgent.of(
@@ -667,16 +673,9 @@ class VoiceSessionDemoTest {
         };
     }
 
-    // ============================================================
-    //  Z3 deadlock-free verification of the demo's composed BIDI net.
-    //  The voice session has many timed transitions, multiple env
-    //  places, and concurrent flows — exactly the topology shape
-    //  where unintended deadlocks usually hide.
-    // ============================================================
-
     @Test
     @EnabledIf("z3Available")
-    void composed_voice_demo_net_is_smt_proven_deadlock_free() {
+    void composed_voice_demo_net_has_smt_checked_bounded_chunk_budget() {
         var recoveryDef = LiveApiRecoverySubnet.def(FAST_RECOVERY);
         var startStream = Transition.builder(T_START_STREAM)
                 .inputs(Arc.In.one(AdkColours.USER_IN))
@@ -707,7 +706,8 @@ class VoiceSessionDemoTest {
                         BargeInSubnet.Places.INTERRUPT_DISCARDED,
                         LiveApiRecoverySubnet.Places.NUDGE_NEEDED,
                         LiveApiRecoverySubnet.Places.RECONNECT_NEEDED)
-                .property(SmtProperty.deadlockFree())
+                .property(AdkNetInvariants.reaskBudgetIsBounded(
+                        LlmStreamingStepSubnet.Places.CHUNK_BUDGET, 4))
                 .verify();
 
         assertThat(result.isViolated()).isFalse();

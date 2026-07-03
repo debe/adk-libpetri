@@ -42,8 +42,8 @@ npm install
 npm run build
 ```
 
-Regenerates the SVG diagrams embedded in the root README and the
-ADR notes. Requires Node.js 20 or later and graphviz `dot`.
+Regenerates the SVG diagrams embedded in the root README.
+Requires Node.js 20 or later and graphviz `dot`.
 
 ## Architecture
 
@@ -141,16 +141,18 @@ bug classes the design is meant to eliminate.
    `PetriNet.builder().compose()` plus `SubnetDef.fromNet(...)`.
    The framework IS the composition primitives. Stock subnets are
    examples that happen to work for common cases.
-8. **Per-session executor lifetime is structurally bound to a
-   caller-owned object via `java.lang.ref.Cleaner`.**
-   `SessionExecutorRegistry.getOrCreate` requires a lifetime owner.
-   When the owner is GC'd, the runner is automatically torn down.
-   There is no API path that registers a runner without attaching
-   the cleanup hook. Leaks (orphan orchestrator threads, hot
-   processors, marking state) are not possible by construction.
-   `ctx.session()` is NOT a safe owner with `InMemorySessionService`
-   (defensive copies). The application must supply a stable
-   identity (websocket session, explicit holder map).
+8. **Per-session executor lifetime is caller-bound, with an
+   explicit-close default.** `SessionExecutorRegistry.strongOwned()`
+   is the documented default: the runner lives until the caller
+   invokes `close(SessionKey)`/`closeAll()` from a session-end hook.
+   `cleanerOwned()` is opt-in for callers that hold a stable strong
+   owner whose GC tracks session end — when that owner is collected,
+   `java.lang.ref.Cleaner` tears the runner down. Neither mode has an
+   API path that registers a runner without a teardown route, so
+   leaks (orphan orchestrator threads, hot processors, marking state)
+   are structural non-options. `ctx.session()` is NOT a safe
+   `cleanerOwned()` owner with `InMemorySessionService` (defensive
+   copies); supply a stable identity (websocket session, holder map).
 
 ## Key conventions
 
@@ -179,7 +181,6 @@ libpetri language port. Cross-language specs (if any) live in
 
 Each language has its own version, tagged with the language prefix
 (for example `java/v1.0.0`). Release scripts in `scripts/` follow
-libpetri's convention. Note: `scripts/release-java.sh` is
-templated. Before first use, add a
-`<profiles><profile><id>release</id>...` block to `java/pom.xml`
-mirroring libpetri's release profile.
+libpetri's convention. The `release` profile in `java/pom.xml`
+(source/javadoc JARs, GPG signing, Central publishing) is present
+and driven by `scripts/release-java.sh`.

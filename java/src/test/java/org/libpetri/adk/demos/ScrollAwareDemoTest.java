@@ -125,7 +125,7 @@ class ScrollAwareDemoTest {
         // ============================================================
         // 2. Wire the ADK-integrated runner with TWO env places.
         // ============================================================
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
 
         var agent = PetriAgent.of(

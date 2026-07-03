@@ -193,7 +193,7 @@ class MultiAgentDemoTest {
         //  4. Wire to stock ADK Runner via PetriAgent adapter.
         //     No source changes to ADK; just a BaseAgent subclass.
         // ============================================================
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         ConcurrentMap<org.libpetri.adk.runner.SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
         var agent = PetriAgent.of(
                 "multi_agent",
@@ -311,7 +311,7 @@ class MultiAgentDemoTest {
                 .build()
                 .bindActions(allBindings);
 
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         ConcurrentMap<org.libpetri.adk.runner.SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
         var agent = PetriAgent.of(
                 "halluc_agent",

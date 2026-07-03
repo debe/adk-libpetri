@@ -9,8 +9,12 @@ import com.google.adk.models.LlmRequest;
 import com.google.adk.models.LlmResponse;
 import io.reactivex.rxjava3.core.Flowable;
 import java.lang.ref.WeakReference;
+import java.time.Duration;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -41,7 +45,7 @@ class SessionExecutorRegistryTest {
     void get_or_create_lazily_builds_runner_on_first_call_only() {
         var calls = new AtomicInteger();
         Object owner = new Object();
-        try (var registry = new SessionExecutorRegistry()) {
+        try (var registry = SessionExecutorRegistry.cleanerOwned()) {
             var r1 = registry.getOrCreate(K1, owner, k -> { calls.incrementAndGet(); return testRunner(); });
             var r2 = registry.getOrCreate(K1, owner, k -> { calls.incrementAndGet(); return testRunner(); });
             var r3 = registry.getOrCreate(K1, owner, k -> { calls.incrementAndGet(); return testRunner(); });
@@ -55,7 +59,7 @@ class SessionExecutorRegistryTest {
     @Test
     void different_session_keys_get_different_runners() {
         Object owner = new Object();
-        try (var registry = new SessionExecutorRegistry()) {
+        try (var registry = SessionExecutorRegistry.cleanerOwned()) {
             var r1 = registry.getOrCreate(K1, owner, k -> testRunner());
             var r2 = registry.getOrCreate(K2, owner, k -> testRunner());
             var r3 = registry.getOrCreate(K3, owner, k -> testRunner());
@@ -70,7 +74,7 @@ class SessionExecutorRegistryTest {
     void same_key_with_different_owner_throws() {
         Object owner1 = new Object();
         Object owner2 = new Object();
-        try (var registry = new SessionExecutorRegistry()) {
+        try (var registry = SessionExecutorRegistry.cleanerOwned()) {
             registry.getOrCreate(K1, owner1, k -> testRunner());
             assertThrows(IllegalStateException.class,
                     () -> registry.getOrCreate(K1, owner2, k -> testRunner()));
@@ -82,7 +86,7 @@ class SessionExecutorRegistryTest {
     @Test
     void close_removes_one_runner_and_returns_true() {
         Object owner = new Object();
-        try (var registry = new SessionExecutorRegistry()) {
+        try (var registry = SessionExecutorRegistry.cleanerOwned()) {
             registry.getOrCreate(K1, owner, k -> testRunner());
             registry.getOrCreate(K2, owner, k -> testRunner());
 
@@ -95,7 +99,7 @@ class SessionExecutorRegistryTest {
 
     @Test
     void close_missing_key_is_noop_returning_false() {
-        try (var registry = new SessionExecutorRegistry()) {
+        try (var registry = SessionExecutorRegistry.cleanerOwned()) {
             assertThat(registry.close(K1)).isFalse();
         }
     }
@@ -103,7 +107,7 @@ class SessionExecutorRegistryTest {
     @Test
     void close_all_removes_every_runner() {
         Object owner = new Object();
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         registry.getOrCreate(K1, owner, k -> testRunner());
         registry.getOrCreate(K2, owner, k -> testRunner());
         registry.getOrCreate(K3, owner, k -> testRunner());
@@ -114,6 +118,17 @@ class SessionExecutorRegistryTest {
     }
 
     @Test
+    void cleaner_owned_factory_yields_a_working_cleaner_registry() {
+        Object owner = new Object();
+        try (var registry = SessionExecutorRegistry.cleanerOwned()) {
+            var r1 = registry.getOrCreate(K1, owner, k -> testRunner());
+            var r2 = registry.getOrCreate(K1, owner, k -> testRunner());
+            assertThat(r1).isSameInstanceAs(r2);
+            assertThat(registry.size()).isEqualTo(1);
+        }
+    }
+
+    @Test
     void owner_gc_triggers_cleaner_shutdown() throws Exception {
         // The whole point of the breaking-change redesign: when the
         // caller's lifetime-owner object becomes unreachable, the
@@ -121,7 +136,7 @@ class SessionExecutorRegistryTest {
         // — no possibility of leaking the orchestrator thread, the hot
         // PublishProcessor, or the executor's marking state. This is a
         // load-bearing test for the leak-prevention contract.
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         var ownerRef = createAndForget(registry);
         // Sanity: the runner is registered while the owner is reachable.
         assertThat(registry.size()).isEqualTo(1);
@@ -147,7 +162,7 @@ class SessionExecutorRegistryTest {
 
     @Test
     void explicit_close_then_owner_gc_is_safe() throws Exception {
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         var ownerRef = createAndForget(registry);
         // Explicitly close before GC.
         assertThat(registry.close(K1)).isTrue();
@@ -159,6 +174,63 @@ class SessionExecutorRegistryTest {
         Thread.sleep(100);
         assertThat(registry.size()).isEqualTo(0);
         registry.closeAll();
+    }
+
+    @Test
+    void concurrent_first_call_installs_exactly_one_runner_and_closes_loser() throws Exception {
+        Object owner = new Object();
+        var registry = SessionExecutorRegistry.cleanerOwned();
+        var calls = new AtomicInteger();
+        var factoriesEntered = new CountDownLatch(2);
+        var releaseFactories = new CountDownLatch(1);
+        var created = new CopyOnWriteArrayList<PetriRunner>();
+
+        PetriRunner[] runners;
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var f1 = pool.submit(() -> registry.getOrCreate(K1, owner, key -> {
+                calls.incrementAndGet();
+                factoriesEntered.countDown();
+                awaitGate(releaseFactories);
+                var runner = testRunner();
+                created.add(runner);
+                return runner;
+            }));
+            var f2 = pool.submit(() -> registry.getOrCreate(K1, owner, key -> {
+                calls.incrementAndGet();
+                factoriesEntered.countDown();
+                awaitGate(releaseFactories);
+                var runner = testRunner();
+                created.add(runner);
+                return runner;
+            }));
+
+            try {
+                assertThat(factoriesEntered.await(2, TimeUnit.SECONDS)).isTrue();
+                assertThat(calls.get()).isEqualTo(2);
+            } finally {
+                releaseFactories.countDown();
+            }
+            runners = new PetriRunner[] {
+                    f1.get(5, TimeUnit.SECONDS),
+                    f2.get(5, TimeUnit.SECONDS)
+            };
+        }
+
+        assertThat(runners[0]).isSameInstanceAs(runners[1]);
+        assertThat(created).hasSize(2);
+        PetriRunner loser = created.get(0) == runners[0] ? created.get(1) : created.get(0);
+        assertThat(loser.awaitTermination(Duration.ofSeconds(2))).isTrue();
+        assertThat(registry.size()).isEqualTo(1);
+        registry.closeAll();
+    }
+
+    private static void awaitGate(CountDownLatch gate) {
+        try {
+            gate.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted while waiting for concurrent factory gate", e);
+        }
     }
 
     /** Polls until {@code condition} is true, forcing GC each iteration. */

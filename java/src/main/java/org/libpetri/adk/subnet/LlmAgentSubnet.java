@@ -33,12 +33,6 @@ import org.libpetri.adk.colours.AdkColours;
  * <ul>
  *   <li>{@code userIn}      — input,  {@link AdkColours#USER_IN}</li>
  *   <li>{@code eventOut}    — output, {@link AdkColours#EVENT_OUT}</li>
- *   <li>{@code legacySessionWrite} — output, {@link AdkColours#LEGACY_SESSION_WRITE}
- *       (currently unused by the subnet's own transitions; exposed so a
- *       parent net composing {@code PersistStateSubnet} can drain
- *       ADK-Session-bound legacy writes that a user-replaced transition
- *       might emit. Most agents won't need this — keep in-net state in
- *       typed Places via the in-net conversation-place pattern.)</li>
  *   <li>{@code transfer}    — output, {@link AdkColours#TRANSFER}
  *       (parent net demuxes via {@code Out.xor} over per-agent places)</li>
  * </ul>
@@ -79,7 +73,7 @@ import org.libpetri.adk.colours.AdkColours;
  * {@link SubnetDef}. Users are free (and expected) to compose their own
  * subnets directly via {@link PetriNet.Builder#compose} +
  * {@link SubnetDef#fromNet(PetriNet, Interface)}, mixing the stock
- * P1–P3 building blocks with their own transitions to express any
+ * building blocks with their own transitions to express any
  * agent topology they want — different callback shapes, custom tool
  * dependency graphs, parallel LLM branches, etc. The framework is the
  * composition primitives; the stock subnets are just examples that
@@ -166,54 +160,36 @@ public final class LlmAgentSubnet {
     }
 
     /** Stateless subnet definition (composed body + N-port interface). */
-    public static final SubnetDef<Void> DEF = buildDef();
+    public static final SubnetDef<Void> DEF = buildComposedDef(NAME, LlmStepSubnet.DEF);
 
-    private static SubnetDef<Void> buildDef() {
-        var body = PetriNet.builder(NAME)
+    static SubnetDef<Void> buildComposedDef(String netName, SubnetDef<Void> stepDef) {
+        var body = PetriNet.builder(netName)
                 .place(REASK_BUDGET)
-
-                // Agent-owned transitions (logic lives in action binding).
                 .transition(Transition.builder(Transitions.BUILD_PROMPT)
                         .inputs(Arc.In.one(AdkColours.USER_IN))
                         .reset(REASK_BUDGET)
                         .outputs(Arc.Out.and(AdkColours.LLM_REQUEST, REASK_BUDGET))
                         .build())
-
                 .transition(Transition.builder(Transitions.RE_ASK)
-                        .inputs(
-                                Arc.In.one(AdkColours.TOOL_RESULTS),
-                                Arc.In.one(REASK_BUDGET))
+                        .inputs(Arc.In.one(AdkColours.TOOL_RESULTS), Arc.In.one(REASK_BUDGET))
                         .outputs(Arc.Out.place(AdkColours.LLM_REQUEST))
                         .priority(10)
                         .build())
-
                 .transition(Transition.builder(Transitions.RE_ASK_EXHAUSTED_FALLBACK)
                         .inputs(Arc.In.one(AdkColours.TOOL_RESULTS))
                         .inhibitor(REASK_BUDGET)
                         .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
                         .priority(-10)
                         .build())
-
-                // Compose the three pipeline subnets (direct, by-name merge).
-                .compose(LlmStepSubnet.DEF)
+                .compose(stepDef)
                 .compose(RouterSubnet.DEF)
                 .compose(ToolDispatchSubnet.DEF)
-
-                // LEGACY_SESSION_WRITE boundary place declared so the interface port can
-                // reference it even though no built-in transition writes there yet. A
-                // user-replaced transition (or a future opt-in version of this subnet)
-                // could emit envelopes here for a parent's PersistStateSubnet to drain.
-                // For in-net state, use typed Places per concept instead.
-                .place(AdkColours.LEGACY_SESSION_WRITE)
                 .build();
-
         var iface = Interface.builder()
-                .inputPort("userIn",            AdkColours.USER_IN)
-                .outputPort("eventOut",         AdkColours.EVENT_OUT)
-                .outputPort("legacySessionWrite", AdkColours.LEGACY_SESSION_WRITE)
-                .outputPort("transfer",         AdkColours.TRANSFER)
+                .inputPort("userIn", AdkColours.USER_IN)
+                .outputPort("eventOut", AdkColours.EVENT_OUT)
+                .outputPort("transfer", AdkColours.TRANSFER)
                 .build();
-
         return SubnetDef.fromNet(body, iface);
     }
 
@@ -238,13 +214,13 @@ public final class LlmAgentSubnet {
         return SubnetActions.bind(DEF, all);
     }
 
-    private static RouterSubnet.Config routerConfig(Config c) {
+    static RouterSubnet.Config routerConfig(Config c) {
         return new RouterSubnet.Config(c.name(), c.invocationIdSupplier());
     }
 
     // ======================== Agent-owned actions ========================
 
-    private static TransitionAction buildPromptAction(Config config) {
+    static TransitionAction buildPromptAction(Config config) {
         return ctx -> {
             Content userContent = ctx.input(AdkColours.USER_IN);
             ctx.output(AdkColours.LLM_REQUEST, LlmRequests.build(
@@ -262,16 +238,16 @@ public final class LlmAgentSubnet {
         };
     }
 
-    private static TransitionAction reAskAction(Config config) {
+    static TransitionAction reAskAction(Config config) {
         return ctx -> {
             // Consume the budget token (validated by transition input arc).
             ctx.input(REASK_BUDGET);
             AdkColours.ToolResults results = ctx.input(AdkColours.TOOL_RESULTS);
 
             // Build a continuation LlmRequest carrying the function responses as
-            // a "tool"-role Content. For P4 this is a degenerate single-turn
-            // continuation — P5 will thread the original-request + previous-LLM-response
-            // history through a session-state Read arc.
+            // a "tool"-role Content. This is a single-turn continuation; threading the
+            // original request and prior LLM response through a session-state Read arc
+            // is a future extension.
             var responseParts = new ArrayList<Part>();
             for (var fr : results.results()) {
                 responseParts.add(Part.builder().functionResponse(fr).build());
@@ -286,7 +262,7 @@ public final class LlmAgentSubnet {
         };
     }
 
-    private static TransitionAction reAskExhaustedFallbackAction(Config config) {
+    static TransitionAction reAskExhaustedFallbackAction(Config config) {
         return ctx -> {
             ctx.input(AdkColours.TOOL_RESULTS);  // drained — no further action
             Event event = Event.builder()

@@ -31,6 +31,7 @@ import org.libpetri.event.EventStore;
 import org.libpetri.event.NetEvent;
 import org.libpetri.adk.bridge.EventStoreToFlowableBridge;
 import org.libpetri.adk.colours.AdkColours;
+import org.libpetri.adk.subnet.LlmStreamingStepSubnet;
 import org.libpetri.adk.verify.AdkNetInvariants;
 import org.libpetri.runtime.BitmapNetExecutor;
 import org.libpetri.runtime.Marking;

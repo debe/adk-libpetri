@@ -2,9 +2,12 @@ package org.libpetri.adk.runner;
 
 import com.google.adk.agents.BaseAgent;
 import com.google.adk.agents.InvocationContext;
+import com.google.adk.agents.LiveRequestQueue;
+import com.google.adk.agents.RunConfig;
 import com.google.adk.events.Event;
 import com.google.common.collect.ImmutableList;
 import com.google.genai.types.Content;
+import com.google.genai.types.LiveServerMessage;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
@@ -14,8 +17,10 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import org.libpetri.adk.bridge.OtelEventStore;
+import org.libpetri.adk.Experimental;
 import org.libpetri.adk.colours.AdkColours;
 
 /**
@@ -45,7 +50,7 @@ import org.libpetri.adk.colours.AdkColours;
  * <p>The {@code ownerExtractor} must return an object whose <b>reference
  * identity</b> is <i>stable across every invocation for the same
  * session</i>, and whose lifetime corresponds to "this session is
- * over." When the owner is collected, the {@link Cleaner Cleaner}
+ * over." When the owner is collected, the {@link java.lang.ref.Cleaner Cleaner}
  * attached by {@link SessionExecutorRegistry} tears down the runner
  * and removes it from the registry — no possibility of leaking
  * orchestrator threads, hot processors, or executor state. Typical
@@ -62,12 +67,12 @@ import org.libpetri.adk.colours.AdkColours;
  * triggering premature shutdown.
  *
  * <h2>Why {@code take(1)} (and what that misses)</h2>
- * <p>P6's stock {@link org.libpetri.adk.subnet.LlmAgentSubnet} emits
+ * <p>The stock {@link org.libpetri.adk.subnet.LlmAgentSubnet} emits
  * exactly one final {@link Event} per user message (either via the
  * Router's text-only branch or via the reask-budget fallback) — so
  * {@code take(1)} is a perfect match for one-invocation = one-event.
- * Streaming partials ({@code RunConfig.StreamingMode.SSE}, P10a) and
- * bidi audio (P10b) require multi-event semantics with a proper
+ * Streaming partials ({@code RunConfig.StreamingMode.SSE}) and
+ * bidi audio require multi-event semantics with a proper
  * end-of-turn signal — a future variant of this adapter would use
  * {@code takeUntil(e -> e.turnComplete().orElse(false))} or filter by
  * invocation id once the subnet propagates one through the net.
@@ -89,23 +94,19 @@ import org.libpetri.adk.colours.AdkColours;
  * {@link AdkColours#EVENT_OUT}. The ADK {@code Runner.runLive} pipeline
  * forwards those events to the BIDI client.
  *
- * <p>Input wiring is the <b>caller's responsibility</b>, by design. ADK
- * delivers BIDI input as
- * {@code com.google.adk.runner.LiveRequestQueue} frames — audio chunks,
- * text fragments, interrupts — and the consumer code that owns the
- * WebSocket handler already holds the queue. That code forwards each
- * frame to {@link PetriRunner#inject(org.libpetri.core.Place, Object)}
- * (or to whichever typed env place the consumer models). We do not hide
- * this inside the adapter because frame transformation varies per
- * transport (raw PCM vs. Opus, audio-only vs. mixed modalities, custom
- * barge-in signals) and the dispatch is a one-line forward at the call
- * site. Sketch:
+ * <p>Full BIDI input wiring is handled by {@link BidiPetriAgent#bridge}
+ * when a consumer supplies a provider-specific {@link LiveConnection}.
+ * ADK delivers BIDI input as {@code com.google.adk.agents.LiveRequestQueue}
+ * frames — audio chunks, text fragments, close signals — and the bridge
+ * forwards those frames to the connection while the consumer callback decodes
+ * raw provider server messages into typed env-place injections such as
+ * {@link PetriRunner#signal(org.libpetri.core.Place)}. Provider-specific frame
+ * transformation remains caller-side because raw PCM vs. Opus, voice-activity
+ * edges, tool routing, and reconnect policy vary per transport. Sketch:
  *
  * <pre>{@code
- * LiveRequestQueue queue = ctx.liveRequestQueue();          // ADK-owned queue
- * PetriRunner runner = registry.get(SessionKey.from(ctx.session()));
- * queue.contentReceived().subscribe(content ->              // or audio/etc.
- *     runner.inject(AdkColours.USER_IN, content));
+ * return BidiPetriAgent.bridge(ctx.liveRequestQueue(), connection, runner, name(),
+ *     (serverMessage, r) -> decodeSignals(serverMessage).forEach(s -> r.signal(placeFor(s))));
  * }</pre>
  *
  * <p>The non-BIDI path ({@code runAsyncImpl}) <i>replaces</i> ADK
@@ -122,11 +123,27 @@ public final class PetriAgent extends BaseAgent {
     private final Function<InvocationContext, Object> ownerExtractor;
     private final Tracer tracer;                       // nullable
     private final OtelEventStore otelEventStore;       // nullable
+    private final LiveConfig liveConfig;               // nullable
     // Per-session: the open invocation span from the most recent runAsyncImpl
     // call. End it when superseded by the next invocation on the same session,
     // so it lives long enough to cover any late TransitionCompleted emits that
     // the orchestrator produces after take(1) completed.
     private final ConcurrentMap<SessionKey, Span> openInvocationSpans = new ConcurrentHashMap<>();
+
+    /**
+     * Configuration for the shipped BIDI/live bridge path.
+     *
+     * @param connectionFactory creates the provider-specific live connection for this invocation
+     * @param onServerMessage observes raw provider messages and may inject signals into the runner
+     */
+    @Experimental
+    public record LiveConfig(Function<InvocationContext, LiveConnection> connectionFactory,
+                             BiConsumer<LiveServerMessage, PetriRunner> onServerMessage) {
+        public LiveConfig {
+            Objects.requireNonNull(connectionFactory, "connectionFactory");
+            Objects.requireNonNull(onServerMessage, "onServerMessage");
+        }
+    }
 
     private PetriAgent(String name,
                        String description,
@@ -134,7 +151,8 @@ public final class PetriAgent extends BaseAgent {
                        Function<SessionKey, PetriRunner> runnerFactory,
                        Function<InvocationContext, Object> ownerExtractor,
                        Tracer tracer,
-                       OtelEventStore otelEventStore) {
+                       OtelEventStore otelEventStore,
+                       LiveConfig liveConfig) {
         super(name, description, ImmutableList.of(), /*beforeAgentCallback*/ null, /*afterAgentCallback*/ null);
         this.registry = Objects.requireNonNull(registry, "registry");
         this.runnerFactory = Objects.requireNonNull(runnerFactory, "runnerFactory");
@@ -149,6 +167,7 @@ public final class PetriAgent extends BaseAgent {
         }
         this.tracer = tracer;
         this.otelEventStore = otelEventStore;
+        this.liveConfig = liveConfig;
     }
 
     /**
@@ -176,7 +195,7 @@ public final class PetriAgent extends BaseAgent {
                                 SessionExecutorRegistry registry,
                                 Function<SessionKey, PetriRunner> runnerFactory,
                                 Function<InvocationContext, Object> ownerExtractor) {
-        return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor, null, null);
+        return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor, null, null, null);
     }
 
     /**
@@ -197,7 +216,38 @@ public final class PetriAgent extends BaseAgent {
                                 Tracer tracer,
                                 OtelEventStore otelEventStore) {
         return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor,
-                tracer, otelEventStore);
+                tracer, otelEventStore, null);
+    }
+
+
+    /**
+     * Factory for BIDI/live agents that should use the shipped bridge path.
+     */
+    @Experimental
+    public static PetriAgent ofLive(String name,
+                                    String description,
+                                    SessionExecutorRegistry registry,
+                                    Function<SessionKey, PetriRunner> runnerFactory,
+                                    Function<InvocationContext, Object> ownerExtractor,
+                                    LiveConfig liveConfig) {
+        return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor,
+                null, null, Objects.requireNonNull(liveConfig, "liveConfig"));
+    }
+
+    /**
+     * Factory for BIDI/live agents that also wire OpenTelemetry root-span observability.
+     */
+    @Experimental
+    public static PetriAgent ofLive(String name,
+                                    String description,
+                                    SessionExecutorRegistry registry,
+                                    Function<SessionKey, PetriRunner> runnerFactory,
+                                    Function<InvocationContext, Object> ownerExtractor,
+                                    LiveConfig liveConfig,
+                                    Tracer tracer,
+                                    OtelEventStore otelEventStore) {
+        return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor,
+                tracer, otelEventStore, Objects.requireNonNull(liveConfig, "liveConfig"));
     }
 
     @Override
@@ -225,21 +275,34 @@ public final class PetriAgent extends BaseAgent {
         // safe under ADK's turn-based per-session semantics.
         openInvocationSpan(ctx, key);
 
+        if (ctx.runConfig().streamingMode() == RunConfig.StreamingMode.SSE) {
+            var egress = runner.adkEvents()
+                    .map(e -> e.toBuilder().invocationId(ctx.invocationId()).build())
+                    .takeUntil((Event e) -> !e.partial().orElse(false));
+            var replayed = egress.replay();
+            replayed.connect();
+            runner.inject(AdkColours.USER_IN, userContent);
+            return replayed;
+        }
+
         // The runner.events() Flowable is hot (PublishProcessor) — a subscriber
         // attaching after send() could miss an early emission. To eliminate
         // the race, attach a one-shot CompletableFuture sink BEFORE sending,
         // then return a Flowable that bridges off the future. The
         // .subscribe() call below materialises the upstream subscription
         // synchronously, guaranteeing the bridge is hot before the inject.
-        // The third subscriber arm fails the future if the upstream completes
-        // without emitting (e.g. the net terminated via END_INVOCATION before
-        // producing an EVENT_OUT token) — otherwise the invocation would hang.
+        // Non-SSE turns complete on the next terminal event; partials are
+        // ignored so a streaming-capable net run under NONE still preserves
+        // the legacy one-final-event contract.
         CompletableFuture<Event> nextEvent = new CompletableFuture<>();
-        runner.adkEvents().take(1).subscribe(
-                nextEvent::complete,
-                nextEvent::completeExceptionally,
-                () -> nextEvent.completeExceptionally(new IllegalStateException(
-                        "net event stream completed without emitting an Event for this invocation")));
+        runner.adkEvents()
+                .filter(e -> !e.partial().orElse(false))
+                .take(1)
+                .subscribe(
+                        nextEvent::complete,
+                        nextEvent::completeExceptionally,
+                        () -> nextEvent.completeExceptionally(new IllegalStateException(
+                                "net event stream completed without emitting a terminal Event for this invocation")));
         runner.inject(AdkColours.USER_IN, userContent);
         return Single.fromCompletionStage(nextEvent).toFlowable();
     }
@@ -286,6 +349,12 @@ public final class PetriAgent extends BaseAgent {
         Object owner = Objects.requireNonNull(ownerExtractor.apply(ctx),
                 "ownerExtractor returned null — every invocation must yield a lifetime owner");
         PetriRunner runner = registry.getOrCreate(key, owner, runnerFactory);
-        return runner.adkEvents();
+        if (liveConfig == null) {
+            return runner.adkEvents();
+        }
+        LiveRequestQueue inbound = ctx.liveRequestQueue().orElseThrow(
+                () -> new IllegalStateException("runLive requires a LiveRequestQueue"));
+        LiveConnection conn = liveConfig.connectionFactory().apply(ctx);
+        return BidiPetriAgent.bridge(inbound, conn, runner, name(), liveConfig.onServerMessage());
     }
 }

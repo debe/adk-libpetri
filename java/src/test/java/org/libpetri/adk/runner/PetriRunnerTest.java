@@ -14,13 +14,19 @@ import io.reactivex.rxjava3.subscribers.TestSubscriber;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.libpetri.core.Arc;
 import org.libpetri.core.PetriNet;
+import org.libpetri.core.Place;
+import org.libpetri.core.Token;
+import org.libpetri.core.Transition;
+import org.libpetri.core.TransitionAction;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.subnet.LlmAgentSubnet;
 
@@ -131,9 +137,52 @@ class PetriRunnerTest {
         }
     }
 
+    @Test
+    void signal_and_token_overload_inject_unit_tokens_onto_a_void_place() throws Exception {
+        // The value overload inject(Place, T) rejects null, so a Place<Void> signal
+        // (voice-activity edges, barge-in, END_INVOCATION) was previously un-injectable
+        // through the public API. signal(Place<Void>) and inject(Place, Token) fix that;
+        // each unit token here fires T_Ack and produces one EVENT_OUT.
+        var net = buildSignalNet();
+        try (var runner = PetriRunner.builder(net)
+                .environmentPlace(SIGNAL)
+                .actionExecutor(EXECUTOR)
+                .orchestratorExecutor(EXECUTOR)
+                .start()) {
+            TestSubscriber<Event> sub = runner.adkEvents().take(2).test();
+
+            runner.signal(SIGNAL).get(2, TimeUnit.SECONDS);
+            runner.inject(SIGNAL, Token.unit()).get(2, TimeUnit.SECONDS);
+
+            sub.awaitDone(2, TimeUnit.SECONDS);
+            sub.assertValueCount(2);
+        }
+    }
+
     // ============================================================
     //  Fixtures
     // ============================================================
+
+    private static final Place<Void> SIGNAL = Place.of("signalTest_sig", Void.class);
+
+    private static PetriNet buildSignalNet() {
+        TransitionAction ack = ctx -> {
+            ctx.input(SIGNAL);
+            ctx.output(AdkColours.EVENT_OUT, Event.builder()
+                    .id(Event.generateEventId()).invocationId("inv").author("net").build());
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        };
+        Transition emit = Transition.builder("T_Ack")
+                .inputs(Arc.In.one(SIGNAL))
+                .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
+                .build();
+        return PetriNet.builder("signal-test")
+                .place(SIGNAL)
+                .place(AdkColours.EVENT_OUT)
+                .transition(emit)
+                .build()
+                .bindActions(Map.of("T_Ack", ack));
+    }
 
     private static PetriRunner newRunner(PetriNet net) {
         return PetriRunner.builder(net)

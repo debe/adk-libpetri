@@ -18,12 +18,12 @@ import org.libpetri.adk.colours.AdkColours;
  * Stock subnet that turns a user {@link Content} into a fully-formed
  * {@link LlmRequest} ready for {@link LlmStepSubnet}.
  *
- * <p>P3 keeps this <b>stateless and single-turn</b>: the prepared
+ * <p>This stays <b>stateless and single-turn</b>: the prepared
  * request contains exactly the user's incoming {@code Content} plus an
  * optional {@code systemInstruction} carried via
  * {@link GenerateContentConfig#systemInstruction()}. Multi-turn history
  * (reading prior {@link com.google.adk.events.Event}s from session
- * state) belongs to P5 (Session/State integration) — the topology is
+ * state) belongs to a future Session/State integration — the topology is
  * the same, with an added Read arc to a history place.
  *
  * <p>Topology:

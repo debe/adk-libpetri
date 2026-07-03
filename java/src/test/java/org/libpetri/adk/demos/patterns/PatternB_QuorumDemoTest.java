@@ -131,7 +131,7 @@ class PatternB_QuorumDemoTest {
 
         var bound = buildNet().bindActions(buildBindings(delays));
 
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
         var agent = PetriAgent.of(
                 "quorum_agent",

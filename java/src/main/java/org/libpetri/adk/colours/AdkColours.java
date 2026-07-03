@@ -82,7 +82,12 @@ public final class AdkColours {
     public static final Place<TransferTarget> TRANSFER =
             Place.of("transfer", TransferTarget.class);
 
-    /** Termination signal. Inhibitor source for every "advancing" transition. */
+    /**
+     * Termination signal. Inhibitor source for every "advancing" transition.
+     * Being a {@code Place<Void>}, it is injected with the unit-token path
+     * {@link org.libpetri.adk.runner.PetriRunner#signal(Place)}, not the
+     * value overload (which rejects {@code null}).
+     */
     public static final Place<Void> END_INVOCATION =
             Place.of("endInvocation", Void.class);
 

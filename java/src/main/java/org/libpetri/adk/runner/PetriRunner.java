@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import org.libpetri.core.EnvironmentPlace;
 import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
@@ -132,6 +133,30 @@ public final class PetriRunner implements AutoCloseable {
     public <T> CompletableFuture<Boolean> inject(Place<T> place, T token) {
         Objects.requireNonNull(token, "token");
         return executor.inject(envPlace(place), token);
+    }
+
+    /**
+     * Inject a pre-built {@link Token} onto a registered env place. Use this
+     * overload for the unit token ({@link Token#unit()}) on a
+     * {@link Place}{@code <Void>} signal place, which the value overload cannot
+     * express (it rejects {@code null}). Prefer {@link #signal(Place)} for the
+     * common void-signal case.
+     */
+    public <T> CompletableFuture<Boolean> inject(Place<T> place, Token<T> token) {
+        Objects.requireNonNull(token, "token");
+        return executor.inject(envPlace(place), token);
+    }
+
+    /**
+     * Inject the unit token onto a {@link Place}{@code <Void>} signal place:
+     * voice-activity edges, barge-in interrupts, {@link AdkColours#END_INVOCATION},
+     * and every other control signal whose presence (not value) carries the
+     * information. This is the void-shaped counterpart to
+     * {@link #inject(Place, Object)}; both go through the same env-place surface,
+     * so there is no reason to drop to {@link #executor()} for signals.
+     */
+    public CompletableFuture<Boolean> signal(Place<Void> place) {
+        return executor.inject(envPlace(place), Token.unit());
     }
 
     /**
@@ -270,6 +295,7 @@ public final class PetriRunner implements AutoCloseable {
         private Map<Place<?>, List<Token<?>>> initialMarking = Map.of();
         private ExecutorFactory executorFactory = ExecutorFactory.bitmap();
         private ExecutionContextProvider contextProvider = ExecutionContextProvider.NOOP;
+        private AtomicReference<PetriNetExecutor> deferredExecutorRef;
 
         private Builder(PetriNet net) {
             this.net = Objects.requireNonNull(net, "net");
@@ -406,6 +432,20 @@ public final class PetriRunner implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Register an {@link AtomicReference} that {@link #start()} populates
+         * with the built {@link PetriNetExecutor} before the orchestrator is
+         * submitted. Streaming subnets ({@code LlmStreamingStepSubnet}) whose
+         * actions self-inject onto an env place need the executor handle, but
+         * the handle only exists after build. Pass the same reference you gave
+         * to the subnet's {@code Config.executorRef(...)}; this removes the
+         * manual post-build {@code ref.set(...)} step and its ordering trap.
+         */
+        public Builder deferredExecutorRef(AtomicReference<PetriNetExecutor> ref) {
+            this.deferredExecutorRef = Objects.requireNonNull(ref, "deferredExecutorRef");
+            return this;
+        }
+
         /** Build the executor, submit it to the orchestrator pool, and return the running runner. */
         public PetriRunner start() {
             if (actionExecutor == null) {
@@ -423,6 +463,10 @@ public final class PetriRunner implements AutoCloseable {
                     bridge,
                     actionExecutor,
                     contextProvider);
+
+            if (deferredExecutorRef != null) {
+                deferredExecutorRef.set(executor);
+            }
 
             var task = orchestratorExecutor.submit((Runnable) executor::run);
             return new PetriRunner(executor, Map.copyOf(envPlaces), bridge, task);

@@ -20,6 +20,7 @@ import org.libpetri.event.EventStore;
 import org.libpetri.analysis.MarkingState;
 import org.libpetri.analysis.StateClassGraph;
 import org.libpetri.adk.colours.AdkColours;
+import org.libpetri.adk.subnet.LlmStreamingStepSubnet;
 import org.libpetri.runtime.BitmapNetExecutor;
 import org.libpetri.runtime.Marking;
 

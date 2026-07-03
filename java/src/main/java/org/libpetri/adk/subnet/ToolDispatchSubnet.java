@@ -30,7 +30,7 @@ import org.libpetri.adk.colours.AdkColours;
  * inter-tool dependencies, no rate-limit pools, no mutex, no
  * time-window restrictions, no per-tool callbacks. Anything richer
  * belongs to the {@code ToolSubnet} / {@code ResourcePool} primitives
- * (P2b, not yet implemented) where each tool becomes its own subnet
+ * (not yet implemented) where each tool becomes its own subnet
  * with typed interface ports and shared-resource arcs.
  *
  * <p>Topology:

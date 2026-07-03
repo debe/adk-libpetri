@@ -16,13 +16,9 @@ Usage: $(basename "$0") [--dry-run] <version>
 
 Release adk-libpetri Java to Maven Central.
 
-NOTE: this is templated from libpetri/scripts/release-java.sh. Before
-first use, add a <profiles><profile><id>release</id>...</profile></profiles>
-block to java/pom.xml (sources, javadoc, GPG sign, central-publishing-
-maven-plugin) — mirror libpetri/java/pom.xml.
-
-Maven handles: build, test, sign (local GPG agent), bundle,
-upload to Central Portal, and wait for publication.
+Release profile lives in java/pom.xml: sources, javadocs, GPG signing,
+and central-publishing-maven-plugin. This script only drives that
+profile; Maven handles build, test, sign, bundle, upload, and publish.
 
 Prerequisites:
   - GPG signing key available to gpg-agent
@@ -33,7 +29,7 @@ Arguments:
   version       Release version (e.g. 1.3.1)
 
 Options:
-  --dry-run     Build and sign only (mvn verify); skip upload, tag, release
+  --dry-run     Build, test, and sign (mvn clean verify -Prelease); skip upload, tag, release
   -h, --help    Show this help
 
 Example:

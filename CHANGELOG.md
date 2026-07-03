@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 Format: per-language sections under each version. Tags are language-
 prefixed (e.g. `java/v1.0.0`).
 
+
+## 1.3.0 - Unreleased
+
+### Java
+
+- **Streaming SSE path**: promoted `LlmStreamingStepSubnet` into
+  `src/main` and added `StreamingLlmAgentSubnet`, the SSE counterpart to
+  `LlmAgentSubnet`. `PetriAgent.runAsyncImpl` now honors
+  `RunConfig.StreamingMode.SSE` by replaying token partials through to the
+  first non-partial terminal event, with one ADK invocation id across the
+  whole turn.
+- **Live/BIDI path**: `PetriAgent.ofLive(...)` and `PetriAgent.LiveConfig`
+  ship a first-class path through `BidiPetriAgent.bridge`; plain
+  `PetriAgent.of(...)` keeps the egress-only `runLive` behavior.
+- **Executor wiring**: `PetriRunner.Builder.deferredExecutorRef(...)`
+  populates streaming subnet executor references before the orchestrator
+  starts, removing the manual post-build `AtomicReference#set` ordering trap.
+- **API surface**: normal turn-based mode is stable for 1.x; SSE streaming
+  and BIDI/live are beta within 1.x. Both surfaces are marked
+  `@Experimental` in source. `LiveConnection` remains genai
+  Live-message typed by design.
+- **Registry cleanup**: removed the deprecated no-arg
+  `SessionExecutorRegistry()` constructor; use `strongOwned()` or
+  `cleanerOwned()` explicitly.
+
 ## 1.2.0 - 2026-06-04
 
 ### Java

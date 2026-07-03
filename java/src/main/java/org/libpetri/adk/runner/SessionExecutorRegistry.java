@@ -1,6 +1,7 @@
 package org.libpetri.adk.runner;
 
 import java.lang.ref.Cleaner;
+import java.lang.ref.Reference;
 import java.lang.ref.WeakReference;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -13,8 +14,15 @@ import java.util.function.Function;
  * {@link PetriAgent} serves multiple ADK sessions.
  *
  * <h2>Two ownership modes</h2>
- * <p>Pick the mode that matches the strong-reference chain your
- * framework actually provides:
+ * <p><b>Default to {@link #strongOwned()}.</b> It is safe under any
+ * framework: entries live until you {@link #close(SessionKey)} them, and
+ * a forgotten close is a <i>visible</i> leak ({@link #size()} grows
+ * monotonically, asserts and metrics catch it). Reach for
+ * {@link #cleanerOwned()} only when you genuinely have a stable
+ * strong-referenced lifetime owner: its wrong-owner failure mode is
+ * <i>invisible</i> (the runner is torn down silently and {@code inject}
+ * no-ops; see below). Pick the mode that matches the strong-reference
+ * chain your framework actually provides:
  * <dl>
  *   <dt>{@link #cleanerOwned()}</dt>
  *   <dd>Each per-session runner is bound to a caller-supplied
@@ -111,15 +119,6 @@ public final class SessionExecutorRegistry implements AutoCloseable {
         }
     }
 
-    /**
-     * Default constructor: cleaner-owned mode. Retained for
-     * back-compat with callers using {@code new SessionExecutorRegistry()};
-     * prefer the explicit factory {@link #cleanerOwned()}.
-     */
-    public SessionExecutorRegistry() {
-        this(Mode.CLEANER);
-    }
-
     private SessionExecutorRegistry(Mode mode) {
         this.mode = mode;
     }
@@ -148,7 +147,7 @@ public final class SessionExecutorRegistry implements AutoCloseable {
      * as a de-duplication key in both modes and, in cleaner-owned
      * mode, also controls runner lifetime: when {@code owner} becomes
      * unreachable, a {@link Cleaner} action removes the entry and
-     * calls {@link PetriRunner#shutdown()} asynchronously.
+     * drains the runner asynchronously without blocking the shared Cleaner daemon.
      *
      * <p>On the first call for {@code key}, {@code owner} is captured.
      * Subsequent calls for the same {@code key} must pass the
@@ -196,7 +195,13 @@ public final class SessionExecutorRegistry implements AutoCloseable {
                     // reachability. If we captured owner here, the cleaner
                     // action would hold a strong ref through itself to
                     // owner, preventing collection forever.
-                    CLEANER.register(owner, () -> close(key));
+                    CLEANER.register(owner, () -> drain(key));
+                    // Keep the lifetime owner strongly reachable until
+                    // after the Cleaner registration is installed. Otherwise
+                    // an aggressive GC/JIT is allowed to clear `owner`
+                    // between makeOwnerRef(owner) and register(owner, ...),
+                    // leaving a weak candidate entry with no cleaner action.
+                    Reference.reachabilityFence(owner);
                 }
                 return created;
             }
@@ -241,7 +246,10 @@ public final class SessionExecutorRegistry implements AutoCloseable {
         throw new IllegalStateException(
                 "SessionKey " + key + " is already bound to a different "
                 + "lifetime owner. One owner per key, ever — sharing a key "
-                + "across owners is a lifetime bug.");
+                + "across owners is a lifetime bug. If you are passing a "
+                + "freshly-built per-call wrapper as the owner, hold a "
+                + "stable identity for the session instead, or use "
+                + "strongOwned(), which needs no external owner at all.");
     }
 
     /** Returns the runner if present (no creation), or {@code null}. */
@@ -256,9 +264,22 @@ public final class SessionExecutorRegistry implements AutoCloseable {
     }
 
     /**
+     * Remove one session and start an asynchronous drain. Used only by
+     * Cleaner actions: blocking the single shared Cleaner daemon on an
+     * unbounded runner shutdown would delay cleanup for unrelated sessions.
+     */
+    private void drain(SessionKey key) {
+        Entry removed = entries.remove(key);
+        if (removed != null) {
+            removed.runner().drainAsync();
+        }
+    }
+
+    /**
      * Shut down and remove one session's runner. Idempotent. Returns
-     * {@code true} if a runner was removed. Safe to call from the
-     * Cleaner thread (this is exactly what the Cleaner action does).
+     * {@code true} if a runner was removed. Explicit close keeps
+     * synchronous teardown semantics; the Cleaner path uses
+     * non-blocking drain instead.
      */
     public boolean close(SessionKey key) {
         Entry removed = entries.remove(key);
@@ -270,7 +291,7 @@ public final class SessionExecutorRegistry implements AutoCloseable {
     /**
      * Shut down and remove every session's runner. Each per-key removal
      * goes through {@link #close(SessionKey)} so the atomic
-     * {@code remove(key)} guarantees at-most-once {@code shutdown()} per
+     * {@code remove(key)} guarantees at-most-one teardown request per
      * runner — safe to call concurrently with Cleaner-driven evictions.
      */
     public void closeAll() {

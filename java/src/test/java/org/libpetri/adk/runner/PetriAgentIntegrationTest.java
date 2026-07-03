@@ -54,7 +54,7 @@ class PetriAgentIntegrationTest {
         var llm = scriptedLlm(textResponse("hello from petri"));
 
         // The same factory each session-runner uses to build its long-lived net.
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         var sessionOwners = sessionOwnerMap();
         var agent = PetriAgent.of(
                 "petri_agent",
@@ -90,7 +90,7 @@ class PetriAgentIntegrationTest {
     void multiple_invocations_in_same_session_reuse_the_long_lived_runner() {
         var llm = scriptedLlm(textResponse("first"), textResponse("second"), textResponse("third"));
 
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         var sessionOwners = sessionOwnerMap();
         var agent = PetriAgent.of(
                 "long_lived",
@@ -135,7 +135,7 @@ class PetriAgentIntegrationTest {
         // that pattern below.
         var llm = scriptedLlm(textResponse("live answer"));
 
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         var sessionOwners = sessionOwnerMap();
         var agent = PetriAgent.of(
                 "live_agent",
@@ -180,7 +180,7 @@ class PetriAgentIntegrationTest {
     void different_sessions_get_isolated_runners() {
         var llm = scriptedLlm(textResponse("from a"), textResponse("from b"));
 
-        var registry = new SessionExecutorRegistry();
+        var registry = SessionExecutorRegistry.cleanerOwned();
         var sessionOwners = sessionOwnerMap();
         var agent = PetriAgent.of(
                 "iso_agent",

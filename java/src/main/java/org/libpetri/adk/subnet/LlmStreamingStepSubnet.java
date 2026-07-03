@@ -1,4 +1,4 @@
-package org.libpetri.adk.demos.voice;
+package org.libpetri.adk.subnet;
 
 import com.google.adk.events.Event;
 import com.google.adk.models.BaseLlm;
@@ -15,10 +15,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import org.libpetri.adk.Experimental;
 import org.libpetri.adk.colours.AdkColours;
-import org.libpetri.adk.subnet.LlmStepSubnet;
-import org.libpetri.adk.subnet.RouterSubnet;
-import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.core.Arc;
 import org.libpetri.core.EnvironmentPlace;
 import org.libpetri.core.Place;
@@ -43,11 +41,11 @@ import org.libpetri.runtime.PetriNetExecutor;
  *
  * <p>This subnet instead has the {@code T_LlmCallStream} action call
  * {@code executor.inject(chunkEnv, chunk)} once per partial chunk as
- * the underlying {@link io.reactivex.rxjava3.core.Flowable} emits.
- * The orchestrator processes each injection on its next loop
- * iteration; {@code T_EmitChunk} fires per chunk and emits a partial
- * {@link Event} — subscribers see chunks as they arrive, the standard
- * per-chunk env-place injection pattern for streaming/BIDI audio.
+ * the underlying {@link io.reactivex.rxjava3.core.Flowable} emits, then
+ * inject a terminal merged-response marker after every partial has been
+ * accepted. {@code T_EmitChunk} consumes those markers in arrival order:
+ * partial markers emit partial {@link Event}s, and the terminal marker
+ * releases the merged {@link LlmResponse} to the downstream router.
  *
  * <h2>Budgeting — boundedness via marking</h2>
  * <p>{@code T_EmitChunk} requires <i>both</i> a {@code CHUNK} token
@@ -77,22 +75,23 @@ import org.libpetri.runtime.PetriNetExecutor;
  *                                              [CHUNK_BUDGET])
  *                  reset(CHUNK_BUDGET); action seeds K budget tokens
  *
- *   [LLM_REQUEST_INTERNAL] --T_LlmCallStream--> [LLM_RESPONSE]
- *                            side effect: inject N chunks into CHUNK env place
+ *   [LLM_REQUEST_INTERNAL] --T_LlmCallStream--> (no direct output)
+ *                            side effect: inject N partial chunks, then
+ *                            one terminal merged response into CHUNK env place
  *
  *   [CHUNK]env + [CHUNK_BUDGET] --T_EmitChunk-->
- *       Out.and([EVENT_OUT], [CHUNK_BUDGET])   (consume one chunk + permit,
- *                                                emit partial Event, return permit)
+ *       Out.xor(Out.and([EVENT_OUT], [CHUNK_BUDGET]),
+ *               Out.and([LLM_RESPONSE], [CHUNK_BUDGET]))
  * </pre>
  *
  * <h2>Executor wiring</h2>
  * <p>{@code T_LlmCallStream}'s action needs an executor handle (to
  * call {@code executor.inject}). The {@link Config} holds a
  * {@link AtomicReference} typed against the
- * {@link PetriNetExecutor} interface that the caller populates
- * <i>after</i> the per-session runner has started — a chicken-and-egg
- * dance that's unavoidable here. Typical wiring through the ADK
- * adapter:
+ * {@link PetriNetExecutor} interface. When wiring through the ADK
+ * adapter, pass the same reference to both this subnet's config and
+ * {@code PetriRunner.Builder.deferredExecutorRef(...)} so the runner
+ * populates it before the orchestrator starts:
  *
  * <pre>{@code
  * var execRef = new AtomicReference<PetriNetExecutor>();
@@ -102,13 +101,12 @@ import org.libpetri.runtime.PetriNetExecutor;
  * var agent = PetriAgent.of(name, desc, registry,
  *     key -> PetriRunner.builder(net)
  *         .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
+ *         .deferredExecutorRef(execRef)
  *         .actionExecutor(EXEC).orchestratorExecutor(EXEC).start(),
  *     ownerProvider);
- *
- * var runner = registry.getOrCreate(sessionKey, owner, factory);
- * execRef.set(runner.executor());
  * }</pre>
  */
+@Experimental
 public final class LlmStreamingStepSubnet {
 
     public static final String NAME = "LlmStreamingStep";
@@ -146,7 +144,11 @@ public final class LlmStreamingStepSubnet {
     }
 
     /** Typed wrapper for the chunk env place — distinguishes from the merged LlmResponse colour. */
-    public record LlmResponseChunk(LlmResponse partial) {}
+    public record LlmResponseChunk(LlmResponse partial, boolean terminal) {
+        public LlmResponseChunk(LlmResponse partial) {
+            this(partial, false);
+        }
+    }
 
     public record Config(
             String author,
@@ -195,11 +197,13 @@ public final class LlmStreamingStepSubnet {
                     .build())
             .transition(Transition.builder(Transitions.LLM_CALL_STREAM)
                     .inputs(Arc.In.one(Places.LLM_REQUEST_INTERNAL))
-                    .outputs(Arc.Out.place(AdkColours.LLM_RESPONSE))
                     .build())
             .transition(Transition.builder(Transitions.EMIT_CHUNK)
                     .inputs(Arc.In.one(Places.CHUNK), Arc.In.one(Places.CHUNK_BUDGET))
-                    .outputs(Arc.Out.and(AdkColours.EVENT_OUT, Places.CHUNK_BUDGET))
+                    .outputs(Arc.Out.xor(
+                            Arc.Out.and(AdkColours.EVENT_OUT, Places.CHUNK_BUDGET),
+                            Arc.Out.and(AdkColours.LLM_RESPONSE, Places.CHUNK_BUDGET)))
+                    .priority(20)
                     .build())
             .inputPort("llmRequest",   AdkColours.LLM_REQUEST)
             .outputPort("eventOut",    AdkColours.EVENT_OUT)
@@ -239,29 +243,29 @@ public final class LlmStreamingStepSubnet {
             var request = ctx.input(Places.LLM_REQUEST_INTERNAL);
             CompletableFuture<Void> done = new CompletableFuture<>();
             var collected = new ArrayList<LlmResponse>();
+            var injections = new ArrayList<CompletableFuture<Boolean>>();
             var chunkEnv = EnvironmentPlace.of(Places.CHUNK);
+
+            var executor = config.executorRef().get();
+            if (executor == null) {
+                done.completeExceptionally(new IllegalStateException(
+                        "Config.executorRef has not been populated. Set the"
+                                + " AtomicReference after BitmapNetExecutor.build()"
+                                + " and before runAsync()."));
+                return done;
+            }
 
             baseLlm.generateContent(request, /* stream */ true)
                     .subscribe(
                             chunk -> {
                                 collected.add(chunk);
-                                // True incremental injection: each chunk lands on
-                                // CHUNK env place between LLM-call iterations.
-                                // The orchestrator processes the inject promptly,
-                                // T_EmitChunk fires (subject to permit availability),
-                                // and the partial Event lands on EVENT_OUT — all
-                                // BEFORE this action completes.
-                                // Intentionally-late executor resolution: the AtomicReference
-                                // is populated post-build (see class-level chicken-and-egg note).
-                                var executor = config.executorRef().get();
-                                if (executor == null) {
-                                    done.completeExceptionally(new IllegalStateException(
-                                            "Config.executorRef has not been populated. Set the"
-                                                    + " AtomicReference after BitmapNetExecutor.build()"
-                                                    + " and before runAsync()."));
-                                    return;
-                                }
-                                executor.inject(chunkEnv, new LlmResponseChunk(chunk));
+                                // True incremental injection: each partial chunk lands
+                                // on CHUNK as the model stream produces it. Completion
+                                // waits until all partial injections are accepted, then
+                                // appends one terminal CHUNK marker carrying the merged
+                                // response. Because T_EmitChunk has higher priority than
+                                // Router, the terminal cannot overtake queued partials.
+                                injections.add(executor.inject(chunkEnv, new LlmResponseChunk(chunk)));
                             },
                             err -> done.completeExceptionally(err),
                             () -> {
@@ -270,8 +274,34 @@ public final class LlmStreamingStepSubnet {
                                             "BaseLlm streaming call yielded no chunks"));
                                     return;
                                 }
-                                ctx.output(AdkColours.LLM_RESPONSE, mergeChunks(collected));
-                                done.complete(null);
+                                CompletableFuture<?>[] accepted = injections.toArray(CompletableFuture<?>[]::new);
+                                CompletableFuture.allOf(accepted).whenComplete((_, err) -> {
+                                    if (err != null) {
+                                        done.completeExceptionally(err);
+                                        return;
+                                    }
+                                    for (var injection : injections) {
+                                        if (!injection.join()) {
+                                            done.completeExceptionally(new IllegalStateException(
+                                                    "chunk injection was rejected before streaming completed"));
+                                            return;
+                                        }
+                                    }
+                                    var terminal = executor.inject(chunkEnv,
+                                            new LlmResponseChunk(mergeChunks(collected), true));
+                                    terminal.whenComplete((acceptedTerminal, terminalErr) -> {
+                                        if (terminalErr != null) {
+                                            done.completeExceptionally(terminalErr);
+                                            return;
+                                        }
+                                        if (!acceptedTerminal) {
+                                            done.completeExceptionally(new IllegalStateException(
+                                                    "terminal chunk injection was rejected before streaming completed"));
+                                            return;
+                                        }
+                                        done.complete(null);
+                                    });
+                                });
                             });
             return done;
         };
@@ -281,13 +311,17 @@ public final class LlmStreamingStepSubnet {
         return ctx -> {
             LlmResponseChunk chunk = ctx.input(Places.CHUNK);
             ctx.input(Places.CHUNK_BUDGET);   // consume permit
-            Event partial = Event.builder()
-                    .invocationId(config.invocationIdSupplier().get())
-                    .author(config.author())
-                    .content(chunk.partial().content().orElse(null))
-                    .partial(Boolean.TRUE)
-                    .build();
-            ctx.output(AdkColours.EVENT_OUT, partial);
+            if (chunk.terminal()) {
+                ctx.output(AdkColours.LLM_RESPONSE, chunk.partial());
+            } else {
+                Event partial = Event.builder()
+                        .invocationId(config.invocationIdSupplier().get())
+                        .author(config.author())
+                        .content(chunk.partial().content().orElse(null))
+                        .partial(Boolean.TRUE)
+                        .build();
+                ctx.output(AdkColours.EVENT_OUT, partial);
+            }
             ctx.output(Places.CHUNK_BUDGET, (Void) null);   // return permit
             return CompletableFuture.completedFuture(null);
         };
