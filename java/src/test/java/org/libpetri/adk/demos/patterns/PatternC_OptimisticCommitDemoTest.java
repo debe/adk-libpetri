@@ -56,9 +56,14 @@ import org.libpetri.smt.SmtVerifier;
  * mid-retry. Expressing "try cheap, validate, fall back to slow"
  * requires nesting {@code SequentialAgent(cheap, validator,
  * LoopAgent(slow))} and plumbing the validation outcome via
- * {@code Session.state}. The {@code Session.state} write/read pair
- * races across concurrent invocations on the same session.
- * {@code PatternC_AdkOnlyFoilTest} demonstrates the race.
+ * {@code Session.state}, a read-then-act split across agent
+ * boundaries. {@code PatternC_AdkOnlyFoilTest} demonstrates that this
+ * escape is required (stock agents cannot express the conditional
+ * fallback) and that it reintroduces the check-and-act window the net
+ * closes structurally. It does not run a live concurrency race: a
+ * deterministic race demonstration is out of scope and would be
+ * flaky. The net closes the window by construction, proven by the
+ * at-most-one-commit Z3 property in the paired demo.
  *
  * <h2>Topology</h2>
  * <pre>

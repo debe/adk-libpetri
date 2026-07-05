@@ -92,6 +92,16 @@ fourth case covers full-duplex failure modes that are hard to express
 in any sequence-shaped runtime. Each case names the closest one-liner
 in ADK or RxJava and why it does not survive composition.
 
+Cases 3 and 4 are backed by executable demos with machine-checked
+properties (`PatternA_SpeculativeRaceDemoTest`, `VoiceSessionDemoTest`).
+Cases 1 and 2 are illustrative: the diagrams and argument below show the
+shape, but there is not yet a dedicated `COLLECTOR` / `LATEST_GENERATION`
+demo with a paired ADK foil. The closest executable head-to-heads today
+are the composition-pattern demos (`PatternB` quorum, `PatternC`
+optimistic-commit). Backing cases 1 and 2 with their own demo, foil, and
+SMT property is tracked in
+[`docs/adr/0001-pre-port-design-gate.md`](docs/adr/0001-pre-port-design-gate.md).
+
 ### 1. Concurrent fan-out with batch-scoped state
 
 A retrieval-heavy agent dispatches a batch of tagged jobs whose count

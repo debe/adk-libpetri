@@ -139,24 +139,34 @@ thesis airtight. P1 and P2 are independent and can land as separate commits.
 
 ### P2: make the thesis airtight (proof-surface work)
 
-- [ ] **Voice/BIDI foil** (strongest, most concrete): a stock-ADK path
-      (`GeminiLlmConnection` or a faithful mock over the same `LiveServerMessage`
-      frames `SyncGeminiLiveConnectionTest` uses) fed a VAD / barge-in edge,
-      asserting the edge is absent from ADK's `Flowable<LlmResponse>`.
-- [ ] **Streaming/SSE foil**: show the property libpetri proves
-      (`CHUNK_BUDGET <= K`, at-most-K concurrent emissions) is not
-      expressible/verifiable in ADK's streaming. This is a
-      "structural-guarantee-absent" foil, not a "broken-behavior" one; land a
-      falsifiable assertion or record it honestly as a documented gap.
-- [ ] **Run the two comment-only failures:** stock `AgentTransfer` with a
-      hallucinated target (vs `MultiAgentDemoTest`'s typed-error `Out.xor`); and
-      `PatternC`'s promised concurrent `Session.state` race. Convert narration
-      to a green-locked assertion.
-- [ ] **README Cases 1 and 2:** back with real demo + foil + SMT, or demote to
-      "illustrative" with a one-line honesty note.
-- [ ] **Framing fixes (docs):** restate the thesis as "escape-required +
-      guarantees-forfeited" (fix `patterns/package-info` "cannot express"); label
-      the `elapsedMs` latency wins as empirical.
+- [x] **Voice/BIDI foil** (`VoiceVadEdgeAdkFoilTest`): runs ADK's actual
+      `GeminiLlmConnection.convertToServerResponse` over a VAD frame. Finding is
+      stronger than "dropped": ADK classifies a VAD speech-activity edge as an
+      "Unknown server message" error, so a barge-in frontend on `receive()` gets
+      an error, never a speech-start. Green-locked.
+- [ ] **Streaming/SSE foil**: DOCUMENTED GAP (deferred, not skipped). A faithful
+      foil here is a negative claim ("ADK's SSE has no structural, SMT-verifiable
+      `CHUNK_BUDGET <= K` bound"), which cannot be green-locked as a passing test
+      without a strawman ADK reimplementation. Streaming still carries the
+      libpetri-side Z3 proof (`LlmStreamingStepSubnetTest`). Revisit if a
+      concrete falsifiable assertion emerges.
+- [x] **AgentTransfer bad-name** (`TransferUnknownTargetAdkFoilTest`): shows
+      stock ADK gives a hallucinated target no typed-error surface
+      (`findAgent` -> `Optional.empty()`, `transferToAgent` records it
+      unvalidated). Paired with `MultiAgentDemoTest`'s typed-error routing.
+- [x] **PatternC `Session.state` race:** the overclaiming javadoc ("demonstrates
+      the race") is corrected to what the foil actually proves (escape-required +
+      the reintroduced check-and-act window). A deterministic race demo is out of
+      scope and would be flaky; the net closes the window by construction, proven
+      by the paired at-most-one-commit Z3 property.
+- [x] **README Cases 1 and 2:** demoted to "illustrative" with a one-line honesty
+      note pointing here; backing them with demo + foil + SMT remains open below.
+- [x] **Framing fixes (docs):** `patterns/package-info` restated as
+      "escape-required + guarantees-forfeited"; the `elapsedMs` latency wins
+      labeled empirical (safety vs liveness note).
+
+Still open after this pass: a falsifiable streaming/SSE foil (if one is
+expressible), and dedicated demo + foil + SMT for README Cases 1 and 2.
 
 ## What a port inherits
 

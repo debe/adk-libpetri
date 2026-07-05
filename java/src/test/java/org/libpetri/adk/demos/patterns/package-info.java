@@ -1,8 +1,12 @@
 /**
- * Composition pattern catalog — three idioms that ADK's stock
- * orchestration agents ({@code SequentialAgent}, {@code ParallelAgent},
- * {@code LoopAgent}, {@code AgentTransfer}) cannot express, each
- * implemented as a small Petri-net demo paired with an ADK-only foil.
+ * Composition pattern catalog: three idioms that ADK's stock
+ * orchestration <i>agent types</i> ({@code SequentialAgent},
+ * {@code ParallelAgent}, {@code LoopAgent}, {@code AgentTransfer})
+ * cannot express without escaping into a custom {@code BaseAgent} that
+ * forfeits the structural, SMT-checkable guarantees. Each is
+ * implemented as a small Petri-net demo paired with an ADK-only foil
+ * that runs the stock agents (or the required escape) and green-locks
+ * the gap.
  *
  * <h2>Pair-per-pattern convention</h2>
  *
@@ -31,6 +35,13 @@
  *   <li><b>Pattern C — Optimistic commit with fallback</b> via XOR
  *       validation output and a shared {@code COMMITTED} mutex.</li>
  * </ul>
+ *
+ * <p><b>Safety vs liveness.</b> Each demo's Z3 property establishes a
+ * <i>safety</i> guarantee (at-most-once commit, boundedness,
+ * deadlock-freedom). The latency advantages the foils assert
+ * (first-wins, early K-of-N fire, pre-warm fallback) are checked
+ * <i>empirically</i> via {@code elapsedMs} bounds with generous
+ * margins, not proven.
  *
  * <p>None of these patterns add a new stock {@code SubnetDef} to the
  * library — branch count, branch identity, and result shapes are
