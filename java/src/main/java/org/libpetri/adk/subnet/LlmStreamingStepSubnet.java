@@ -244,6 +244,12 @@ public final class LlmStreamingStepSubnet {
             CompletableFuture<Void> done = new CompletableFuture<>();
             var collected = new ArrayList<LlmResponse>();
             var injections = new ArrayList<CompletableFuture<Boolean>>();
+            // Load-bearing contract: this fabricates a FRESH EnvironmentPlace
+            // wrapper, yet it injects onto the SAME env place the runner
+            // registered for Places.CHUNK. That works because libpetri resolves
+            // env injection by the underlying Place (name, type) identity, not by
+            // EnvironmentPlace wrapper-instance identity. Any port must preserve
+            // that resolution rule, or a fresh-wrapper self-injection lands nowhere.
             var chunkEnv = EnvironmentPlace.of(Places.CHUNK);
 
             var executor = config.executorRef().get();

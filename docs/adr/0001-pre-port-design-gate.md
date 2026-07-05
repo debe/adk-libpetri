@@ -123,19 +123,39 @@ Honest reading:
 P0 is decided above. P1 makes the Java adapter internally uniform. P2 makes the
 thesis airtight. P1 and P2 are independent and can land as separate commits.
 
-### P1: adapter-internal uniformity (Java now)
+### P1: adapter-internal uniformity (Java)
 
-- [ ] Collapse NONE + SSE into one `TurnEgressPolicy` seam (one race guard, one
-      `emitPartials` flag, one id-decoration). Keep BIDI as its own seam.
-- [ ] Resolve `runLiveImpl`'s `liveConfig == null` branch: make `LiveConfig`
-      mandatory for `runLive`, or name an explicit egress-only mode (the current
-      null path is a "brain with no ears": egress with no input pump).
-- [ ] Hide `executorRef` / `deferredExecutorRef` behind one opaque `ChunkSink`
-      (a `TransitionContext` injector in libpetri is the ideal home but is out of
-      this repo's scope). Document the env-place resolution-by-Place-identity
-      contract the streaming action relies on (`LlmStreamingStepSubnet.java:247`).
-- [ ] Unify end-of-turn and invocation-id inside the adapter (from P0 #2/#3):
-      prefer a first-class net token for each so egress stops inferring them.
+Reassessed after P0 #1 and P2 landed. P0 #1 (`PetriRunner` IS the ADK adapter)
+removed P1's port-urgency: no port inherits `PetriAgent`/`PetriRunner`, so these
+are internal-cleanliness items, not contract items. The low-risk, high-value one
+is done; the rest are deferred with rationale (do not force indirection over
+clear, correct code):
+
+- [x] Document the env-place resolution-by-Place-identity contract the streaming
+      action relies on (`LlmStreamingStepSubnet.java`, the `chunkEnv`
+      fabrication). Done: a fresh `EnvironmentPlace` wrapper injects onto the
+      runner's registered place because libpetri resolves by `Place` identity,
+      not wrapper identity. Any port must preserve that rule.
+- [ ] DEFERRED: collapse NONE + SSE into one `TurnEgressPolicy` seam. On
+      inspection the two branches cannot be unified without a behavior change:
+      NONE uses `filter(!partial).take(1)` and errors if the stream completes
+      with no terminal event; SSE uses `takeUntil(!partial)` and completes
+      silently; NONE deliberately keeps the subnet's invocation id while SSE
+      stamps `ctx.invocationId()`. A shared policy would re-introduce those
+      conditionals plus regress NONE's error handling. The two-branch form is the
+      clearer expression of two contracts. Not worth the indirection.
+- [ ] DEFERRED: resolve `runLiveImpl`'s `liveConfig == null` branch. The
+      egress-only path is documented and intentional (apps that pump input via
+      their own env-place injection while ADK's `runLive` consumes egress).
+      Changing it to throw would break a documented surface for cosmetic gain.
+- [ ] DEFERRED: hide `executorRef` / `deferredExecutorRef` behind a `ChunkSink`.
+      The real fix is a `TransitionContext` injector one layer down in libpetri;
+      wrapping it in adk-libpetri now is a second abstraction over a soon-to-move
+      one, and an API break for the streaming Config. Revisit when libpetri grows
+      the injector.
+- [ ] DEFERRED: make end-of-turn / invocation-id first-class net tokens (from
+      P0 #2/#3). A large cross-cutting change (subnets + colours + egress) with
+      internal-only value now. Track as a standalone follow-up.
 
 ### P2: make the thesis airtight (proof-surface work)
 
