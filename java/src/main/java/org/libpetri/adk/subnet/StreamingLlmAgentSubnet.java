@@ -118,8 +118,6 @@ public final class StreamingLlmAgentSubnet {
 
     public static final SubnetDef<Void> DEF = LlmAgentSubnet.buildComposedDef(NAME, LlmStreamingStepSubnet.DEF);
 
-    
-
     /**
      * Full binding map — merges the contributing subnets' action bindings
      * with the agent's own. The merged map is validated against

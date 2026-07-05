@@ -23,6 +23,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -56,7 +57,7 @@ class PetriAgentLiveTest {
     }
 
     @Test
-    void ofLive_bridges_live_queue_model_frames_and_callback_signals() {
+    void ofLive_bridges_live_queue_model_frames_and_callback_signals() throws InterruptedException {
         var connection = new FakeLiveConnection();
         var callbackFrames = new AtomicInteger();
         var registry = SessionExecutorRegistry.strongOwned();
@@ -93,6 +94,9 @@ class PetriAgentLiveTest {
 
             Content userContent = content("user", "hello over live");
             queue.content(userContent);
+            // LiveRequestQueue delivery is not guaranteed synchronous; poll like
+            // BidiPetriAgentTest rather than assert on the calling thread.
+            await(() -> !connection.contentSends.isEmpty(), 2000);
             assertThat(connection.contentSends).containsExactly(userContent);
 
             connection.raw.onNext(signalFrame());
@@ -124,6 +128,15 @@ class PetriAgentLiveTest {
 
     private static ConcurrentMap<SessionKey, Object> sessionOwnerMap() {
         return new ConcurrentHashMap<>();
+    }
+
+    private static void await(BooleanSupplier cond, long timeoutMillis) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (System.currentTimeMillis() < deadline) {
+            if (cond.getAsBoolean()) return;
+            Thread.sleep(20);
+        }
+        throw new AssertionError("Condition was not met within " + timeoutMillis + "ms");
     }
 
     private static PetriRunner callbackSignalRunner() {

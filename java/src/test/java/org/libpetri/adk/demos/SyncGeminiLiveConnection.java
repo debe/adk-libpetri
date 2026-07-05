@@ -15,6 +15,7 @@ import com.google.genai.types.VoiceActivity;
 import com.google.genai.types.VoiceActivityType;
 import io.reactivex.rxjava3.core.Completable;
 import io.reactivex.rxjava3.core.Flowable;
+import io.reactivex.rxjava3.processors.FlowableProcessor;
 import io.reactivex.rxjava3.processors.PublishProcessor;
 import java.util.ArrayList;
 import java.util.List;
@@ -113,8 +114,14 @@ public final class SyncGeminiLiveConnection implements LiveConnection {
     public enum VoiceSignal { SPEECH_STARTED, SPEECH_STOPPED, INTERRUPTED, TURN_COMPLETE }
 
     private final CompletableFuture<AsyncSession> sessionFuture;
-    private final PublishProcessor<LiveServerMessage> raw = PublishProcessor.create();
-    private final Flowable<LiveServerMessage> rawFlowable = raw.serialize();
+    // toSerialized() serializes the PRODUCER side (onNext/onComplete/onError):
+    // onMessage() and closeInternal()/onConnectError() emit from different genai
+    // callback threads, so a bare PublishProcessor would let an in-flight onNext
+    // fire after a terminal signal (a Reactive-Streams violation). The serialized
+    // wrapper drops any onNext that races in after onComplete/onError.
+    private final FlowableProcessor<LiveServerMessage> raw =
+            PublishProcessor.<LiveServerMessage>create().toSerialized();
+    private final Flowable<LiveServerMessage> rawFlowable = raw;
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     public SyncGeminiLiveConnection(Client client, String model, LiveConnectConfig config) {

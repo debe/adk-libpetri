@@ -29,6 +29,11 @@ prefixed (e.g. `java/v1.0.0`).
 - **Registry cleanup**: removed the deprecated no-arg
   `SessionExecutorRegistry()` constructor; use `strongOwned()` or
   `cleanerOwned()` explicitly.
+- **Dependencies**: libpetri floor raised `2.7.1` -> `2.10.4`
+  (consumer-visible: the `deferredExecutorRef` streaming wiring and
+  `PrecompiledNetExecutor` executor choice depend on it). Test-scoped
+  tooling bumped: JUnit `6.0.3` -> `6.1.0`, `opentelemetry-sdk-testing`
+  `1.51.0` -> `1.63.0`.
 
 ## 1.2.0 - 2026-06-04
 

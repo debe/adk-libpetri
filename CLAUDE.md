@@ -10,8 +10,9 @@ adk-libpetri replaces Google ADK Java's orchestration core
 `AgentTransfer`, `Runner` driving an RxJava pipeline) with a
 Coloured Time Petri Net runtime built on
 [libpetri](https://github.com/debe/libpetri). Stock ADK `Runner`
-consumes the result via an ~80-line `PetriAgent extends BaseAgent`
-adapter. There is no ADK source fork.
+consumes turn-based sessions through the `PetriAgent extends
+BaseAgent` adapter; Live/BIDI paths bridge via `BidiPetriAgent`
+over `LiveConnection`. There is no ADK source fork.
 
 The repo follows libpetri's multi-language layout (`java/`,
 eventually `typescript/`, `rust/`, `python/`). It is currently Java
@@ -23,7 +24,7 @@ only. The layout is multi-language-ready for trivial port additions.
 
 ```bash
 cd java
-./mvnw verify                                   # Full build + tests (173 tests)
+./mvnw verify                                   # Full build + tests
 ./mvnw test                                     # Tests only
 ./mvnw test -Dtest="MultiAgentDemoTest"        # Single class
 ./mvnw test -Dtest="*Streaming*"                # Wildcard
@@ -65,11 +66,12 @@ generated from [`docs/diagrams/`](docs/diagrams/).
   `EventStore`) and `OtelEventStore` (OT spans per transition fire).
   Executors are caller-supplied. The library carries no shared
   executor singleton.
-- **`subnet/`**: 7 stock subnets plus `SubnetActions` validator.
+- **`subnet/`**: 9 stock subnets plus `SubnetActions` validator.
   `LlmStep`, `ToolDispatch`, `PromptBuilder`, `Router`, `LlmAgent`,
-  `PersistState`, `TransferRouter`. Voice-specific demo subnets
-  (`BargeIn`, `LiveApiRecovery`, `LlmStreamingStep`, `Vad`) are not
-  part of the shipped library. They live under
+  `PersistState`, `TransferRouter`, plus the beta SSE-streaming pair
+  `LlmStreamingStep` and `StreamingLlmAgent` (both `@Experimental`).
+  Voice-specific demo subnets (`BargeIn`, `LiveApiRecovery`, `Vad`)
+  are not part of the shipped library. They live under
   `src/test/java/org/libpetri/adk/demos/voice/` as exemplars of
   BIDI and Live-API composition. `Vad` is the producer that reads
   genai's Live session directly and turns its speech-activity edges
