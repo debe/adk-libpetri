@@ -23,6 +23,7 @@ import org.libpetri.event.EventStore;
 import org.libpetri.adk.bridge.EventStoreToFlowableBridge;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.runtime.BitmapNetExecutor;
+import org.libpetri.runtime.ActionFailureHandler;
 import org.libpetri.runtime.ExecutionContextProvider;
 import org.libpetri.runtime.PetriNetExecutor;
 import org.libpetri.runtime.PrecompiledNetExecutor;
@@ -33,6 +34,18 @@ import org.libpetri.runtime.PrecompiledNetExecutor;
  * <p>One {@code PetriRunner} = one user's net = one orchestrator thread.
  * Built once at session start, kept alive across many user messages, and
  * shut down when the session ends.
+ *
+ * <h2>Where actions run</h2>
+ * <p>libpetri calls {@code action.execute(ctx)} <i>inline</i>: it never
+ * submits actions anywhere. Every transition action therefore runs on the
+ * single thread hosting the orchestrator loop, the one taken from
+ * {@link Builder#orchestratorExecutor(ExecutorService)}. Make that a
+ * virtual-thread executor when actions block, since a blocking action holds
+ * that thread and serialises the net for its duration. Fan-out needs an
+ * explicit worker pool inside the action itself, the way
+ * {@code ToolDispatchSubnet} takes a {@code dispatchExecutor}.
+ * {@link Builder#actionExecutor(ExecutorService)}, despite its name, never
+ * dispatched actions and is deprecated.
  *
  * <h2>Interaction model</h2>
  * <p>Two surfaces, deliberately asymmetric:
@@ -172,7 +185,7 @@ public final class PetriRunner implements AutoCloseable {
 
     /**
      * Fire-and-forget drain — stops accepting new injects and lets
-     * in-flight actions finish on the orchestrator. Returns
+     * in-flight actions finish on the orchestrator thread. Returns
      * immediately; the orchestrator terminates and
      * {@link #adkEvents()} {@code onCompletes} on its own time. Use
      * this from latency-sensitive hooks ({@code @OnClose} etc.) where
@@ -256,6 +269,33 @@ public final class PetriRunner implements AutoCloseable {
      * or transition actions lose ambient-context propagation (tracing,
      * baggage, etc.).
      */
+    /**
+     * Action-failure policy installed by the built-in {@link ExecutorFactory}
+     * implementations.
+     *
+     * <p>Since libpetri 2.13 an unchecked throw from a transition action fails
+     * <i>that transition only</i> and the tokens it consumed are lost
+     * (EXEC-031); the orchestrator survives. libpetri's own default logs a
+     * WARNING, but only when no {@code EventStore} recorded a
+     * {@code TransitionFailed} for the failure. This builder defaults to
+     * {@link EventStore#noop()}, whose append succeeds while recording
+     * nothing, so on the default wiring libpetri considers the failure
+     * observed and stays quiet, and a throwing action becomes a silent hole
+     * in the marking. That is precisely the failure mode design commitment #2
+     * ("the marking IS the state") exists to prevent, so the built-in
+     * factories always install a handler.
+     *
+     * <p>Callers wanting different handling supply their own
+     * {@link ExecutorFactory} (the documented extension point) rather than
+     * a setter here, which would have to widen the factory's signature.
+     */
+    private static final ActionFailureHandler LOUD_ACTION_FAILURE = (transition, cause) ->
+            System.getLogger("org.libpetri.adk.runner").log(
+                    System.Logger.Level.WARNING,
+                    "Transition '" + transition.name() + "' action failed; its consumed tokens "
+                            + "are lost (libpetri EXEC-031). The orchestrator continues.",
+                    cause);
+
     @FunctionalInterface
     public interface ExecutorFactory {
         PetriNetExecutor build(PetriNet net,
@@ -270,8 +310,9 @@ public final class PetriRunner implements AutoCloseable {
             return (net, initial, envs, store, exec, ctx) -> BitmapNetExecutor.builder(net, initial)
                     .environmentPlaces(envs.toArray(EnvironmentPlace[]::new))
                     .eventStore(store)
-                    .executor(exec)
+                    .orchestratorExecutor(exec)
                     .executionContextProvider(ctx)
+                    .uncaughtActionHandler(LOUD_ACTION_FAILURE)
                     .build();
         }
 
@@ -280,8 +321,9 @@ public final class PetriRunner implements AutoCloseable {
             return (net, initial, envs, store, exec, ctx) -> PrecompiledNetExecutor.builder(net, initial)
                     .environmentPlaces(envs.toArray(EnvironmentPlace[]::new))
                     .eventStore(store)
-                    .executor(exec)
+                    .orchestratorExecutor(exec)
                     .executionContextProvider(ctx)
+                    .uncaughtActionHandler(LOUD_ACTION_FAILURE)
                     .build();
         }
     }
@@ -376,18 +418,46 @@ public final class PetriRunner implements AutoCloseable {
         }
 
         /**
-         * Required: executor that runs subnet actions. Callers control
-         * lifecycle; a typical choice is
-         * {@code Executors.newVirtualThreadPerTaskExecutor()}.
+         * Optional, and misnamed: this executor never ran subnet actions.
+         *
+         * <p>It is handed to libpetri's executor builder, which uses it to
+         * host the orchestrator loop under {@code run(Duration)} and nothing
+         * else ("the configured ExecutorService hosts exactly one task").
+         * This runner drives the no-arg {@code run()} on
+         * {@link #orchestratorExecutor(ExecutorService)} instead, so on this
+         * path the pool passed here is never used at all. Actions are invoked
+         * inline, on whichever thread runs the orchestrator loop. Pinned by
+         * {@code PetriRunnerTest.actions_run_on_the_orchestrator_executor_not_the_action_executor}.
+         *
+         * <p>Put your virtual-thread executor on
+         * {@link #orchestratorExecutor(ExecutorService)}, which is the pool
+         * that actually runs actions. Tool fan-out has its own executor
+         * ({@code ToolDispatchSubnet}'s {@code dispatchExecutor}), which is a
+         * genuine worker pool because that action submits to it explicitly.
+         *
+         * <p>Retained and still accepted so existing callers keep compiling;
+         * no longer required. Scheduled for removal in 2.0.
+         *
+         * @deprecated never dispatched actions and is unused on this path.
+         *     Configure {@link #orchestratorExecutor(ExecutorService)}.
          */
+        @Deprecated(since = "1.3", forRemoval = true)
         public Builder actionExecutor(ExecutorService exec) {
             this.actionExecutor = Objects.requireNonNull(exec, "actionExecutor");
             return this;
         }
 
         /**
-         * Required: executor that runs the orchestrator loop. One task
-         * per runner is submitted to it.
+         * Required: executor hosting the orchestrator loop. One task per
+         * runner is submitted to it.
+         *
+         * <p>Because libpetri invokes {@code action.execute(ctx)} inline
+         * rather than submitting it anywhere, this is also the pool on which
+         * every transition action runs. A blocking action (a synchronous
+         * model call, say) therefore occupies this thread for its duration
+         * and serialises the net, which is why
+         * {@code Executors.newVirtualThreadPerTaskExecutor()} is the right
+         * choice when actions block.
          */
         public Builder orchestratorExecutor(ExecutorService exec) {
             this.orchestratorExecutor = Objects.requireNonNull(exec, "orchestratorExecutor");
@@ -448,20 +518,22 @@ public final class PetriRunner implements AutoCloseable {
 
         /** Build the executor, submit it to the orchestrator pool, and return the running runner. */
         public PetriRunner start() {
-            if (actionExecutor == null) {
-                throw new IllegalStateException("actionExecutor must be set");
-            }
             if (orchestratorExecutor == null) {
                 throw new IllegalStateException("orchestratorExecutor must be set");
             }
             var bridge = new EventStoreToFlowableBridge(AdkColours.EVENT_OUT, primaryEventStore);
 
+            // actionExecutor is optional and inert (see its setter). When a
+            // caller supplies one we still hand it over, since libpetri would
+            // otherwise create and own a pool it never uses. When absent, fall
+            // back to the orchestrator pool so the factory contract, which
+            // does not accept null, stays satisfied.
             var executor = executorFactory.build(
                     net,
                     initialMarking,
                     envPlaces.values(),
                     bridge,
-                    actionExecutor,
+                    actionExecutor != null ? actionExecutor : orchestratorExecutor,
                     contextProvider);
 
             if (deferredExecutorRef != null) {

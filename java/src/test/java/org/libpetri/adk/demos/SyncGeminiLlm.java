@@ -9,6 +9,7 @@ import com.google.genai.Client;
 import com.google.genai.ResponseStream;
 import com.google.genai.types.GenerateContentConfig;
 import com.google.genai.types.GenerateContentResponse;
+import com.google.genai.types.Part;
 import io.reactivex.rxjava3.core.Flowable;
 import java.util.Objects;
 
@@ -84,6 +85,7 @@ public final class SyncGeminiLlm extends BaseLlm {
                 ResponseStream<GenerateContentResponse> rs =
                         client.models.generateContentStream(effectiveModel, prepared.contents(), config);
                 return Flowable.fromIterable(rs)
+                        .filter(chunk -> !isStreamTerminator(chunk))
                         .map(LlmResponse::create)
                         .doFinally(rs::close);
             });
@@ -92,6 +94,31 @@ public final class SyncGeminiLlm extends BaseLlm {
         return Flowable.fromCallable(
                 () -> LlmResponse.create(
                         client.models.generateContent(effectiveModel, prepared.contents(), config)));
+    }
+
+    /**
+     * Drops the bare empty-text part Gemini 3 ends a stream with.
+     *
+     * <p>ADK's own wrapper gained this in 1.8.0 ({@code Gemini.isStreamTerminator}),
+     * but that fix lives in ADK's streaming accumulator, which this exemplar
+     * deliberately bypasses: it maps each chunk straight through. Without the
+     * filter the terminator reaches the net as a chunk and is emitted as a
+     * spurious empty partial Event. Matched by rebuilding rather than against a
+     * literal, so a terminator that also carries an explicit {@code thought=false}
+     * is still recognised.
+     */
+    static boolean isStreamTerminator(GenerateContentResponse chunk) {
+        var parts = chunk.parts();
+        if (parts == null || parts.size() != 1) {
+            return false;
+        }
+        Part part = parts.get(0);
+        if (!part.text().map(String::isEmpty).orElse(false)) {
+            return false;
+        }
+        Part.Builder terminator = Part.builder().text("");
+        part.thought().ifPresent(terminator::thought);
+        return terminator.build().equals(part);
     }
 
     @Override

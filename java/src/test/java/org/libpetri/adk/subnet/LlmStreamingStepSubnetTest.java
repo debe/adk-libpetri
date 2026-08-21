@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.libpetri.analysis.EnvironmentAnalysisMode;
 import org.libpetri.core.EnvironmentPlace;
 import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
@@ -131,20 +132,33 @@ class LlmStreamingStepSubnetTest {
         // Z3 Spacer should prove CHUNK_BUDGET <= K under the consume-and-return
         // pattern of T_EmitChunk.
         var k = 4;
+        // CORE-043 (libpetri 2.14+): a transition declaring an output spec
+        // must carry a producing action at verification as well as at
+        // execution. Bind the subnet's real actions so the bound is proven
+        // about the net that runs, not an unbound skeleton. The actions are
+        // never invoked here; only the structure is encoded.
+        var verifyConfig = LlmStreamingStepSubnet.Config.builder("verify")
+                .chunkBudget(k)
+                .executorRef(new AtomicReference<PetriNetExecutor>())
+                .build();
         var net = PetriNet.builder("streaming")
                 .compose(LlmStreamingStepSubnet.DEF)
-                .build();
+                .build()
+                .bindActions(LlmStreamingStepSubnet.actionBindings(
+                        streamingLlm(List.of()), verifyConfig));
 
         var result = SmtVerifier.forNet(net)
                 .environmentPlaces(EnvironmentPlace.of(LlmStreamingStepSubnet.Places.CHUNK))
+                .environmentMode(EnvironmentAnalysisMode.bounded(1))
                 .property(AdkNetInvariants.reaskBudgetIsBounded(
                         LlmStreamingStepSubnet.Places.CHUNK_BUDGET, k))
                 .verify();
 
-        // Z3 either proves the bound (success) or returns Unknown for env-place-
-        // dominated nets. The point is the property is expressible and the
-        // verifier accepts it — a real production verification would seed the
-        // initial marking explicitly and re-run.
+        // With CHUNK modelled as a bounded environment place the bound is
+        // genuinely proven rather than vacuously unrefuted. Left on the
+        // default ignore() mode the verifier returns Unknown ("a proof would
+        // be vacuous"), which isViolated()==false would have accepted.
+        assertThat(result.isProven()).isTrue();
         assertThat(result.isViolated()).isFalse();
     }
 

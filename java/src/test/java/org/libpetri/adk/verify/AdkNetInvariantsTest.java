@@ -23,6 +23,7 @@ import org.libpetri.core.Arc;
 import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
 import org.libpetri.core.Transition;
+import org.libpetri.core.TransitionAction;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.subnet.LlmAgentSubnet;
 import org.libpetri.adk.subnet.PersistStateSubnet;
@@ -281,9 +282,13 @@ class AdkNetInvariantsTest {
                 .inputs(Arc.In.one(in))
                 .outputs(Arc.Out.place(budget))
                 .build();
+        // CORE-043: a transition declaring an output spec must carry a
+        // producing action, at verification as well as at execution. Seed
+        // only moves its input token across, so fork() is the binding.
         var net = PetriNet.builder("budget-net")
                 .transition(t)
-                .build();
+                .build()
+                .bindActions(Map.of("Seed", TransitionAction.fork()));
 
         var result = SmtVerifier.forNet(net)
                 .initialMarking(b -> b.tokens(in, 1))
@@ -311,7 +316,8 @@ class AdkNetInvariantsTest {
                 .build();
         var net = PetriNet.builder("unbounded")
                 .transition(seed)
-                .build();
+                .build()
+                .bindActions(Map.of("Seed", TransitionAction.fork()));
 
         var result = SmtVerifier.forNet(net)
                 .initialMarking(b -> b.tokens(in, 1))

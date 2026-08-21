@@ -99,6 +99,12 @@ class OtelEventStoreTest {
         assertThat(span.getAttributes().asMap()).containsAtLeast(
                 AttributeKey.stringKey("libpetri.deadline"),
                 "PT5S");
+        // Pin the exception-type attribute. It used to be a hardcoded FQCN
+        // string literal, which would have gone silently wrong if libpetri
+        // ever moved the class; it is now derived from the class itself.
+        assertThat(span.getAttributes().asMap()).containsAtLeast(
+                AttributeKey.stringKey("exception.type"),
+                "org.libpetri.event.NetEvent.TransitionTimedOut");
         // span duration = actualDuration
         long actualDurationNs = span.getEndEpochNanos() - span.getStartEpochNanos();
         assertThat(actualDurationNs).isEqualTo(Duration.ofSeconds(6).toNanos());

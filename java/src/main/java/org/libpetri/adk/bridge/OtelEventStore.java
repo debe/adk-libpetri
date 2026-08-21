@@ -126,7 +126,7 @@ public final class OtelEventStore implements EventStore {
                             t.timestamp(),
                             StatusCode.ERROR,
                             "deadline exceeded",
-                            "org.libpetri.event.NetEvent.TransitionTimedOut",
+                            NetEvent.TransitionTimedOut.class.getCanonicalName(),
                             t.deadline().toString());
             default -> { /* not a transition lifecycle event — no span */ }
         }

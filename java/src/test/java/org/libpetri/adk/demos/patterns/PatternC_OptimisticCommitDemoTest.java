@@ -184,7 +184,17 @@ class PatternC_OptimisticCommitDemoTest {
     @Test
     @EnabledIf("z3Available")
     void optimistic_commit_net_proves_at_most_one_commit_per_turn() {
-        var net = buildNet();
+        // CORE-043 (libpetri 2.14+): a transition declaring an output spec
+        // must carry a producing action at verification as well as at
+        // execution. Verify the bound net, the one that actually runs,
+        // rather than an unbound skeleton that could never fire. The
+        // actions are never invoked here; only the structure is encoded.
+        var net = buildNet().bindActions(buildBindings(
+                /*cheapScore*/ 100,
+                /*slowScore*/  100,
+                /*passThreshold*/ 50,
+                Duration.ofMillis(30),
+                Duration.ofMillis(200)));
         var result = SmtVerifier.forNet(net)
                 .initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
                 .sinkPlaces(
@@ -199,6 +209,12 @@ class PatternC_OptimisticCommitDemoTest {
                         VALIDATION_PASSED, VALIDATION_FAILED))
                 .property(SmtProperty.deadlockFree())
                 .verify();
+        // libpetri 3.0.1 discharges an IC3 certificate before returning
+        // Proven and replays every counterexample, so a verdict that cannot
+        // be re-validated comes back Unknown. Assert the strong form: this
+        // project claims a proof here, and isViolated()==false alone would
+        // also pass on Unknown, letting the claim rot silently.
+        assertThat(result.isProven()).isTrue();
         assertThat(result.isViolated()).isFalse();
     }
 

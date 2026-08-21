@@ -20,11 +20,11 @@ Java 25, Maven 3.9.x via wrapper.
 
 | | Version |
 |---|---|
-| `org.libpetri:libpetri`              | 2.12.0 (Maven Central) |
-| `com.google.adk:google-adk`          | 1.7.0  (Maven Central) |
+| `org.libpetri:libpetri`              | 3.0.1  (Maven Central) |
+| `com.google.adk:google-adk`          | 1.8.0  (Maven Central) |
 | `com.google.genai:google-genai`      | 1.58.0 (transitive via google-adk) |
 | `io.reactivex.rxjava3:rxjava`        | 3.1.12 |
-| `io.opentelemetry:opentelemetry-api` | 1.51.0 (transitive via google-adk and libpetri); tests pin `opentelemetry-sdk-testing` 1.64.0 |
+| `io.opentelemetry:opentelemetry-api` | 1.51.0 (transitive via google-adk and libpetri); tests pin `opentelemetry-sdk-testing` 1.65.0 |
 
 Z3 (`com.microsoft.z3`) comes transitively from libpetri's
 `org.sosy-lab:javasmt-solver-z3`. SMT-using tests are gated via
@@ -55,8 +55,11 @@ var net = PetriNet.builder("hello")
         .build()
         .bindActions(LlmAgentSubnet.actionBindings(llm, config));
 
-var actionExecutor = Executors.newVirtualThreadPerTaskExecutor();
-var orchestratorExecutor = Executors.newSingleThreadExecutor();
+// Actions are invoked inline on the orchestrator thread, so this is the
+// pool that runs them, so make it virtual-threaded when actions block.
+var orchestratorExecutor = Executors.newVirtualThreadPerTaskExecutor();
+// Separate pool for explicit fan-out inside an action (tool dispatch).
+var dispatchExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
 // strongOwned() is the recommended default: close the registry entry from
 // your session-end hook. The owner map supplies the stable identity object
@@ -68,7 +71,6 @@ var agent = PetriAgent.of("my_agent", "Petri-backed agent",
         registry,
         key -> PetriRunner.builder(net)
                 .environmentPlace(AdkColours.USER_IN)
-                .actionExecutor(actionExecutor)
                 .orchestratorExecutor(orchestratorExecutor)
                 .start(),
         ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()));
@@ -95,7 +97,7 @@ pass the same executor reference to the subnet config and
 ```java
 var execRef = new java.util.concurrent.atomic.AtomicReference<org.libpetri.runtime.PetriNetExecutor>();
 var config = StreamingLlmAgentSubnet.Config.builder("my_agent", "gemini-2.0-flash")
-        .dispatchExecutor(actionExecutor)
+        .dispatchExecutor(dispatchExecutor)
         .chunkBudget(4)
         .executorRef(execRef)
         .build();
@@ -110,7 +112,6 @@ var agent = PetriAgent.of("my_agent", "Streaming agent", registry,
                 .environmentPlace(AdkColours.USER_IN)
                 .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
                 .deferredExecutorRef(execRef)
-                .actionExecutor(actionExecutor)
                 .orchestratorExecutor(orchestratorExecutor)
                 .start(),
         ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()));

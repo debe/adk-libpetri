@@ -38,11 +38,11 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>25</maven.compiler.release>
 
-        <libpetri.version>2.12.0</libpetri.version>
-        <google-adk.version>1.7.0</google-adk.version>
+        <libpetri.version>3.0.1</libpetri.version>
+        <google-adk.version>1.8.0</google-adk.version>
         <rxjava.version>3.1.12</rxjava.version>
         <!--
-          Protobuf floor required by ADK 1.7.0 transitives. Gencode in
+          Protobuf floor required by ADK 1.8.0 transitives. Gencode in
           com.google.cloud:google-cloud-dlp and com.google.longrunning is
           compiled against 4.33.x; a runtime older than the linked gencode
           throws ProtobufRuntimeVersionException at first class-load. The
@@ -52,12 +52,12 @@
         -->
         <protobuf.version>4.33.5</protobuf.version>
 
-        <junit.version>6.1.2</junit.version>
+        <junit.version>6.1.3</junit.version>
         <truth.version>1.4.5</truth.version>
         <mockito.version>5.23.0</mockito.version>
 
         <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
-        <maven-surefire-plugin.version>3.5.5</maven-surefire-plugin.version>
+        <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
 
         <!-- Release-only plugins (active under the `release` profile). Mirrors libpetri. -->
         <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
@@ -127,7 +127,7 @@
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk-testing</artifactId>
-            <version>1.64.0</version>
+            <version>1.65.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

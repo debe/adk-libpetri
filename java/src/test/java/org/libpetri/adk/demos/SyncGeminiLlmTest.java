@@ -9,6 +9,7 @@ import com.google.adk.models.LlmRequest;
 import com.google.adk.models.LlmResponse;
 import com.google.genai.Client;
 import com.google.genai.types.Content;
+import com.google.genai.types.GenerateContentResponse;
 import com.google.genai.types.HttpOptions;
 import com.google.genai.types.Part;
 import com.sun.net.httpserver.HttpServer;
@@ -147,6 +148,38 @@ class SyncGeminiLlmTest {
     // ============================================================
     //  Test C — connect()/BIDI is out of scope
     // ============================================================
+
+    // ============================================================
+    //  Test D: Gemini 3 stream terminator
+    // ============================================================
+
+    /**
+     * ADK 1.8.0 started dropping the bare empty-text part Gemini 3 ends a
+     * stream with, but that fix lives in ADK's streaming accumulator, which
+     * this exemplar bypasses by mapping each chunk straight through. Without
+     * its own filter the terminator would reach the net and be emitted as a
+     * spurious empty partial Event.
+     */
+    @Test
+    void gemini3_stream_terminator_is_dropped_but_real_text_is_kept() {
+        assertThat(SyncGeminiLlm.isStreamTerminator(chunkOf(Part.builder().text("").build())))
+                .isTrue();
+        // A terminator carrying an explicit thought=false is still a terminator.
+        assertThat(SyncGeminiLlm.isStreamTerminator(
+                chunkOf(Part.builder().text("").thought(false).build())))
+                .isTrue();
+        // Real content is never mistaken for one.
+        assertThat(SyncGeminiLlm.isStreamTerminator(chunkOf(Part.fromText("hello"))))
+                .isFalse();
+    }
+
+    private static GenerateContentResponse chunkOf(Part part) {
+        return GenerateContentResponse.builder()
+                .candidates(List.of(com.google.genai.types.Candidate.builder()
+                        .content(Content.builder().role("model").parts(List.of(part)).build())
+                        .build()))
+                .build();
+    }
 
     @Test
     void connect_is_unsupported() {

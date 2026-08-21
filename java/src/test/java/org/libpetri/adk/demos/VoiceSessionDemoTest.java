@@ -48,6 +48,7 @@ import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
 import org.libpetri.adk.runner.SessionKey;
 import org.libpetri.core.Arc;
+import org.libpetri.analysis.EnvironmentAnalysisMode;
 import org.libpetri.core.EnvironmentPlace;
 import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
@@ -837,18 +838,36 @@ class VoiceSessionDemoTest {
 
     @Test
     @EnabledIf("z3Available")
-    void composed_voice_demo_net_has_smt_checked_bounded_chunk_budget() {
+    void composed_voice_demo_net_is_smt_proven_deadlock_free_with_bounded_chunk_budget() {
         var recoveryDef = LiveApiRecoverySubnet.def(FAST_RECOVERY);
         var startStream = Transition.builder(T_START_STREAM)
                 .inputs(Arc.In.one(AdkColours.USER_IN))
                 .outputs(Arc.Out.place(AdkColours.LLM_REQUEST))
                 .build();
+        // CORE-043 (libpetri 2.14+): a transition declaring an output spec
+        // must carry a producing action at verification as well as at
+        // execution. Bind every composed subnet plus the local StartStream
+        // transition (which only moves its token across, hence fork()), so
+        // the bound is proven about the net that runs. The actions are never
+        // invoked here; only the structure is encoded.
+        var verifyStreamConfig = LlmStreamingStepSubnet.Config.builder("voice-verify")
+                .chunkBudget(4)
+                .executorRef(new AtomicReference<PetriNetExecutor>())
+                .build();
+        var verifyBindings = new LinkedHashMap<String, TransitionAction>();
+        verifyBindings.putAll(LlmStreamingStepSubnet.actionBindings(
+                streamingLlm(List.of()), verifyStreamConfig));
+        verifyBindings.putAll(BargeInSubnet.actionBindings());
+        verifyBindings.putAll(LiveApiRecoverySubnet.actionBindings(FAST_RECOVERY));
+        verifyBindings.put(T_START_STREAM, TransitionAction.fork());
+
         var net = PetriNet.builder("voice-dlf-check")
                 .compose(LlmStreamingStepSubnet.DEF)
                 .compose(BargeInSubnet.DEF)
                 .compose(recoveryDef)
                 .transition(startStream)
-                .build();
+                .build()
+                .bindActions(verifyBindings);
 
         var userInEnv         = EnvironmentPlace.of(AdkColours.USER_IN);
         var chunkEnv          = EnvironmentPlace.of(LlmStreamingStepSubnet.Places.CHUNK);
@@ -861,6 +880,7 @@ class VoiceSessionDemoTest {
                 .initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
                 .environmentPlaces(userInEnv, chunkEnv, interruptedEnv, voiceOpenEnv,
                                    responseAwaitedEnv, modelActiveEnv)
+                .environmentMode(EnvironmentAnalysisMode.bounded(1))
                 .sinkPlaces(
                         AdkColours.EVENT_OUT,
                         AdkColours.LLM_RESPONSE,
@@ -870,8 +890,15 @@ class VoiceSessionDemoTest {
                         LiveApiRecoverySubnet.Places.RECONNECT_NEEDED)
                 .property(AdkNetInvariants.reaskBudgetIsBounded(
                         LlmStreamingStepSubnet.Places.CHUNK_BUDGET, 4))
+                .property(SmtProperty.deadlockFree())
                 .verify();
 
+        // libpetri 3.0.1 discharges an IC3 certificate before returning
+        // Proven and replays every counterexample, so a verdict that cannot
+        // be re-validated comes back Unknown. Assert the strong form: this
+        // project claims a proof here, and isViolated()==false alone would
+        // also pass on Unknown, letting the claim rot silently.
+        assertThat(result.isProven()).isTrue();
         assertThat(result.isViolated()).isFalse();
     }
 

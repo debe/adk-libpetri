@@ -18,6 +18,11 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -182,6 +187,129 @@ class PetriRunnerTest {
                 .transition(emit)
                 .build()
                 .bindActions(Map.of("T_Ack", ack));
+    }
+
+    /**
+     * libpetri 2.13 contains an action failure to the failing transition: the
+     * orchestrator survives and the consumed tokens are lost (EXEC-031).
+     * libpetri's own default WARNING is suppressed whenever an EventStore
+     * "observed" the failure, and this builder defaults to
+     * {@code EventStore.noop()}, whose append succeeds while recording
+     * nothing, so without the handler the built-in factories install, a
+     * throwing action would vanish without trace.
+     */
+    @Test
+    void a_throwing_action_is_reported_and_does_not_kill_the_orchestrator() throws Exception {
+        var boom = Place.of("boom", String.class);
+        var net = PetriNet.builder("throwing-host")
+                .transition(Transition.builder("Boom")
+                        .inputs(Arc.In.one(AdkColours.USER_IN))
+                        .outputs(Arc.Out.place(boom))
+                        .build())
+                .build()
+                .bindActions(Map.of("Boom", (TransitionAction) ctx -> {
+                    throw new IllegalStateException("action blew up");
+                }));
+
+        var records = new CopyOnWriteArrayList<LogRecord>();
+        Handler capture = new Handler() {
+            @Override public void publish(LogRecord r) { records.add(r); }
+            @Override public void flush() {}
+            @Override public void close() {}
+        };
+        Logger jul = Logger.getLogger("org.libpetri.adk.runner");
+        jul.addHandler(capture);
+        try (var runner = PetriRunner.builder(net)
+                .environmentPlace(AdkColours.USER_IN)
+                .actionExecutor(EXECUTOR)
+                .orchestratorExecutor(EXECUTOR)
+                .start()) {
+
+            runner.inject(AdkColours.USER_IN, userMessage("go")).get(2, TimeUnit.SECONDS);
+
+            long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            while (records.isEmpty() && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+
+            // Not silent: the failure was reported.
+            assertThat(records).isNotEmpty();
+            var record = records.get(0);
+            assertThat(record.getLevel()).isEqualTo(Level.WARNING);
+            assertThat(record.getMessage()).contains("Boom");
+            assertThat(record.getThrown()).isInstanceOf(IllegalStateException.class);
+
+            // Contained: the orchestrator is still alive and still accepting.
+            assertThat(runner.inject(AdkColours.USER_IN, userMessage("again"))
+                    .get(2, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            jul.removeHandler(capture);
+        }
+    }
+
+    /**
+     * Pins where transition actions actually run. libpetri invokes
+     * {@code action.execute(ctx)} inline on the thread running the
+     * orchestrator loop; the {@code ExecutorService} handed to libpetri's
+     * builder "hosts exactly one task" and only under {@code run(Duration)},
+     * which this runner never calls. So {@code actionExecutor} is inert on
+     * this path and {@code orchestratorExecutor} is the pool that runs every
+     * action, the opposite of what the docs used to imply.
+     */
+    @Test
+    void actions_run_on_the_orchestrator_executor_not_the_action_executor() throws Exception {
+        var seen = new java.util.concurrent.atomic.AtomicReference<String>();
+        var done = new java.util.concurrent.CountDownLatch(1);
+        var sink = Place.of("threadSink", String.class);
+
+        var net = PetriNet.builder("thread-probe")
+                .transition(Transition.builder("Probe")
+                        .inputs(Arc.In.one(AdkColours.USER_IN))
+                        .outputs(Arc.Out.place(sink))
+                        .build())
+                .build()
+                .bindActions(Map.of("Probe", TransitionAction.transform(ctx -> {
+                    seen.set(Thread.currentThread().getName());
+                    done.countDown();
+                    return "ok";
+                })));
+
+        var actionPool = Executors.newSingleThreadExecutor(
+                r -> new Thread(r, "probe-ACTION-pool"));
+        var orchestratorPool = Executors.newSingleThreadExecutor(
+                r -> new Thread(r, "probe-ORCHESTRATOR-pool"));
+        try (var runner = PetriRunner.builder(net)
+                .environmentPlace(AdkColours.USER_IN)
+                .actionExecutor(actionPool)
+                .orchestratorExecutor(orchestratorPool)
+                .start()) {
+
+            runner.inject(AdkColours.USER_IN, userMessage("probe")).get(2, TimeUnit.SECONDS);
+            assertThat(done.await(2, TimeUnit.SECONDS)).isTrue();
+
+            assertThat(seen.get()).isEqualTo("probe-ORCHESTRATOR-pool");
+            assertThat(seen.get()).isNotEqualTo("probe-ACTION-pool");
+        } finally {
+            actionPool.shutdownNow();
+            orchestratorPool.shutdownNow();
+        }
+    }
+
+    /** actionExecutor is inert, so omitting it must build and run fine. */
+    @Test
+    void runner_starts_without_an_action_executor() throws Exception {
+        var llm = scriptedLlm(textResponse("no action executor"));
+        var net = buildAgentNet(llm, "no-ae-agent");
+
+        try (var runner = PetriRunner.builder(net)
+                .environmentPlace(AdkColours.USER_IN)
+                .orchestratorExecutor(EXECUTOR)
+                .start()) {
+            TestSubscriber<Event> sub = runner.adkEvents().take(1).test();
+            runner.inject(AdkColours.USER_IN, userMessage("hi")).get(2, TimeUnit.SECONDS);
+            sub.awaitDone(2, TimeUnit.SECONDS);
+            sub.assertValueCount(1);
+        }
     }
 
     private static PetriRunner newRunner(PetriNet net) {

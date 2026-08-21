@@ -303,9 +303,11 @@ carry the design:
   (any number of typed env places); egress is deliberately narrow (no
   generic `observe(Place<T>)`), so the net keeps one auditable way in
   and one way out.
-- **Executors are caller-supplied.** `PetriRunner.Builder` requires
-  explicit `actionExecutor` and `orchestratorExecutor`. The library
-  carries no shared executor singleton; callers own lifecycle.
+- **Executors are caller-supplied.** `PetriRunner.Builder` requires an
+  explicit `orchestratorExecutor`. The library carries no shared
+  executor singleton; callers own lifecycle. libpetri invokes actions
+  inline rather than submitting them, so that one pool is also where
+  every transition action runs.
 - **The marking is the state.** Read arcs to typed in-net places are
   fine. External stores (ADK `Session.state`, a database, a cache) are
   write-only legacy bridges, never read from inside the net during
@@ -320,9 +322,18 @@ singleton this project bans. The fix needs no fork: call genai's
 synchronous API on a virtual thread. genai's sync facade
 (`client.models.generateContent` / `generateContentStream`) and
 OkHttp's synchronous `execute()` both run on the calling thread, so a
-`BaseLlm` that calls genai synchronously, subscribed on the Petri
-action's virtual thread, keeps the whole call (HTTP I/O, parsing,
-mapping) on that thread and never touches `commonPool`.
+`BaseLlm` that calls genai synchronously keeps the whole call (HTTP
+I/O, parsing, mapping) on the thread that invoked it and never touches
+`commonPool`.
+
+That thread is the orchestrator thread. libpetri calls
+`action.execute(ctx)` inline and never submits it anywhere, so a
+transition action runs on whichever thread is running the orchestrator
+loop, taken from `orchestratorExecutor`. Making that a
+virtual-thread executor is what keeps blocking cheap; a blocking action
+holds the thread and serialises the net while it runs. Actions that
+need real fan-out take their own pool, the way `ToolDispatchSubnet`
+takes a `dispatchExecutor`.
 
 ```java
 // build once, share across sessions, close() on shutdown
@@ -332,8 +343,8 @@ BaseLlm llm  = new SyncGeminiLlm("gemini-2.0-flash", client); // ~25-line adapte
 var bound = net.bindActions(LlmStepSubnet.actionBindings(llm));
 runner = PetriRunner.builder(bound)
     .environmentPlace(AdkColours.USER_IN)
-    .actionExecutor(Executors.newVirtualThreadPerTaskExecutor())  // blocking the call is cheap here
-    .orchestratorExecutor(orchestrator)
+    // actions run inline on this pool, so blocking the call is cheap here
+    .orchestratorExecutor(Executors.newVirtualThreadPerTaskExecutor())
     .start();
 ```
 
@@ -694,7 +705,7 @@ end-to-end demos.
 
 ### Consuming from a project: protobuf version floor
 
-ADK 1.7.0's transitives (notably `com.google.cloud:google-cloud-dlp`
+ADK 1.8.0's transitives (notably `com.google.cloud:google-cloud-dlp`
 and `com.google.longrunning`) ship protobuf gencode compiled against
 4.33.x. The protobuf runtime contract is "runtime at least linked
 gencode," so consumers that pin protobuf-java to an older version hit
@@ -731,7 +742,7 @@ in [ADR 0002](docs/adr/0002-adk-version-compat.md).
 ## Relationship to libpetri
 
 adk-libpetri consumes libpetri from Maven Central
-(`org.libpetri:libpetri:2.12.0`). It is a sibling project, not a fork.
+(`org.libpetri:libpetri:3.0.1`). It is a sibling project, not a fork.
 The shared design principles (env-place-only interaction, typed colours
 per concept, marking-as-state, EventStore-decorated observability) come
 from libpetri and apply identically here.

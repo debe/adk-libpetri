@@ -357,10 +357,31 @@ class MultiAgentDemoTest {
     @EnabledIf("z3Available")
     void multi_agent_net_is_smt_proven_deadlock_free() {
         Set<String> knownSpecialists = Set.of("billing", "tech_support");
+
+        // CORE-043 (libpetri 2.14+): a transition declaring an output spec
+        // must carry a producing action at verification as well as at
+        // execution. Bind the same actions the demo runs with, so the
+        // deadlock-freedom proof is about the net that actually executes
+        // rather than an unbound skeleton no firing could ever satisfy.
+        // The actions are never invoked here; only the structure is encoded.
+        var dlfConfig = LlmAgentSubnet.Config.builder("planner", "fake-model")
+                .systemInstruction("Route to the right specialist.")
+                .reaskBudget(2)
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        var dlfRouterConfig = new TransferRouterSubnet.Config("planner",
+                () -> "inv-dlf");
+        var dlfBindings = new LinkedHashMap<String, TransitionAction>();
+        dlfBindings.putAll(LlmAgentSubnet.actionBindings(
+                scriptedLlm(textResponse("verification stub")), dlfConfig));
+        dlfBindings.putAll(TransferRouterSubnet.actionBindings(
+                knownSpecialists, dlfRouterConfig));
+
         var net = PetriNet.builder("dlf-check")
                 .compose(LlmAgentSubnet.DEF)
                 .compose(TransferRouterSubnet.def(knownSpecialists))
-                .build();
+                .build()
+                .bindActions(dlfBindings);
 
         var result = SmtVerifier.forNet(net)
                 .initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
@@ -375,9 +396,13 @@ class MultiAgentDemoTest {
                 .property(SmtProperty.deadlockFree())
                 .verify();
 
-        // No counterexample = no reachable deadlock from the seeded
-        // initial marking. Proven or Unknown is acceptable; Violated is
-        // the actual showstopper.
+        // No counterexample = no reachable deadlock from the seeded initial
+        // marking. Assert the strong form: the README and CLAUDE.md both say
+        // Z3 *proves* this net deadlock-free, and libpetri 3.0.1 downgrades a
+        // verdict whose IC3 certificate does not re-validate to Unknown.
+        // isViolated()==false alone also passes on Unknown, which would let
+        // the claim rot silently.
+        assertThat(result.isProven()).isTrue();
         assertThat(result.isViolated()).isFalse();
     }
 

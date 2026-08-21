@@ -92,8 +92,12 @@ generated from [`docs/diagrams/`](docs/diagrams/).
   Z3 proves the composed net is deadlock-free.
 - **`VoiceSessionDemoTest`**. Streaming plus barge-in plus silence
   recovery composed into one long-lived per-session net with
-  multi-direction env places. Z3 proves deadlock-free. SCG bounded
-  exploration confirms a finite reachable state space.
+  multi-direction env places. Z3 proves it deadlock-free and proves the
+  chunk budget bounded, with the env places modelled via
+  `environmentMode(bounded(1))`. Without that the verifier returns
+  `Unknown`, because a proof that ignores env places would be vacuous.
+  SCG bounded exploration lives next door in `LiveApiRecoverySubnetTest`
+  and confirms a finite reachable state space for the composed BIDI net.
 
 ## Load-bearing design principles
 

@@ -5,17 +5,25 @@ import static com.google.common.truth.Truth.assertThat;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import com.google.adk.models.BaseLlm;
+import com.google.adk.models.BaseLlmConnection;
+import com.google.adk.models.LlmRequest;
+import com.google.adk.models.LlmResponse;
+import io.reactivex.rxjava3.core.Flowable;
 import org.libpetri.core.EnvironmentPlace;
 import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
 import org.libpetri.core.Token;
+import org.libpetri.core.TransitionAction;
 import org.libpetri.event.EventStore;
 import org.libpetri.analysis.MarkingState;
 import org.libpetri.analysis.StateClassGraph;
@@ -23,6 +31,7 @@ import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.subnet.LlmStreamingStepSubnet;
 import org.libpetri.runtime.BitmapNetExecutor;
 import org.libpetri.runtime.Marking;
+import org.libpetri.runtime.PetriNetExecutor;
 
 class LiveApiRecoverySubnetTest {
 
@@ -83,11 +92,27 @@ class LiveApiRecoverySubnetTest {
     @Test
     void composed_bidi_voice_net_scg_terminates_under_bound() {
         var recoveryDef = LiveApiRecoverySubnet.def(FAST);
+
+        // CORE-043 (libpetri 2.14+): a transition declaring an output spec
+        // must carry a producing action at analysis time as well as at
+        // execution. Bind all three subnets so the state-class graph is
+        // built over the net that runs. The actions are never invoked here;
+        // only the structure is explored.
+        var streamConfig = LlmStreamingStepSubnet.Config.builder("scg")
+                .executorRef(new AtomicReference<PetriNetExecutor>())
+                .build();
+        var scgBindings = new LinkedHashMap<String, TransitionAction>();
+        scgBindings.putAll(LlmStreamingStepSubnet.actionBindings(
+                scgStubLlm(), streamConfig));
+        scgBindings.putAll(BargeInSubnet.actionBindings());
+        scgBindings.putAll(LiveApiRecoverySubnet.actionBindings(FAST));
+
         var net = PetriNet.builder("voice-scg-check")
                 .compose(LlmStreamingStepSubnet.DEF)
                 .compose(BargeInSubnet.DEF)
                 .compose(recoveryDef)
-                .build();
+                .build()
+                .bindActions(scgBindings);
 
         var initial = MarkingState.builder()
                 .tokens(AdkColours.LLM_REQUEST, 1)
@@ -154,6 +179,18 @@ class LiveApiRecoverySubnetTest {
             Collection<? extends Token<?>> raw = finalMarking.peekTokens(p);
             return new ArrayList<>(raw);
         }
+    }
+
+    /** Structure-only stub: the SCG never invokes actions, it only walks arcs. */
+    private static BaseLlm scgStubLlm() {
+        return new BaseLlm("scg-stub") {
+            @Override public Flowable<LlmResponse> generateContent(LlmRequest r, boolean s) {
+                return Flowable.empty();
+            }
+            @Override public BaseLlmConnection connect(LlmRequest r) {
+                throw new UnsupportedOperationException();
+            }
+        };
     }
 
     private static Fixture drive(LiveApiRecoverySubnet.Config config,
