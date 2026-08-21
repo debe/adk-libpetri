@@ -321,6 +321,13 @@ class VoiceSessionDemoTest {
     //  application code, without baking a custom agent into the library.
     // ============================================================
 
+    /**
+     * Turn edge the application signals from the transport's turn-complete frame.
+     * The net, not the bridge, turns it into the terminal {@code Event}.
+     */
+    private static final Place<Void> BIDI_TURN_COMPLETE =
+            Place.of("bidiDemo_turnComplete", Void.class);
+
     @Test
     void bidi_voice_via_baselllmconnection_bridges_frames_through_net() throws Exception {
         // ============================================================
@@ -363,7 +370,17 @@ class VoiceSessionDemoTest {
         //     LLM_REQUEST (env, Content from app)
         //       --> Bidi_SendToConnection (action: connection.sendContent)
         //     LLM_RESPONSE (env, LlmResponse pumped from connection.receive())
-        //       --> Bidi_RouteResponse (action: build ADK Event)  --> EVENT_OUT
+        //       --> Bidi_RouteResponse (action: build partial ADK Event) --> EVENT_OUT
+        //     TURN_COMPLETE (env, Void signalled by the app on the turn edge)
+        //       --> Bidi_EmitTurnEnd (action: build terminal ADK Event)  --> EVENT_OUT
+        //       inhibited by LLM_RESPONSE: no terminal while chunks are queued
+        //
+        //     The turn shape is the NET's: `partial` and `turnComplete` are set by
+        //     whichever transition fired, not by the transport bridge (which authors
+        //     no events at all; see BidiPetriAgent.bridge). So suppressing,
+        //     coalescing, cancelling or ORDERING chunks is a marking-level decision.
+        //     The inhibitor is that last one: egress order is an arc, not a rule the
+        //     application layer has to remember to follow.
         //
         //     BargeIn observes VOICE_ACTIVITY_OPEN and INTERRUPTED env places
         //     and routes barge-in events to BARGE_IN_SENT vs INTERRUPT_DISCARDED.
@@ -375,11 +392,19 @@ class VoiceSessionDemoTest {
                 .inputs(Arc.In.one(AdkColours.LLM_RESPONSE))
                 .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
                 .build();
+        var emitTurnEnd = Transition.builder("Bidi_EmitTurnEnd")
+                .inputs(Arc.In.one(BIDI_TURN_COMPLETE))
+                // Orders egress structurally: the terminal cannot fire while response
+                // chunks are still queued, so no application-side await is needed.
+                .inhibitor(AdkColours.LLM_RESPONSE)
+                .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
+                .build();
 
         var net = PetriNet.builder("bidi-bridge")
                 .compose(BargeInSubnet.DEF)
                 .transition(sendToConnection)
                 .transition(routeResponse)
+                .transition(emitTurnEnd)
                 .build();
 
         Map<String, TransitionAction> bindings = new LinkedHashMap<>();
@@ -399,6 +424,16 @@ class VoiceSessionDemoTest {
                     .author("bidi_agent")
                     .content(resp.content().orElse(Content.builder().build()))
                     .partial(true)
+                    .build());
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        });
+        bindings.put("Bidi_EmitTurnEnd", ctx -> {
+            ctx.input(BIDI_TURN_COMPLETE);
+            ctx.output(AdkColours.EVENT_OUT, Event.builder()
+                    .invocationId("bidi-1")
+                    .author("bidi_agent")
+                    .partial(false)
+                    .turnComplete(true)
                     .build());
             return java.util.concurrent.CompletableFuture.completedFuture(null);
         });
@@ -423,6 +458,7 @@ class VoiceSessionDemoTest {
                         .environmentPlace(AdkColours.LLM_RESPONSE)
                         .environmentPlace(BargeInSubnet.Places.INTERRUPTED)
                         .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
+                        .environmentPlace(BIDI_TURN_COMPLETE)
                         .eventStore(otelEventStore)
                         .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
@@ -443,6 +479,7 @@ class VoiceSessionDemoTest {
                         .environmentPlace(AdkColours.LLM_RESPONSE)
                         .environmentPlace(BargeInSubnet.Places.INTERRUPTED)
                         .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
+                        .environmentPlace(BIDI_TURN_COMPLETE)
                         .eventStore(otelEventStore)
                         .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
@@ -479,14 +516,20 @@ class VoiceSessionDemoTest {
                 .content(Content.builder().role("model")
                         .parts(List.of(Part.fromText("with light wind."))).build())
                 .build());
+        // Signalled straight after the chunks, with nothing awaited in between. The
+        // receive pump's inject is asynchronous and fire-and-forget, so both chunks may
+        // still be sitting in LLM_RESPONSE at this point. Bidi_EmitTurnEnd's inhibitor
+        // on LLM_RESPONSE is what keeps the terminal behind them.
+        injectVoid(runner, BIDI_TURN_COMPLETE);
         injectVoid(runner, BargeInSubnet.Places.INTERRUPTED);
 
         awaitQuiescent(runner, 2_000);
 
         // ============================================================
         //  5. Assert: the send went to the connection; two responses
-        //     surfaced as ADK partial Events; the barge-in routed to
-        //     BARGE_IN_SENT (voice window was open).
+        //     surfaced as ADK partial Events followed by one net-authored
+        //     terminal event; the barge-in routed to BARGE_IN_SENT (voice
+        //     window was open).
         // ============================================================
         assertThat(connection.sentContents).hasSize(1);
         assertThat(connection.sentContents.get(0).text()).isEqualTo("what's the weather");
@@ -494,9 +537,16 @@ class VoiceSessionDemoTest {
         var agentEvents = egress.values().stream()
                 .filter(e -> "bidi_agent".equals(e.author()))
                 .toList();
-        assertThat(agentEvents).hasSize(2);
+        assertThat(agentEvents).hasSize(3);
         assertThat(agentEvents.get(0).content().get().text()).isEqualTo("Sunny, ");
+        assertThat(agentEvents.get(0).partial()).hasValue(true);
         assertThat(agentEvents.get(1).content().get().text()).isEqualTo("with light wind.");
+        assertThat(agentEvents.get(1).partial()).hasValue(true);
+
+        // The turn boundary is the net's call: Bidi_EmitTurnEnd authored it, not the
+        // transport bridge. ADK's runLive consumers can now tell partials from finals.
+        assertThat(agentEvents.get(2).partial()).hasValue(false);
+        assertThat(agentEvents.get(2).turnComplete()).hasValue(true);
 
         var finalMarking = runner.executor().marking();
         assertThat(finalMarking.peekTokens(BargeInSubnet.Places.BARGE_IN_SENT)).hasSize(1);
@@ -529,6 +579,118 @@ class VoiceSessionDemoTest {
             assertThat(ts.getParentSpanId()).isEqualTo(rootSpanId);
         }
         tracerProvider.close();
+    }
+
+    // ============================================================
+    //  Barge-in chunk drop: the property net-authored egress buys
+    //  that a bridge-authored one cannot. When the transport bridge
+    //  maps frames straight to ADK Events, model content never enters
+    //  the marking, so no transition can reach it and a barge-in can
+    //  only stop *future* chunks. With the content in a place, the
+    //  already-queued backlog is a reset arc away.
+    // ============================================================
+
+    /** Observed: a barge-in wiped the queued turn. */
+    private static final Place<Void> BIDI_CHUNKS_DROPPED =
+            Place.of("bidiDemo_chunksDropped", Void.class);
+
+    @Test
+    void barge_in_structurally_drops_the_queued_model_chunks() throws Exception {
+        // ============================================================
+        //  Net: stock BargeIn decides whether an interrupt is a real
+        //  barge-in, and the drop transition hangs off its verdict.
+        //
+        //    LLM_RESPONSE --Bidi_EmitChunk--> EVENT_OUT
+        //                     o---[BARGE_IN_SENT]   stop emitting once
+        //                                           barge-in is decided
+        //    BARGE_IN_SENT --Bidi_DropQueuedTurn--> CHUNKS_DROPPED
+        //                     reset(LLM_RESPONSE)   wipe the backlog
+        // ============================================================
+        var emitChunk = Transition.builder("Bidi_EmitChunk")
+                .inputs(Arc.In.one(AdkColours.LLM_RESPONSE))
+                .inhibitor(BargeInSubnet.Places.BARGE_IN_SENT)
+                .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
+                .build();
+        var dropQueuedTurn = Transition.builder("Bidi_DropQueuedTurn")
+                .inputs(Arc.In.one(BargeInSubnet.Places.BARGE_IN_SENT))
+                .reset(AdkColours.LLM_RESPONSE)
+                .outputs(Arc.Out.place(BIDI_CHUNKS_DROPPED))
+                .build();
+
+        var net = PetriNet.builder("barge-in-drop")
+                .compose(BargeInSubnet.DEF)
+                .place(BIDI_CHUNKS_DROPPED)
+                .transition(emitChunk)
+                .transition(dropQueuedTurn)
+                .build();
+
+        Map<String, TransitionAction> bindings = new LinkedHashMap<>(BargeInSubnet.actionBindings());
+        bindings.put("Bidi_EmitChunk", ctx -> {
+            LlmResponse resp = ctx.input(AdkColours.LLM_RESPONSE);
+            // Emission costs something real (a socket write), which is exactly why a
+            // backlog builds up in LLM_RESPONSE faster than it drains.
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            ctx.output(AdkColours.EVENT_OUT, Event.builder()
+                    .invocationId("barge-1")
+                    .author("bidi_agent")
+                    .content(resp.content().orElse(Content.builder().build()))
+                    .partial(true)
+                    .build());
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        });
+        bindings.put("Bidi_DropQueuedTurn", ctx -> {
+            ctx.input(BargeInSubnet.Places.BARGE_IN_SENT);
+            ctx.output(BIDI_CHUNKS_DROPPED, (Void) null);
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        });
+
+        var runner = PetriRunner.builder(net.bindActions(bindings))
+                .environmentPlace(AdkColours.LLM_RESPONSE)
+                .environmentPlace(BargeInSubnet.Places.INTERRUPTED)
+                .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
+                .actionExecutor(EXECUTOR)
+                .orchestratorExecutor(EXECUTOR)
+                .start();
+
+        try {
+            TestSubscriber<Event> egress = runner.adkEvents().test();
+
+            // The user is speaking, so the interrupt is a genuine barge-in.
+            injectVoid(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
+
+            // A model turn streams in faster than it can be emitted, then the user
+            // cuts in. Everything still queued must never reach the client.
+            int pushed = 8;
+            for (int i = 0; i < pushed; i++) {
+                runner.inject(AdkColours.LLM_RESPONSE, LlmResponse.builder()
+                        .content(Content.builder().role("model")
+                                .parts(List.of(Part.fromText("chunk " + i))).build())
+                        .build());
+            }
+            injectVoid(runner, BargeInSubnet.Places.INTERRUPTED);
+
+            // Wait on the property, not on quiescence. Acceptance completes inside the
+            // orchestrator's external-event drain, before enablement is recomputed, so a
+            // quiescence poll taken right after an inject can read the pre-injection
+            // state and return early.
+            awaitMarked(runner, BIDI_CHUNKS_DROPPED, 5_000);
+            awaitQuiescent(runner, 5_000);
+
+            var marking = runner.executor().marking();
+            assertThat(marking.peekTokens(BIDI_CHUNKS_DROPPED)).hasSize(1);
+            // The backlog is gone from the marking, not merely un-subscribed downstream.
+            assertThat(marking.peekTokens(AdkColours.LLM_RESPONSE)).isEmpty();
+            // And it never became an Event. This is the assertion the pre-1.3 merged
+            // bridge could not have satisfied at any marking, because the chunks were
+            // Events the moment they left the transport.
+            assertThat(egress.values().size()).isLessThan(pushed);
+        } finally {
+            runner.shutdown();
+        }
     }
 
     // ============================================================
@@ -795,6 +957,21 @@ class VoiceSessionDemoTest {
     private static void injectVoid(PetriRunner runner, Place<Void> place) throws Exception {
         runner.executor().inject(runner.envPlace(place), (Void) null)
                 .get(1, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /** Await a token on {@code place}, which is a stronger barrier than quiescence. */
+    @SuppressWarnings("BusyWait")
+    private static void awaitMarked(PetriRunner runner, Place<?> place, long timeoutMillis)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (System.currentTimeMillis() < deadline) {
+            if (!runner.executor().marking().peekTokens(place).isEmpty()) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError(
+                place.name() + " was not marked within " + timeoutMillis + "ms");
     }
 
     @SuppressWarnings("BusyWait")

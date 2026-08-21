@@ -351,16 +351,46 @@ the VAD signals, are bypassed in thin user code rather than patched.
 
 The BIDI plumbing splits into a shipped half and a consumer half. The
 shipped half is `BidiPetriAgent.bridge(liveRequestQueue, connection,
-runner, author, onServerMessage)`: it owns the generic bidirectional
-pump, forwarding inbound `LiveRequest` frames to the connection, tapping
-the raw server stream into your `onServerMessage` decode/inject callback,
-and merging model content with the net's `adkEvents()` into one
-`Flowable<Event>`. The connection is a `LiveConnection` (shipped
-interface: `BaseLlmConnection` plus `rawReceive()`, the raw
-`LiveServerMessage` stream ADK's `LlmResponse` drops). Voice signals
-reach the net through `runner.signal(place)`, the unit-token injection the
-env-place model needs for every `Place<Void>` edge (speech start/stop,
-barge-in, `END_INVOCATION`).
+runner, onServerMessage)`: it owns the generic bidirectional pump,
+forwarding inbound `LiveRequest` frames to the connection and tapping the
+raw server stream into your `onServerMessage` decode/inject callback. The
+connection is a `LiveConnection` (shipped interface: `BaseLlmConnection`
+plus `rawReceive()`, the raw `LiveServerMessage` stream ADK's
+`LlmResponse` drops). Voice signals reach the net through
+`runner.signal(place)`, the unit-token injection the env-place model needs
+for every `Place<Void>` edge (speech start/stop, barge-in,
+`END_INVOCATION`).
+
+The bridge authors **no** events: what it returns is the net's egress
+(`adkEvents()`) alone. Model content goes in through the same seam as
+every other signal, `runner.inject(modelChunkPlace, content)`, and a net
+transition authors the outbound `Event` with `partial` and `turnComplete`
+set from the marking. Turn shape is therefore a marking-level decision,
+which is what lets barge-in structurally drop queued chunks: a bridge that
+maps frames straight to events keeps model content outside the marking,
+where no transition can cancel it.
+
+Egress *ordering* becomes a marking-level decision too, and that is the
+part worth getting right. A burst of frames is admitted to the marking in
+one pass, after which each enabled transition fires at most once per pass,
+so a terminal transition enabled alongside still-queued chunks emits in
+between them. The fix is an arc, not a callback convention: inhibit the
+terminal transition on the chunk place and it cannot fire while content is
+queued.
+
+```java
+Transition.builder("T_EmitFinal")
+        .inputs(Arc.In.one(TURN_COMPLETE))
+        .inhibitor(MODEL_CHUNK)          // no terminal while chunks are queued
+        .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
+        .build();
+```
+
+With that arc the decode callback stays fire-and-forget and never blocks
+the transport's reader thread. This is the general shape of the argument:
+a property that a stream-merging orchestrator can only document as a rule
+for callers to follow is, in a net, an arc that makes the violation
+unreachable.
 
 The consumer half stays an exemplar. `SyncGeminiLiveConnection` (under
 `demos/`, the BIDI sibling of `SyncGeminiLlm`) is the copy-and-adapt
@@ -664,7 +694,7 @@ end-to-end demos.
 
 ### Consuming from a project: protobuf version floor
 
-ADK 1.4.0's transitives (notably `com.google.cloud:google-cloud-dlp`
+ADK 1.7.0's transitives (notably `com.google.cloud:google-cloud-dlp`
 and `com.google.longrunning`) ship protobuf gencode compiled against
 4.33.x. The protobuf runtime contract is "runtime at least linked
 gencode," so consumers that pin protobuf-java to an older version hit
@@ -694,10 +724,14 @@ nearest-wins rules favour the consumer's BOM over a transitive's. The
 same pattern applies to any other gencode-bumped dependency (Guava is a
 watch-item: shipped at 33.5.0 but commonly managed to 32.x).
 
+Which ADK version each claim here was verified against, what changed
+between ADK releases, and how to re-check it on the next bump are recorded
+in [ADR 0002](docs/adr/0002-adk-version-compat.md).
+
 ## Relationship to libpetri
 
 adk-libpetri consumes libpetri from Maven Central
-(`org.libpetri:libpetri:2.10.4`). It is a sibling project, not a fork.
+(`org.libpetri:libpetri:2.12.0`). It is a sibling project, not a fork.
 The shared design principles (env-place-only interaction, typed colours
 per concept, marking-as-state, EventStore-decorated observability) come
 from libpetri and apply identically here.

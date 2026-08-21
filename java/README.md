@@ -20,10 +20,11 @@ Java 25, Maven 3.9.x via wrapper.
 
 | | Version |
 |---|---|
-| `org.libpetri:libpetri`              | 2.10.4 (Maven Central) |
-| `com.google.adk:google-adk`          | 1.4.0  (Maven Central) |
+| `org.libpetri:libpetri`              | 2.12.0 (Maven Central) |
+| `com.google.adk:google-adk`          | 1.7.0  (Maven Central) |
+| `com.google.genai:google-genai`      | 1.58.0 (transitive via google-adk) |
 | `io.reactivex.rxjava3:rxjava`        | 3.1.12 |
-| `io.opentelemetry:opentelemetry-*`   | 1.63.0 (transitive via google-adk and libpetri) |
+| `io.opentelemetry:opentelemetry-api` | 1.51.0 (transitive via google-adk and libpetri); tests pin `opentelemetry-sdk-testing` 1.64.0 |
 
 Z3 (`com.microsoft.z3`) comes transitively from libpetri's
 `org.sosy-lab:javasmt-solver-z3`. SMT-using tests are gated via

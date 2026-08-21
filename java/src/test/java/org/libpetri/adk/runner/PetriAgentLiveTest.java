@@ -38,11 +38,18 @@ import org.libpetri.core.TransitionAction;
  * End-to-end coverage for {@link PetriAgent#ofLive}: ADK's stock
  * {@link InMemoryRunner#runLive} must reach the shipped {@link BidiPetriAgent}
  * bridge, not the legacy egress-only live path.
+ *
+ * <p>Both outbound events here are authored by the net, because that is all the
+ * bridge returns. The {@code LiveConfig} callback is what turns a server frame
+ * into net input: a content-less frame becomes a {@code CALLBACK_SIGNAL}, a model
+ * turn becomes a {@code MODEL_CHUNK} token. Two distinct authors keep the two
+ * paths apart in the assertions.
  */
 class PetriAgentLiveTest {
 
     private static final String AGENT_NAME = "live_agent";
     private static final Place<Void> CALLBACK_SIGNAL = Place.of("petriAgentLive_callbackSignal", Void.class);
+    private static final Place<Content> MODEL_CHUNK = Place.of("petriAgentLive_modelChunk", Content.class);
 
     private static ExecutorService EXECUTOR;
 
@@ -78,6 +85,10 @@ class PetriAgentLiveTest {
                                 if (msg.serverContent().isEmpty()) {
                                     runner.signal(CALLBACK_SIGNAL);
                                 }
+                                // Model content reaches egress only by entering the net.
+                                msg.serverContent()
+                                        .flatMap(LiveServerContent::modelTurn)
+                                        .ifPresent(c -> runner.inject(MODEL_CHUNK, c));
                             }));
 
             var adkRunner = new InMemoryRunner(agent);
@@ -111,10 +122,12 @@ class PetriAgentLiveTest {
             events.awaitCount(2);
 
             Event modelEvent = events.values().stream()
-                    .filter(e -> AGENT_NAME.equals(e.author()))
+                    .filter(e -> "model_net".equals(e.author()))
                     .findFirst()
-                    .orElseThrow(() -> new AssertionError("no model event from " + AGENT_NAME));
+                    .orElseThrow(() -> new AssertionError("no net-authored model event"));
             assertThat(modelEvent.content().map(Content::text)).hasValue("model says hi");
+            // Authored by the net's emit transition, so the turn flag is the net's too.
+            assertThat(modelEvent.partial()).hasValue(true);
             assertThat(callbackFrames.get()).isEqualTo(2);
 
             queue.close();
@@ -150,18 +163,38 @@ class PetriAgentLiveTest {
                     .build());
             return java.util.concurrent.CompletableFuture.completedFuture(null);
         };
+        TransitionAction emitModelChunk = ctx -> {
+            Content chunk = ctx.input(MODEL_CHUNK);
+            ctx.output(AdkColours.EVENT_OUT, Event.builder()
+                    .id(Event.generateEventId())
+                    .invocationId("callback-invocation")
+                    .author("model_net")
+                    .content(chunk)
+                    .partial(true)
+                    .build());
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        };
         Transition emit = Transition.builder("T_CallbackSignal")
                 .inputs(Arc.In.one(CALLBACK_SIGNAL))
                 .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
                 .build();
+        Transition emitChunk = Transition.builder("T_ModelChunk")
+                .inputs(Arc.In.one(MODEL_CHUNK))
+                .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
+                .build();
         PetriNet net = PetriNet.builder("petri-agent-live-test")
                 .place(CALLBACK_SIGNAL)
+                .place(MODEL_CHUNK)
                 .place(AdkColours.EVENT_OUT)
                 .transition(emit)
+                .transition(emitChunk)
                 .build()
-                .bindActions(Map.of("T_CallbackSignal", emitCallback));
+                .bindActions(Map.of(
+                        "T_CallbackSignal", emitCallback,
+                        "T_ModelChunk", emitModelChunk));
         return PetriRunner.builder(net)
                 .environmentPlace(CALLBACK_SIGNAL)
+                .environmentPlace(MODEL_CHUNK)
                 .actionExecutor(EXECUTOR)
                 .orchestratorExecutor(EXECUTOR)
                 .start();

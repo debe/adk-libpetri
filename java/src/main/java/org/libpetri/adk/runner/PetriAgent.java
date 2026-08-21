@@ -99,14 +99,20 @@ import org.libpetri.adk.colours.AdkColours;
  * ADK delivers BIDI input as {@code com.google.adk.agents.LiveRequestQueue}
  * frames — audio chunks, text fragments, close signals — and the bridge
  * forwards those frames to the connection while the consumer callback decodes
- * raw provider server messages into typed env-place injections such as
- * {@link PetriRunner#signal(org.libpetri.core.Place)}. Provider-specific frame
- * transformation remains caller-side because raw PCM vs. Opus, voice-activity
- * edges, tool routing, and reconnect policy vary per transport. Sketch:
+ * raw provider server messages into typed env-place injections: model content
+ * via {@link PetriRunner#inject(org.libpetri.core.Place, Object)} and turn/signal
+ * edges via {@link PetriRunner#signal(org.libpetri.core.Place)}. The net (not the
+ * bridge) authors the outbound {@link Event} and sets {@code partial}/{@code
+ * turnComplete}. Provider-specific frame transformation remains caller-side because
+ * raw PCM vs. Opus, voice-activity edges, tool routing, and reconnect policy vary
+ * per transport. Sketch:
  *
  * <pre>{@code
- * return BidiPetriAgent.bridge(ctx.liveRequestQueue(), connection, runner, name(),
- *     (serverMessage, r) -> decodeSignals(serverMessage).forEach(s -> r.signal(placeFor(s))));
+ * return BidiPetriAgent.bridge(ctx.liveRequestQueue(), connection, runner,
+ *     (serverMessage, r) -> {
+ *         modelContentOf(serverMessage).ifPresent(c -> r.inject(MODEL_CHUNK, c));
+ *         decodeSignals(serverMessage).forEach(s -> r.signal(placeFor(s)));
+ *     });
  * }</pre>
  *
  * <p>The non-BIDI path ({@code runAsyncImpl}) <i>replaces</i> ADK
@@ -355,6 +361,6 @@ public final class PetriAgent extends BaseAgent {
         LiveRequestQueue inbound = ctx.liveRequestQueue().orElseThrow(
                 () -> new IllegalStateException("runLive requires a LiveRequestQueue"));
         LiveConnection conn = liveConfig.connectionFactory().apply(ctx);
-        return BidiPetriAgent.bridge(inbound, conn, runner, name(), liveConfig.onServerMessage());
+        return BidiPetriAgent.bridge(inbound, conn, runner, liveConfig.onServerMessage());
     }
 }

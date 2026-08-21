@@ -67,24 +67,35 @@ import org.libpetri.adk.runner.PetriRunner;
  * <p>The decoded {@link VoiceSignal}s enter the running net the same way every
  * external signal does, through their own typed env place (design commitment #1)
  * via {@link PetriRunner#signal(org.libpetri.core.Place)}. The bidirectional pump
- * loop (queue to connection, connection to net, event merge, dispose) is owned by
+ * loop (queue to connection, connection to net, dispose) is owned by
  * {@link BidiPetriAgent#bridge}; this class supplies only the connection and the
- * per-message decode:
+ * per-message decode. <b>Model content goes through the same seam:</b> the bridge
+ * authors no events, so the callback injects the model turn as a typed token and a
+ * net transition authors the outbound {@code Event} with {@code partial} /
+ * {@code turnComplete} set from the marking. That is what puts turn shape under the
+ * net's control (and lets barge-in structurally drop queued chunks):
  *
  * <pre>{@code
  * LiveConnection conn = new SyncGeminiLiveConnection(client, "gemini-2.0-flash-live-001", liveConfig);
- * Flowable<Event> out = BidiPetriAgent.bridge(ctx.liveRequestQueue(), conn, runner, "voice_agent",
+ * Flowable<Event> out = BidiPetriAgent.bridge(ctx.liveRequestQueue(), conn, runner,
  *     (msg, r) -> {
+ *         // Model content enters the marking; a net transition authors the Event.
+ *         msg.serverContent().flatMap(LiveServerContent::modelTurn)
+ *            .ifPresent(c -> r.inject(MODEL_CHUNK, c));
  *         for (VoiceSignal s : SyncGeminiLiveConnection.voiceSignals(msg)) {
  *             switch (s) {
  *                 case SPEECH_STARTED -> r.signal(VadSubnet.Places.SPEECH_STARTED);
  *                 case SPEECH_STOPPED -> r.signal(VadSubnet.Places.SPEECH_STOPPED);
  *                 case INTERRUPTED    -> r.signal(BargeInSubnet.Places.INTERRUPTED);
- *                 case TURN_COMPLETE  -> drainStreamingBudget(r); // your call-site choice
+ *                 case TURN_COMPLETE  -> r.signal(TURN_COMPLETE);  // net emits the terminal
  *             }
  *         }
  *     });
  * }</pre>
+ *
+ * <p>The decode stays fire-and-forget on the transport's reader thread. Ordering the
+ * turn's partials ahead of its terminal is the net's job, not the callback's: inhibit
+ * the terminal transition on the chunk place (see {@link BidiPetriAgent#bridge}).
  *
  * <p>The window {@code VadSubnet} opens from {@code SPEECH_STARTED} is the exact
  * place {@code BargeInSubnet} reads, so a later {@code INTERRUPTED} routes to

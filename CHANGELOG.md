@@ -19,6 +19,19 @@ prefixed (e.g. `java/v1.0.0`).
 - **Live/BIDI path**: `PetriAgent.ofLive(...)` and `PetriAgent.LiveConfig`
   ship a first-class path through `BidiPetriAgent.bridge`; plain
   `PetriAgent.of(...)` keeps the egress-only `runLive` behavior.
+- **Live egress is net-owned** (breaking, within the `@Experimental` BIDI
+  surface): `BidiPetriAgent.bridge` no longer takes an `author` and no longer
+  maps server frames to `Event`s. It returns `PetriRunner.adkEvents()` alone;
+  model content enters the net through the consumer's `onServerMessage`
+  callback and a net transition authors the `Event`, setting
+  `partial`/`turnComplete` from the marking. The old merged path emitted live
+  events with neither flag set, which ADK's `runLive` consumers cannot tell
+  from finals, and under ADK >= 1.5 each such event also costs a
+  `sessionService.appendEvent`. Egress ordering moves into the net with it: a
+  burst of frames is admitted to the marking in one pass and each enabled
+  transition then fires at most once per pass, so a terminal transition
+  enabled alongside queued chunks emits between them. Inhibit the terminal on
+  the chunk place and the decode callback stays fire-and-forget.
 - **Executor wiring**: `PetriRunner.Builder.deferredExecutorRef(...)`
   populates streaming subnet executor references before the orchestrator
   starts, removing the manual post-build `AtomicReference#set` ordering trap.
@@ -29,11 +42,18 @@ prefixed (e.g. `java/v1.0.0`).
 - **Registry cleanup**: removed the deprecated no-arg
   `SessionExecutorRegistry()` constructor; use `strongOwned()` or
   `cleanerOwned()` explicitly.
-- **Dependencies**: libpetri floor raised `2.7.1` -> `2.10.4`
+- **Dependencies**: libpetri floor raised `2.7.1` -> `2.12.0`
   (consumer-visible: the `deferredExecutorRef` streaming wiring and
-  `PrecompiledNetExecutor` executor choice depend on it). Test-scoped
-  tooling bumped: JUnit `6.0.3` -> `6.1.0`, `opentelemetry-sdk-testing`
-  `1.51.0` -> `1.63.0`.
+  `PrecompiledNetExecutor` executor choice need `2.10.4`; `2.11`/`2.12`
+  add the opt-in EXTENDED ν-fragment and the conflict-priority state-class
+  graph, plus the P-semiflow colour-bound soundness fix, all with
+  unchanged defaults). ADK floor raised `1.4.0` -> `1.7.0` (pulls genai
+  `1.58.0`; the protobuf `4.33.5` floor is unchanged, ADK 1.7.0 pins the
+  same). Test-scoped tooling bumped: JUnit `6.0.3` -> `6.1.2`,
+  `opentelemetry-sdk-testing` `1.51.0` -> `1.64.0`. The ADK 1.4 -> 1.7 semantic
+  delta, the claims re-verified against 1.7.0, and the procedure for the next
+  bump are recorded in
+  [ADR 0002](docs/adr/0002-adk-version-compat.md).
 
 ## 1.2.0 - 2026-06-04
 
