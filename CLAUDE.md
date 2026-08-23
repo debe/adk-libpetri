@@ -137,6 +137,10 @@ bug classes the design is meant to eliminate.
    wrap each other via the delegate pattern. Never reach for
    `ExecutionContextProvider` for observability. That is only for
    action-side ambient-context propagation.
+   `PetriRunner.failureSignal()` is control flow, not observability: it
+   exists so a caller can fail the turn that was in flight without
+   killing the session's egress, and it emits `TransitionFailure` only.
+   Route anything you want to *record* through the `EventStore` chain.
 6. **Reask budgets bound autonomous LLM-and-tool loops
    structurally.** Use `Place<Void>` with a
    priority-and-inhibitor exhaustion-fallback transition (the
@@ -186,7 +190,47 @@ libpetri language port. Cross-language specs (if any) live in
 ## Versioning and release
 
 Each language has its own version, tagged with the language prefix
-(for example `java/v1.0.0`). Release scripts in `scripts/` follow
-libpetri's convention. The `release` profile in `java/pom.xml`
-(source/javadoc JARs, GPG signing, Central publishing) is present
-and driven by `scripts/release-java.sh`.
+(for example `java/v0.4.0`). Java is currently the only one.
+
+**Versioning is 0.x.** A minor may break API. The turn-based path is the
+settled part; `@Experimental` surfaces (SSE, BIDI/live) may change in any
+release. Do not describe anything as "stable for 1.x" anywhere in the
+repo: that phrasing predates the first real release and was removed.
+
+**No `-SNAPSHOT`.** Mirroring libpetri, `java/pom.xml` carries a bare
+release version on `main` between releases. There is no post-release bump
+step and no snapshot publishing.
+
+**Maven Central**: `org.libpetri:adk-libpetri`, published by
+`scripts/release-java.sh <version>`. The `release` profile in
+`java/pom.xml` (source/javadoc JARs, GPG signing, central-publishing with
+`autoPublish=true` and `waitUntil=published`) does the actual work; the
+script only drives it. Publishing is local, from a developer machine.
+There is deliberately no publish-on-tag workflow and no signing key in
+GitHub secrets, which is also how libpetri does it.
+
+Do **not** add `flatten-maven-plugin`. libpetri uses it, but
+`flattenMode=ossrh` drops `dependencyManagement`, and this project's
+protobuf floor is delivered through exactly that block on a non-direct
+dependency (see the README's protobuf section). Flattening would silently
+break it.
+
+The release ritual, in order:
+
+1. Commit the CHANGELOG dating: rename the unreleased heading to
+   `## Java <version> - YYYY-MM-DD`, and bump the version in the README
+   install blocks. The script reads the CHANGELOG and never writes it.
+2. `scripts/release-java.sh --dry-run <version>` to rehearse
+   (`mvn clean verify -Prelease`, which really signs), then
+   `git reset HEAD~1` to drop the version commit it leaves behind.
+3. `scripts/release-java.sh <version>`.
+
+It stamps the version, commits `release: java <version>`, runs
+`clean deploy -Prelease` blocking until Central reports published, tags
+`java/v<version>`, pushes commit and tag, and creates the GitHub release
+from the CHANGELOG section.
+
+Prerequisites, all checked by the script's preflight: clean tree, on
+`main` and not behind `origin/main`, a GPG secret key in the agent,
+`<server id="central">` in `~/.m2/settings.xml`, `gh` authenticated, a
+CHANGELOG section for the version, and a tag that does not yet exist.

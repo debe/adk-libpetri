@@ -26,15 +26,15 @@ Prerequisites:
   - gh CLI authenticated (for GitHub release)
 
 Arguments:
-  version       Release version (e.g. 1.3.1)
+  version       Release version (e.g. 0.4.0)
 
 Options:
   --dry-run     Build, test, and sign (mvn clean verify -Prelease); skip upload, tag, release
   -h, --help    Show this help
 
 Example:
-  $(basename "$0") 1.3.1
-  $(basename "$0") --dry-run 1.3.1
+  $(basename "$0") 0.4.0
+  $(basename "$0") --dry-run 0.4.0
 EOF
 }
 
@@ -54,15 +54,33 @@ if [[ -z "$VERSION" ]]; then
     exit 1
 fi
 
+# Reject anything versions:set would happily accept but Central would not.
+# Without this, `release-java.sh foo` stamps <version>foo</version>.
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+    echo "Error: '$VERSION' is not a semver release version (e.g. 0.4.0)" >&2
+    exit 1
+fi
+
+if [[ "$VERSION" == *-SNAPSHOT ]]; then
+    echo "Error: Maven Central rejects -SNAPSHOT versions." >&2
+    exit 1
+fi
+
 # --- Helpers ---
 info()  { echo "==> $*"; }
 error() { echo "Error: $*" >&2; exit 1; }
 
-# Extract the CHANGELOG.md section for the given version (between `## <v>` and
-# the next `## `). Prints empty string if the version has no section.
+# Extract the CHANGELOG.md section for the given version (between the heading
+# containing `<v>` and the next `## `). Prints empty string if there is none.
+#
+# Matches the version as a space-delimited token rather than by exact string
+# equality, so it finds it in a dated, language-prefixed heading such as
+# `## Java 0.4.0 - 2026-08-21`. Exact equality never matched a real heading and
+# silently sent every release to `gh --generate-notes`.
 changelog_section() {
     awk -v v="$1" '
-        $0 == "## " v { p = 1; next }
+        BEGIN { gsub(/\./, "\\.", v); re = " " v " " }
+        /^## / && $0 ~ re { p = 1; next }
         p && /^## / { exit }
         p
     ' "$PROJECT_ROOT/CHANGELOG.md"
@@ -95,6 +113,27 @@ fi
 if [[ "$DRY_RUN" == false ]]; then
     if git -C "$PROJECT_ROOT" rev-parse "java/v${VERSION}" >/dev/null 2>&1; then
         error "Tag java/v${VERSION} already exists."
+    fi
+fi
+
+# The release notes come from CHANGELOG.md, and this script never writes it:
+# dating the section is a separate commit made before running this. Catch a
+# missing section here rather than after the tag has already been pushed.
+if [[ -z "$(changelog_section "$VERSION" | tr -d '[:space:]')" ]]; then
+    error "No CHANGELOG.md section for ${VERSION}. Date its heading first (e.g. '## Java ${VERSION} - YYYY-MM-DD')."
+fi
+
+# `git push origin HEAD` below pushes whatever is checked out, so make sure
+# that is main and that it is not behind the remote.
+if [[ "$DRY_RUN" == false ]]; then
+    BRANCH="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD)"
+    if [[ "$BRANCH" != "main" ]]; then
+        error "On branch '${BRANCH}'; releases are cut from main."
+    fi
+    git -C "$PROJECT_ROOT" fetch --quiet origin main
+    BEHIND="$(git -C "$PROJECT_ROOT" rev-list --count HEAD..origin/main)"
+    if [[ "$BEHIND" != "0" ]]; then
+        error "main is ${BEHIND} commit(s) behind origin/main. Pull first."
     fi
 fi
 

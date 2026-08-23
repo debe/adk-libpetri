@@ -29,7 +29,26 @@ Java 25, Maven 3.9.x via wrapper.
 Z3 (`com.microsoft.z3`) comes transitively from libpetri's
 `org.sosy-lab:javasmt-solver-z3`. SMT-using tests are gated via
 `@EnabledIf("z3Available")` so the build passes without native Z3
-libs installed.
+libs installed. CI does not take that shortcut: it installs the JNI
+natives and sets `REQUIRE_Z3`, so `Z3NativeGateTest` fails the build
+rather than letting the verification suite skip silently.
+
+## Install
+
+```xml
+<dependency>
+    <groupId>org.libpetri</groupId>
+    <artifactId>adk-libpetri</artifactId>
+    <version>0.4.0</version>
+</dependency>
+```
+
+```groovy
+implementation 'org.libpetri:adk-libpetri:0.4.0'
+```
+
+0.x: a minor may break API. The turn-based path is the settled part; the
+SSE and BIDI surfaces below are `@Experimental`.
 
 ## Quickstart: hello world
 
@@ -88,6 +107,10 @@ runner.runAsync(session.userId(), session.id(),
 
 ## Streaming (SSE)
 
+> **Beta.** `LlmStreamingStepSubnet` and `StreamingLlmAgentSubnet` are
+> `@Experimental`: they may change incompatibly within a 0.x minor.
+
+
 Use `StreamingLlmAgentSubnet` when the ADK turn should expose token
 partials. Declare `LlmStreamingStepSubnet.Places.CHUNK` as an env place,
 pass the same executor reference to the subnet config and
@@ -124,6 +147,11 @@ runner.runAsync(session.userId(), session.id(), userContent,
 ```
 
 ## Live (BIDI)
+
+> **Beta.** `BidiPetriAgent`, `LiveConnection` and `PetriAgent.ofLive`
+> are `@Experimental`: they may change incompatibly within a 0.x minor.
+> `bridge` already took one such break in 0.4.0 (see the CHANGELOG).
+
 
 Use `PetriAgent.ofLive(...)` when ADK `runLive` should pump a
 `LiveRequestQueue` into a genai-backed `LiveConnection` and merge raw live

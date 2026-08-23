@@ -1,6 +1,7 @@
 # adk-libpetri
 
 [![CI](https://github.com/debe/adk-libpetri/actions/workflows/ci.yml/badge.svg)](https://github.com/debe/adk-libpetri/actions/workflows/ci.yml)
+[![Maven Central](https://img.shields.io/maven-central/v/org.libpetri/adk-libpetri)](https://central.sonatype.com/artifact/org.libpetri/adk-libpetri)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 <p align="center">
@@ -21,8 +22,11 @@ the provider-neutral `BidiPetriAgent` bridge over `LiveConnection`.
 There is no fork of ADK and no fork of genai.
 
 Both shipped demo nets are Z3-proved deadlock-free on every
-`mvn verify`. The voice/BIDI demo additionally has its reachable state
-space confirmed finite by bounded state-class graph exploration.
+`mvn verify`, CI included: the workflow installs the Z3 JNI natives and a
+gate test fails the build if they stop loading, so the proofs cannot
+quietly turn into skips. The composed BIDI voice net additionally has its
+reachable state space confirmed finite by bounded state-class graph
+exploration.
 
 ## Project status
 
@@ -34,6 +38,30 @@ belongs, are still open questions this repo is exploring. Expect the
 boundary colour catalog, the stock subnet set, and the adapter shape to
 move as that scope is found. Releases are working snapshots of that
 exploration, not a frozen API.
+
+Versioning says the same thing: this is **0.x**, and a minor version may
+break API. Within that, the turn-based path (`PetriAgent.of`, the stock
+non-streaming subnets, `SessionExecutorRegistry`) is the settled part.
+The SSE-streaming and BIDI/live surfaces are marked `@Experimental` in
+source and move faster than the rest.
+
+## Install
+
+```xml
+<dependency>
+    <groupId>org.libpetri</groupId>
+    <artifactId>adk-libpetri</artifactId>
+    <version>0.4.0</version>
+</dependency>
+```
+
+```groovy
+implementation 'org.libpetri:adk-libpetri:0.4.0'
+```
+
+Java 25 or later. ADK and libpetri come transitively; read the protobuf
+floor note under [Consuming from a project](#consuming-from-a-project-protobuf-version-floor)
+before pinning protobuf yourself or using an enforced platform BOM.
 
 ## What the enhancement is
 
@@ -303,6 +331,15 @@ carry the design:
   (any number of typed env places); egress is deliberately narrow (no
   generic `observe(Place<T>)`), so the net keeps one auditable way in
   and one way out.
+
+  `PetriRunner.failureSignal()` is the one deliberate exception, and it
+  is control flow rather than observation: it carries transition
+  failures so a caller can end the unit of work that was in flight. It
+  emits `TransitionFailure` (the failing transition's name, whether the
+  action threw or blew its deadline, and its instance prefix when
+  composed), never net state, so it cannot become a back door onto the
+  marking. Observability stays on the `EventStore` chain, which sees
+  every failure whether or not anyone subscribes.
 - **Executors are caller-supplied.** `PetriRunner.Builder` requires an
   explicit `orchestratorExecutor`. The library carries no shared
   executor singleton; callers own lifecycle. libpetri invokes actions
@@ -641,6 +678,9 @@ discouraged.
    or debug-recording store wrap each other via the delegate pattern.
    Side effects live in transition actions; there is no second
    observability channel and no `observe(Place<T>)`.
+   `PetriRunner.failureSignal()` is not a counterexample: it carries
+   `TransitionFailure`s so a caller can end an in-flight unit of work,
+   and every failure it reports is already on the `EventStore` chain.
 6. **Autonomous loops are bounded structurally.** The reask-budget
    pattern (`Place<Void>` plus priority plus inhibitor fallback) bounds
    the LLM-and-tool loop in the topology, not with a counter in
@@ -664,9 +704,11 @@ Every `mvn verify` runs the following.
   `Session.state`. `endInvocationInhibitsAll` catches missing
   termination inhibitors. `transferDemuxHasUnknownFallback` catches
   dead-letter accumulation.
-- SMT property factories (`reaskBudgetIsBounded`, `eventOutBounded`,
-  `noFireAfterEndInvocation`, `atMostOneCommits`) proved on the
-  assembled nets via libpetri's `SmtVerifier`.
+- SMT property factories (`budgetPlaceBounded`, `eventOutBounded`,
+  `noFireAfterEndInvocation`) proved on the assembled nets via
+  libpetri's `SmtVerifier`. Anything already expressible as a libpetri
+  primitive stays one: mutual exclusion is `SmtProperty.mutualExclusion`
+  rather than a wrapper that only adds null checks.
 - Both demos Z3-proved deadlock-free via
   `SmtVerifier.forNet(net).property(deadlockFree()).verify()`.
 - The BIDI demo's reachable state space confirmed bounded by
@@ -699,9 +741,12 @@ cd java
 The Java suite includes unit, integration, demo, and verification tests.
 Z3 (`com.microsoft.z3`) is pulled transitively for the deadlock-free and
 bounded-state tests; those carry `@EnabledIf("z3Available")` so the build
-passes even without native Z3 libs installed. See
-[`java/README.md`](java/README.md) for composition patterns and the two
-end-to-end demos.
+passes even without native Z3 libs installed. That skip is a convenience
+for contributors, not for CI: the workflow installs the natives and sets
+`REQUIRE_Z3`, which turns `Z3NativeGateTest` into a hard failure if they
+are missing. Otherwise the verification suite could disappear and the
+badge would stay green. See [`java/README.md`](java/README.md) for
+composition patterns and the two end-to-end demos.
 
 ### Consuming from a project: protobuf version floor
 
@@ -737,7 +782,9 @@ watch-item: shipped at 33.5.0 but commonly managed to 32.x).
 
 Which ADK version each claim here was verified against, what changed
 between ADK releases, and how to re-check it on the next bump are recorded
-in [ADR 0002](docs/adr/0002-adk-version-compat.md).
+in the version-compatibility ADRs, most recently
+[ADR 0003](docs/adr/0003-libpetri-3-and-adk-1.8.md); the re-check procedure
+itself lives in [ADR 0002](docs/adr/0002-adk-version-compat.md).
 
 ## Relationship to libpetri
 

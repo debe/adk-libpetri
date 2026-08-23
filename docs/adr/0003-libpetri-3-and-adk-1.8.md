@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-21
-- **Scope:** Java `1.3.0-SNAPSHOT`. Bumps libpetri `2.12.0` -> `3.0.1` (a
+- **Scope:** Java `0.4.0`. Bumps libpetri `2.12.0` -> `3.0.1` (a
   major, spanning 2.13.0, 2.14.0, 3.0.0 and 3.0.1), google-adk `1.7.0` ->
   `1.8.0` (which folds in 1.7.1). Test-scoped: JUnit `6.1.2` -> `6.1.3`,
   `opentelemetry-sdk-testing` `1.64.0` -> `1.65.0`, surefire `3.5.5` ->
@@ -45,7 +45,7 @@ diff is indentation inside a license comment.
 
 Critically, `Runner.runLive` still ends in
 `.concatMapSingle(event -> this.sessionService.appendEvent(session, event))`.
-The behaviour change that forced 1.3.0's BIDI rebuild is still there, so that
+The behaviour change that forced 0.4.0's BIDI rebuild is still there, so that
 work stands.
 
 ### Both bypass rationales re-verified (step 5)

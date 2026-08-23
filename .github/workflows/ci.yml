@@ -21,9 +21,53 @@ jobs:
       run:
         working-directory: java
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
         with:
           java-version: '25-ea'
           distribution: 'temurin'
+          cache: maven
+
+      # The javasmt-solver-z3 artifact ships only the Java classes; the natives
+      # they call (libz3java.so, libz3.so) are not a Maven dependency. Without
+      # them every @EnabledIf("z3Available") suite skips SILENTLY, because a
+      # JUnit skip is not a failure: the build stays green while the two demo
+      # nets' deadlock-freedom proofs never run. Z3NativeGateTest fails the
+      # build if the natives still do not load, so this cannot regress quietly.
+      #
+      # The version is resolved from the dependency tree rather than pinned
+      # here: Z3 arrives transitively through libpetri, and this repo
+      # deliberately does not pin above libpetri's own choice.
+      - name: Install z3 JNI natives
+        run: |
+          set -euo pipefail
+          Z3_VERSION="$(./mvnw -q dependency:tree \
+              -Dincludes=org.sosy-lab:javasmt-solver-z3 2>/dev/null \
+            | sed -n 's|.*javasmt-solver-z3:jar:\([0-9.]*\):.*|\1|p' | head -1)"
+          if [ -z "$Z3_VERSION" ]; then
+            echo "Could not resolve javasmt-solver-z3 version from the dependency tree." >&2
+            exit 1
+          fi
+          echo "Resolved Z3 $Z3_VERSION"
+          ASSET_URL="$(curl -fsSL \
+            "https://api.github.com/repos/Z3Prover/z3/releases/tags/z3-${Z3_VERSION}" \
+            | sed -n 's|.*"browser_download_url": *"\([^"]*x64-glibc[^"]*\.zip\)".*|\1|p' | head -1)"
+          if [ -z "$ASSET_URL" ]; then
+            echo "No x64-glibc asset on the z3-${Z3_VERSION} release." >&2
+            exit 1
+          fi
+          curl -fsSL -o /tmp/z3.zip "$ASSET_URL"
+          unzip -q -o /tmp/z3.zip -d /tmp/z3
+          NATIVE_DIR="$(dirname "$(find /tmp/z3 -name libz3java.so | head -1)")"
+          if [ -z "$NATIVE_DIR" ] || [ "$NATIVE_DIR" = "." ]; then
+            echo "libz3java.so not found in the downloaded archive." >&2
+            exit 1
+          fi
+          echo "LD_LIBRARY_PATH=${NATIVE_DIR}" >> "$GITHUB_ENV"
+
+      # REQUIRE_Z3 turns Z3NativeGateTest from a no-op into a hard gate: if the
+      # step above silently stops working, the build fails here instead of
+      # going green with the verification suite skipped.
       - run: ./mvnw verify
+        env:
+          REQUIRE_Z3: '1'
