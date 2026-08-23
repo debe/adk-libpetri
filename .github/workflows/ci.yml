@@ -39,17 +39,27 @@ jobs:
       # here: Z3 arrives transitively through libpetri, and this repo
       # deliberately does not pin above libpetri's own choice.
       - name: Install z3 JNI natives
+        # The release lookup is authenticated: this step is a hard build gate,
+        # and unauthenticated api.github.com calls share a rate limit across
+        # the runner IP pool, so a 403 here would redden main for no reason.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          Z3_VERSION="$(./mvnw -q dependency:tree \
-              -Dincludes=org.sosy-lab:javasmt-solver-z3 2>/dev/null \
-            | sed -n 's|.*javasmt-solver-z3:jar:\([0-9.]*\):.*|\1|p' | head -1)"
+          # -DoutputFile, not stdout: dependency:tree logs the tree at INFO,
+          # which -q discards, and dropping -q would bury it in build noise.
+          ./mvnw -q dependency:tree \
+            -Dincludes=org.sosy-lab:javasmt-solver-z3 \
+            -DoutputFile=/tmp/z3-dep-tree.txt
+          Z3_VERSION="$(sed -n \
+            's|.*javasmt-solver-z3:jar:\([0-9.]*\):.*|\1|p' \
+            /tmp/z3-dep-tree.txt | head -1)"
           if [ -z "$Z3_VERSION" ]; then
             echo "Could not resolve javasmt-solver-z3 version from the dependency tree." >&2
             exit 1
           fi
           echo "Resolved Z3 $Z3_VERSION"
-          ASSET_URL="$(curl -fsSL \
+          ASSET_URL="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
             "https://api.github.com/repos/Z3Prover/z3/releases/tags/z3-${Z3_VERSION}" \
             | sed -n 's|.*"browser_download_url": *"\([^"]*x64-glibc[^"]*\.zip\)".*|\1|p' | head -1)"
           if [ -z "$ASSET_URL" ]; then
