@@ -151,7 +151,6 @@ class PetriRunnerTest {
         var net = buildSignalNet();
         try (var runner = PetriRunner.builder(net)
                 .environmentPlace(SIGNAL)
-                .actionExecutor(EXECUTOR)
                 .orchestratorExecutor(EXECUTOR)
                 .start()) {
             TestSubscriber<Event> sub = runner.adkEvents().take(2).test();
@@ -219,9 +218,12 @@ class PetriRunnerTest {
         };
         Logger jul = Logger.getLogger("org.libpetri.adk.runner");
         jul.addHandler(capture);
+        // Capture it without also printing two stack traces into the build log:
+        // the assertions below are the proof that it was reported.
+        boolean useParents = jul.getUseParentHandlers();
+        jul.setUseParentHandlers(false);
         try (var runner = PetriRunner.builder(net)
                 .environmentPlace(AdkColours.USER_IN)
-                .actionExecutor(EXECUTOR)
                 .orchestratorExecutor(EXECUTOR)
                 .start()) {
 
@@ -244,6 +246,7 @@ class PetriRunnerTest {
                     .get(2, TimeUnit.SECONDS)).isTrue();
         } finally {
             jul.removeHandler(capture);
+            jul.setUseParentHandlers(useParents);
         }
     }
 
@@ -288,7 +291,6 @@ class PetriRunnerTest {
             assertThat(done.await(2, TimeUnit.SECONDS)).isTrue();
 
             assertThat(seen.get()).isEqualTo("probe-ORCHESTRATOR-pool");
-            assertThat(seen.get()).isNotEqualTo("probe-ACTION-pool");
         } finally {
             actionPool.shutdownNow();
             orchestratorPool.shutdownNow();
@@ -315,7 +317,6 @@ class PetriRunnerTest {
     private static PetriRunner newRunner(PetriNet net) {
         return PetriRunner.builder(net)
                 .environmentPlace(AdkColours.USER_IN)
-                .actionExecutor(EXECUTOR)
                 .orchestratorExecutor(EXECUTOR)
                 .start();
     }

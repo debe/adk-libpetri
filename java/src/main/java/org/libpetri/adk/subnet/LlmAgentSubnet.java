@@ -3,6 +3,7 @@ package org.libpetri.adk.subnet;
 import com.google.adk.events.Event;
 import com.google.adk.models.BaseLlm;
 import com.google.adk.tools.BaseTool;
+import com.google.adk.tools.ToolContext;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
 import java.util.ArrayList;
@@ -108,7 +109,9 @@ public final class LlmAgentSubnet {
             int reaskBudget,
             Content fallbackContent,
             Supplier<String> invocationIdSupplier,
-            ExecutorService dispatchExecutor) {
+            ExecutorService dispatchExecutor,
+            LlmStepSubnet.Callbacks callbacks,
+            Supplier<ToolContext> toolContextSupplier) {
 
         public Config {
             Objects.requireNonNull(name, "name");
@@ -122,6 +125,8 @@ public final class LlmAgentSubnet {
             Objects.requireNonNull(fallbackContent, "fallbackContent");
             Objects.requireNonNull(invocationIdSupplier, "invocationIdSupplier");
             Objects.requireNonNull(dispatchExecutor, "dispatchExecutor");
+            callbacks = callbacks == null ? LlmStepSubnet.Callbacks.none() : callbacks;
+            toolContextSupplier = toolContextSupplier == null ? () -> null : toolContextSupplier;
         }
 
         public static Builder builder(String name, String model) {
@@ -138,6 +143,8 @@ public final class LlmAgentSubnet {
                     "I couldn't complete all the requested steps. Please rephrase your question."));
             private Supplier<String> invocationIdSupplier = () -> UUID.randomUUID().toString();
             private ExecutorService dispatchExecutor;
+            private LlmStepSubnet.Callbacks callbacks = LlmStepSubnet.Callbacks.none();
+            private Supplier<ToolContext> toolContextSupplier = () -> null;
 
             private Builder(String name, String model) {
                 this.name = name;
@@ -151,10 +158,26 @@ public final class LlmAgentSubnet {
             public Builder invocationIdSupplier(Supplier<String> s){ this.invocationIdSupplier = s; return this; }
             public Builder dispatchExecutor(ExecutorService e)     { this.dispatchExecutor = e; return this; }
 
+            /**
+             * Model-call callbacks, forwarded to the composed
+             * {@link LlmStepSubnet}. Without this the composite could not reach
+             * them at all, so an LLM error inside a composed agent was
+             * unrecoverable even though the step subnet supports handling it.
+             */
+            public Builder callbacks(LlmStepSubnet.Callbacks c)    { this.callbacks = c; return this; }
+
+            /**
+             * Supplies the {@link ToolContext} handed to each tool. Defaults to
+             * {@code () -> null}, which was previously hard-coded with no way to
+             * override it, so tools needing state, artifacts or auth could not
+             * be used through this composite.
+             */
+            public Builder toolContextSupplier(Supplier<ToolContext> s) { this.toolContextSupplier = s; return this; }
+
             public Config build() {
                 return new Config(name, model, Optional.ofNullable(systemInstruction),
                         tools, reaskBudget, fallbackContent, invocationIdSupplier,
-                        dispatchExecutor);
+                        dispatchExecutor, callbacks, toolContextSupplier);
             }
         }
     }
@@ -203,10 +226,10 @@ public final class LlmAgentSubnet {
         Objects.requireNonNull(config, "config");
 
         var all = new LinkedHashMap<String, TransitionAction>();
-        all.putAll(LlmStepSubnet.actionBindings(baseLlm));
+        all.putAll(LlmStepSubnet.actionBindings(baseLlm, config.callbacks()));
         all.putAll(RouterSubnet.actionBindings(routerConfig(config)));
         all.putAll(ToolDispatchSubnet.actionBindings(
-                config.tools(), () -> null, config.dispatchExecutor()));
+                config.tools(), config.toolContextSupplier(), config.dispatchExecutor()));
         all.put(Transitions.BUILD_PROMPT,              buildPromptAction(config));
         all.put(Transitions.RE_ASK,                    reAskAction(config));
         all.put(Transitions.RE_ASK_EXHAUSTED_FALLBACK, reAskExhaustedFallbackAction(config));

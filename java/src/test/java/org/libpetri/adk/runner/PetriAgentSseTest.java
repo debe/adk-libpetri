@@ -119,7 +119,6 @@ class PetriAgentSseTest {
                             .environmentPlace(AdkColours.USER_IN)
                             .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
                             .deferredExecutorRef(execRef)
-                            .actionExecutor(EXECUTOR)
                             .orchestratorExecutor(EXECUTOR)
                             .start(),
                     ctx -> sessionOwners.computeIfAbsent(

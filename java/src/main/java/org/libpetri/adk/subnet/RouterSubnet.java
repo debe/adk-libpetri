@@ -7,6 +7,7 @@ import com.google.genai.types.Part;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Optional;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -106,10 +107,10 @@ public final class RouterSubnet {
         return ctx -> {
             LlmResponse response = ctx.input(AdkColours.LLM_RESPONSE);
             List<FunctionCall> functionCalls = extractFunctionCalls(response);
-            FunctionCall transfer = findTransferCall(functionCalls);
+            var transfer = findTransferCall(functionCalls);
 
-            if (transfer != null) {
-                String agentName = transferAgentName(transfer);
+            if (transfer.isPresent()) {
+                String agentName = transferAgentName(transfer.get());
                 ctx.output(AdkColours.TRANSFER, new AdkColours.TransferTarget(agentName));
             } else if (!functionCalls.isEmpty()) {
                 ctx.output(AdkColours.TOOL_CALLS, new AdkColours.ToolCalls(functionCalls));
@@ -137,14 +138,14 @@ public final class RouterSubnet {
         return calls;
     }
 
-    /** @return the transfer FunctionCall if present, or {@code null} if none. */
-    private static FunctionCall findTransferCall(List<FunctionCall> calls) {
+    /** The transfer call, if the model asked for one. */
+    private static Optional<FunctionCall> findTransferCall(List<FunctionCall> calls) {
         for (var c : calls) {
             if (TRANSFER_TO_AGENT_FN.equals(c.name().orElse(null))) {
-                return c;
+                return Optional.of(c);
             }
         }
-        return null;
+        return Optional.empty();
     }
 
     private static String transferAgentName(FunctionCall transferCall) {

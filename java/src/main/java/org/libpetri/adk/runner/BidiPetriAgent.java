@@ -170,8 +170,18 @@ public final class BidiPetriAgent {
                 .doOnNext(msg -> onServerMessage.accept(msg, runner))
                 .ignoreElements();
 
+        // Close the transport on ANY terminal outcome, cancellation included.
+        // connection.close() is otherwise only reachable from the inbound side
+        // (an explicit shouldClose, a send failure, an inbound error), so a
+        // consumer that simply cancels -- a user hanging up, ADK abandoning the
+        // turn -- disposed the input pump and left the websocket open with no
+        // remaining handle to close it. doFinally covers complete, error and
+        // cancel, and close() is idempotent on every LiveConnection we ship.
         return runner.adkEvents()
                 .mergeWith(serverFrames)
-                .doFinally(inputPump::dispose);
+                .doFinally(() -> {
+                    inputPump.dispose();
+                    connection.close();
+                });
     }
 }

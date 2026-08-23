@@ -16,9 +16,11 @@ import java.util.Objects;
 /**
  * Example {@link BaseLlm} that calls the genai SDK's <b>synchronous</b> API so
  * that the entire model call — HTTP I/O, JSON parsing, response mapping — runs
- * on the <i>subscribing</i> thread. In adk-libpetri that is the Petri
- * transition action's thread (a virtual thread, by the
- * {@code PetriRunner.Builder.actionExecutor} convention).
+ * on the <i>subscribing</i> thread. In adk-libpetri that is the thread
+ * running the orchestrator loop, taken from
+ * {@code PetriRunner.Builder.orchestratorExecutor}: libpetri invokes actions
+ * inline rather than dispatching them, which is why that pool should be a
+ * virtual-thread executor when actions block.
  *
  * <h2>Why this exists</h2>
  *
@@ -49,7 +51,8 @@ import java.util.Objects;
  * Client client = Client.builder().apiKey(key).build();   // build once, share, close on shutdown
  * BaseLlm llm  = new SyncGeminiLlm("gemini-2.0-flash", client);
  * net.bindActions(LlmStepSubnet.actionBindings(llm));
- * // run the net with a virtual-thread actionExecutor so the blocking call is cheap
+ * // run the net on a virtual-thread orchestratorExecutor: actions run inline
+ * // on it, so blocking the call is cheap
  * }</pre>
  *
  * <p>This is an exemplar (stock subnets are templates; you own the call

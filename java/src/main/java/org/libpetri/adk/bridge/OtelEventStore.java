@@ -1,5 +1,6 @@
 package org.libpetri.adk.bridge;
 
+import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
@@ -115,19 +116,22 @@ public final class OtelEventStore implements EventStore {
     public void append(NetEvent event) {
         switch (event) {
             case NetEvent.TransitionCompleted c ->
-                    emitSpan(c.transitionName(), c.timestamp().minus(c.duration()), c.timestamp(),
-                            StatusCode.OK, null, null, null);
+                    emitSpan(new SpanRecord(
+                            c.transitionName(), c.timestamp().minus(c.duration()), c.timestamp(),
+                            StatusCode.OK, null, null, null));
             case NetEvent.TransitionFailed f ->
-                    emitSpan(f.transitionName(), f.timestamp(), f.timestamp(),
-                            StatusCode.ERROR, f.errorMessage(), f.exceptionType(), null);
+                    emitSpan(new SpanRecord(
+                            f.transitionName(), f.timestamp(), f.timestamp(),
+                            StatusCode.ERROR, f.errorMessage(), f.exceptionType(), null));
             case NetEvent.TransitionTimedOut t ->
-                    emitSpan(t.transitionName(),
+                    emitSpan(new SpanRecord(
+                            t.transitionName(),
                             t.timestamp().minus(t.actualDuration()),
                             t.timestamp(),
                             StatusCode.ERROR,
                             "deadline exceeded",
                             NetEvent.TransitionTimedOut.class.getCanonicalName(),
-                            t.deadline().toString());
+                            t.deadline().toString()));
             default -> { /* not a transition lifecycle event — no span */ }
         }
         delegate.append(event);
@@ -143,38 +147,59 @@ public final class OtelEventStore implements EventStore {
         return true;
     }
 
-    private void emitSpan(String name,
-                          Instant start,
-                          Instant end,
-                          StatusCode status,
-                          String errorMessage,
-                          String exceptionType,
-                          String deadline) {
-        var builder = tracer.spanBuilder(name)
+    /**
+     * One span's worth of data, named rather than positional.
+     *
+     * <p>The previous signature took seven arguments, four of them adjacent
+     * {@code String}s ({@code name}, {@code errorMessage}, {@code exceptionType},
+     * {@code deadline}). Any two could be transposed at a call site and the
+     * result still compiled, producing telemetry that is wrong in a way nothing
+     * would catch. Naming them makes that mistake impossible to write.
+     */
+    private record SpanRecord(
+            String name,
+            Instant start,
+            Instant end,
+            StatusCode status,
+            String errorMessage,
+            String exceptionType,
+            String deadline) {}
+
+    private void emitSpan(SpanRecord record) {
+        Span span = tracer.spanBuilder(record.name())
                 .setParent(invocationContext.get())
-                .setStartTimestamp(start.getEpochSecond() * 1_000_000_000L + start.getNano(),
-                        TimeUnit.NANOSECONDS);
-        Span span = builder.startSpan();
+                .setStartTimestamp(toEpochNanos(record.start()), TimeUnit.NANOSECONDS)
+                .startSpan();
         try {
-            if (status != null) {
-                if (status == StatusCode.ERROR && errorMessage != null) {
-                    span.setStatus(StatusCode.ERROR, errorMessage);
+            if (record.status() != null) {
+                if (record.status() == StatusCode.ERROR && record.errorMessage() != null) {
+                    span.setStatus(StatusCode.ERROR, record.errorMessage());
                 } else {
-                    span.setStatus(status);
+                    span.setStatus(record.status());
                 }
             }
-            if (exceptionType != null) {
-                span.setAttribute("exception.type", exceptionType);
+            if (record.exceptionType() != null) {
+                // OpenTelemetry models a failure as an "exception" span EVENT
+                // carrying the exception.* attributes, not as attributes on the
+                // span itself. Setting them directly produced attribute names a
+                // backend recognises in a position where it does not look for
+                // them, so failures did not render as exceptions in any UI.
+                span.addEvent("exception", Attributes.builder()
+                        .put("exception.type", record.exceptionType())
+                        .put("exception.message",
+                                record.errorMessage() == null ? "" : record.errorMessage())
+                        .build(),
+                        toEpochNanos(record.end()), TimeUnit.NANOSECONDS);
             }
-            if (errorMessage != null) {
-                span.setAttribute("exception.message", errorMessage);
-            }
-            if (deadline != null) {
-                span.setAttribute("libpetri.deadline", deadline);
+            if (record.deadline() != null) {
+                span.setAttribute("libpetri.deadline", record.deadline());
             }
         } finally {
-            span.end(end.getEpochSecond() * 1_000_000_000L + end.getNano(),
-                    TimeUnit.NANOSECONDS);
+            span.end(toEpochNanos(record.end()), TimeUnit.NANOSECONDS);
         }
+    }
+
+    private static long toEpochNanos(Instant t) {
+        return t.getEpochSecond() * 1_000_000_000L + t.getNano();
     }
 }

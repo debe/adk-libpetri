@@ -152,22 +152,27 @@ public final class AdkNetInvariants {
     // ============================================================
 
     /**
-     * Property: {@code REASK_BUDGET} (or any budget-style place) never
-     * exceeds {@code maxBudget} tokens. Combined with the reset-arc on
-     * the seed transition, this proves the budget place is exactly
-     * {@code [0, maxBudget]}-bounded across all reachable markings.
+     * Property: {@code budgetPlace} never exceeds {@code maxTokens} tokens.
+     * Combined with the reset arc on the seed transition, this proves the
+     * place is exactly {@code [0, maxTokens]}-bounded across all reachable
+     * markings.
+     *
+     * <p>Named for the shape, not for one caller. The reask budget is the
+     * motivating case, but every use in this repo passes a chunk budget, and
+     * the property is the same either way.
      */
-    public static SmtProperty reaskBudgetIsBounded(Place<?> reaskBudget, int maxBudget) {
-        Objects.requireNonNull(reaskBudget, "reaskBudget");
-        if (maxBudget < 1) {
-            throw new IllegalArgumentException("maxBudget must be >= 1, got: " + maxBudget);
+    public static SmtProperty budgetPlaceBounded(Place<?> budgetPlace, int maxTokens) {
+        Objects.requireNonNull(budgetPlace, "budgetPlace");
+        if (maxTokens < 1) {
+            throw new IllegalArgumentException("maxTokens must be >= 1, got: " + maxTokens);
         }
-        return SmtProperty.placeBound(reaskBudget, maxBudget);
+        return SmtProperty.placeBound(budgetPlace, maxTokens);
     }
 
     /**
-     * Property: {@link AdkColours#EVENT_OUT} (or any output place)
-     * never accumulates more than {@code maxBuffered} tokens at once.
+     * Property: {@link AdkColours#EVENT_OUT} never accumulates more than
+     * {@code maxBuffered} tokens at once. For any other place, use
+     * {@link #budgetPlaceBounded(Place, int)}, which takes one.
      * Useful for proving the agent's output queue is bounded — i.e.,
      * the net's output rate doesn't outpace the consumer.
      */
@@ -194,24 +199,6 @@ public final class AdkNetInvariants {
         return SmtProperty.mutualExclusion(AdkColours.END_INVOCATION, restrictedPlace);
     }
 
-    /**
-     * Property: the transitions whose post-set includes {@code postsetA}
-     * and {@code postsetB} respectively never both contribute in the
-     * same reachable trace.
-     *
-     * <p>This is the structural form of "at-most-one commit fires":
-     * pick {@code postsetA} and {@code postsetB} as the marker places
-     * that distinct commit transitions produce to (typically two
-     * {@code Place<Void>} flags), and the property holds iff no
-     * reachable marking has both flags populated. Useful for the
-     * optimistic-commit-with-fallback pattern, where a cheap-path
-     * commit and a slow-path commit must be mutually exclusive.
-     */
-    public static SmtProperty atMostOneCommits(Place<?> postsetA, Place<?> postsetB) {
-        Objects.requireNonNull(postsetA, "postsetA");
-        Objects.requireNonNull(postsetB, "postsetB");
-        return SmtProperty.mutualExclusion(postsetA, postsetB);
-    }
 
     // ============================================================
     //  Helpers

@@ -3,6 +3,7 @@ package org.libpetri.adk.subnet;
 import com.google.adk.agents.RunConfig;
 import com.google.adk.models.BaseLlm;
 import com.google.adk.tools.BaseTool;
+import com.google.adk.tools.ToolContext;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
 import java.util.LinkedHashMap;
@@ -56,7 +57,9 @@ public final class StreamingLlmAgentSubnet {
             Supplier<String> invocationIdSupplier,
             ExecutorService dispatchExecutor,
             int chunkBudget,
-            AtomicReference<PetriNetExecutor> executorRef) {
+            AtomicReference<PetriNetExecutor> executorRef,
+            LlmStepSubnet.Callbacks callbacks,
+            Supplier<ToolContext> toolContextSupplier) {
 
         public Config {
             Objects.requireNonNull(name, "name");
@@ -74,6 +77,8 @@ public final class StreamingLlmAgentSubnet {
                 throw new IllegalArgumentException("chunkBudget must be >= 1, got: " + chunkBudget);
             }
             Objects.requireNonNull(executorRef, "executorRef");
+            callbacks = callbacks == null ? LlmStepSubnet.Callbacks.none() : callbacks;
+            toolContextSupplier = toolContextSupplier == null ? () -> null : toolContextSupplier;
         }
 
         public static Builder builder(String name, String model) {
@@ -90,6 +95,8 @@ public final class StreamingLlmAgentSubnet {
                     "I couldn't complete all the requested steps. Please rephrase your question."));
             private Supplier<String> invocationIdSupplier = () -> UUID.randomUUID().toString();
             private ExecutorService dispatchExecutor;
+            private LlmStepSubnet.Callbacks callbacks = LlmStepSubnet.Callbacks.none();
+            private Supplier<ToolContext> toolContextSupplier = () -> null;
             private int chunkBudget = 4;
             private AtomicReference<PetriNetExecutor> executorRef;
 
@@ -104,6 +111,12 @@ public final class StreamingLlmAgentSubnet {
             public Builder fallbackContent(Content c)              { this.fallbackContent = c; return this; }
             public Builder invocationIdSupplier(Supplier<String> s){ this.invocationIdSupplier = s; return this; }
             public Builder dispatchExecutor(ExecutorService e)     { this.dispatchExecutor = e; return this; }
+
+            /** Model-call callbacks, forwarded to the composed {@link LlmStepSubnet}. */
+            public Builder callbacks(LlmStepSubnet.Callbacks c)    { this.callbacks = c; return this; }
+
+            /** Supplies the {@link ToolContext} handed to each tool; defaults to {@code () -> null}. */
+            public Builder toolContextSupplier(Supplier<ToolContext> s) { this.toolContextSupplier = s; return this; }
             public Builder chunkBudget(int n)                      { this.chunkBudget = n; return this; }
             public Builder executorRef(AtomicReference<PetriNetExecutor> ref) { this.executorRef = ref; return this; }
 
@@ -111,7 +124,8 @@ public final class StreamingLlmAgentSubnet {
                 return new Config(name, model, Optional.ofNullable(systemInstruction),
                         tools, reaskBudget, fallbackContent, invocationIdSupplier,
                         dispatchExecutor, chunkBudget,
-                        Objects.requireNonNull(executorRef, "executorRef must be set before build"));
+                        Objects.requireNonNull(executorRef, "executorRef must be set before build"),
+                        callbacks, toolContextSupplier);
             }
         }
     }
@@ -132,7 +146,7 @@ public final class StreamingLlmAgentSubnet {
         all.putAll(LlmStreamingStepSubnet.actionBindings(baseLlm, streamingCfg(config)));
         all.putAll(RouterSubnet.actionBindings(LlmAgentSubnet.routerConfig(agentConfig)));
         all.putAll(ToolDispatchSubnet.actionBindings(
-                config.tools(), () -> null, config.dispatchExecutor()));
+                config.tools(), config.toolContextSupplier(), config.dispatchExecutor()));
         all.put(LlmAgentSubnet.Transitions.BUILD_PROMPT,
                 LlmAgentSubnet.buildPromptAction(agentConfig));
         all.put(LlmAgentSubnet.Transitions.RE_ASK,
@@ -160,7 +174,9 @@ public final class StreamingLlmAgentSubnet {
                 config.reaskBudget(),
                 config.fallbackContent(),
                 config.invocationIdSupplier(),
-                config.dispatchExecutor());
+                config.dispatchExecutor(),
+                config.callbacks(),
+                config.toolContextSupplier());
     }
 
     private StreamingLlmAgentSubnet() {}

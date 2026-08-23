@@ -121,6 +121,12 @@ class LiveApiRecoverySubnetTest {
         var scg = StateClassGraph.build(net, initial, 256);
 
         assertThat(scg.size()).isGreaterThan(0);
+        // isComplete(), not size() <= 256. The cap is build()'s own argument, so
+        // asserting it back is unfalsifiable: an UNBOUNDED net truncates at
+        // exactly 256 and the assertion still passes, while the README claims
+        // this confirms a finite reachable state space. isComplete() is false
+        // precisely when exploration was truncated, so it is the real predicate.
+        assertThat(scg.isComplete()).isTrue();
         assertThat(scg.size()).isAtMost(256);
     }
 
@@ -128,8 +134,12 @@ class LiveApiRecoverySubnetTest {
     void model_active_appears_between_nudge_and_reconnect_stops_recovery() throws Exception {
         var fixture = drive(FAST, executor -> {
             executor.inject(env(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED), (Void) null);
-            // Wait for Nudge to fire (delays past 80ms)…
-            sleep(Duration.ofMillis(160));
+            // Wait for the nudge to actually fire, rather than sleeping 160ms and
+            // betting the MODEL_ACTIVE inject wins the race against the reconnect
+            // deadline that lands at roughly the same moment. On a loaded box that
+            // bet loses, reconnect fires first, and the assertion below goes red
+            // for reasons that have nothing to do with the code.
+            awaitMarked(executor, LiveApiRecoverySubnet.Places.NUDGE_NEEDED, 5_000);
             // Now the model finally responds — caller signals MODEL_ACTIVE.
             executor.inject(env(LiveApiRecoverySubnet.Places.MODEL_ACTIVE), (Void) null);
             // Recover would have fired after another 80ms; the inhibitor blocks it.
@@ -225,7 +235,28 @@ class LiveApiRecoverySubnetTest {
     }
 
     private static void sleep(Duration d) {
-        try { Thread.sleep(d.toMillis()); } catch (InterruptedException ignored) {}
+        try {
+            Thread.sleep(d.toMillis());
+        } catch (InterruptedException e) {
+            // Do not swallow. Every test in this class positions events relative
+            // to real deadlines, so a shortened wait does not fail loudly, it
+            // silently runs a different scenario and asserts the old one.
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted while waiting " + d, e);
+        }
+    }
+
+    /** Polls the live marking until {@code place} holds a token, or fails. */
+    @SuppressWarnings("BusyWait")
+    private static void awaitMarked(BitmapNetExecutor executor, Place<?> place, long timeoutMillis)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (System.currentTimeMillis() < deadline) {
+            if (!executor.marking().peekTokens(place).isEmpty()) return;
+            Thread.sleep(5);
+        }
+        throw new AssertionError(
+                "place '" + place.name() + "' was not marked within " + timeoutMillis + "ms");
     }
 
     @FunctionalInterface

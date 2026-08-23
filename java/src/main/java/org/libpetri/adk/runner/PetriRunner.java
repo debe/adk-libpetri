@@ -184,6 +184,31 @@ public final class PetriRunner implements AutoCloseable {
     }
 
     /**
+     * Hot {@link Flowable} of transition failures on this net, one
+     * {@code onNext} each, terminating only when the net does.
+     *
+     * <p>A failure does <b>not</b> terminate {@link #adkEvents()}. libpetri
+     * contains an action failure to its own transition and keeps the
+     * orchestrator running (EXEC-031); this runner keeps its egress alive to
+     * match, so one failed tool call cannot end a session that is still
+     * perfectly able to serve the next turn.
+     *
+     * <p>The cost is that a caller waiting for a turn's terminal event has to
+     * decide for itself when a failure means that turn is over: merge this for
+     * the life of the turn and drop it afterwards. {@code PetriAgent} does
+     * exactly that. Without it, a transition that was going to produce the
+     * turn's only {@code EVENT_OUT} would fail and the caller would wait
+     * forever.
+     *
+     * <p>For observability rather than control flow, use the
+     * {@link EventStore} decorator chain, which sees every failure whether or
+     * not anyone subscribes here.
+     */
+    public Flowable<Throwable> failureSignal() {
+        return bridge.failureSignal();
+    }
+
+    /**
      * Fire-and-forget drain — stops accepting new injects and lets
      * in-flight actions finish on the orchestrator thread. Returns
      * immediately; the orchestrator terminates and
@@ -255,21 +280,6 @@ public final class PetriRunner implements AutoCloseable {
     }
 
     /**
-     * Strategy for constructing a {@link PetriNetExecutor}. Hides the
-     * minor builder differences between {@link BitmapNetExecutor} and
-     * {@link PrecompiledNetExecutor}. Library ships
-     * {@link #bitmap()} and {@link #precompiled()}; callers can supply
-     * their own (e.g. a debug-wrapped executor decorator).
-     *
-     * <p>The {@code contextProvider} argument carries the ambient
-     * {@link ExecutionContextProvider} configured on the builder, or
-     * {@link ExecutionContextProvider#NOOP} when none was set. Custom
-     * factories MUST propagate it to the underlying executor builder
-     * (e.g. {@code BitmapNetExecutor.builder(...).executionContextProvider(contextProvider)})
-     * or transition actions lose ambient-context propagation (tracing,
-     * baggage, etc.).
-     */
-    /**
      * Action-failure policy installed by the built-in {@link ExecutorFactory}
      * implementations.
      *
@@ -288,6 +298,9 @@ public final class PetriRunner implements AutoCloseable {
      * <p>Callers wanting different handling supply their own
      * {@link ExecutorFactory} (the documented extension point) rather than
      * a setter here, which would have to widen the factory's signature.
+     * A custom factory that wants the standard behaviour should install
+     * {@link ExecutorFactory#loudActionFailure()} rather than omit a handler,
+     * since omitting one restores the silent hole described above.
      */
     private static final ActionFailureHandler LOUD_ACTION_FAILURE = (transition, cause) ->
             System.getLogger("org.libpetri.adk.runner").log(
@@ -296,14 +309,51 @@ public final class PetriRunner implements AutoCloseable {
                             + "are lost (libpetri EXEC-031). The orchestrator continues.",
                     cause);
 
+    /**
+     * Strategy for constructing a {@link PetriNetExecutor}. Hides the minor
+     * builder differences between {@link BitmapNetExecutor} and
+     * {@link PrecompiledNetExecutor}. The library ships {@link #bitmap()} and
+     * {@link #precompiled()}; callers can supply their own, for example a
+     * debug-wrapped executor decorator.
+     *
+     * <p>A custom factory takes on two obligations the built-ins already meet,
+     * and getting either wrong fails quietly rather than loudly:
+     *
+     * <ul>
+     *   <li>Propagate {@code contextProvider} to the executor builder (e.g.
+     *       {@code BitmapNetExecutor.builder(...).executionContextProvider(contextProvider)}).
+     *       It carries the ambient {@link ExecutionContextProvider} configured
+     *       on the builder, or {@link ExecutionContextProvider#NOOP} when none
+     *       was set; drop it and transition actions lose ambient-context
+     *       propagation such as tracing and baggage.</li>
+     *   <li>Install an {@link ActionFailureHandler}, normally
+     *       {@link #loudActionFailure()}. Without one, a throwing action is
+     *       silent on this runner's default {@code EventStore.noop()} wiring
+     *       and its consumed tokens vanish from the marking unreported.</li>
+     * </ul>
+     *
+     * <p>{@code orchestratorExecutor} hosts libpetri's own loop under
+     * {@code run(Duration)}. Note that actions are invoked inline rather than
+     * dispatched, so it does not dispatch anything on this path; see
+     * {@link Builder#orchestratorExecutor(ExecutorService)}.
+     */
     @FunctionalInterface
     public interface ExecutorFactory {
         PetriNetExecutor build(PetriNet net,
                                Map<Place<?>, List<Token<?>>> initialMarking,
                                Collection<EnvironmentPlace<?>> envPlaces,
                                EventStore eventStore,
-                               ExecutorService actionExecutor,
+                               ExecutorService orchestratorExecutor,
                                ExecutionContextProvider contextProvider);
+
+        /**
+         * The action-failure policy the built-in factories install: log a
+         * WARNING naming the transition and the token loss. Exposed so a custom
+         * factory can reuse it instead of silently going without.
+         */
+        static ActionFailureHandler loudActionFailure() {
+            return LOUD_ACTION_FAILURE;
+        }
 
         /** Default: {@link BitmapNetExecutor}. */
         static ExecutorFactory bitmap() {
@@ -436,12 +486,12 @@ public final class PetriRunner implements AutoCloseable {
          * genuine worker pool because that action submits to it explicitly.
          *
          * <p>Retained and still accepted so existing callers keep compiling;
-         * no longer required. Scheduled for removal in 2.0.
+         * no longer required. Scheduled for removal in 1.0.
          *
          * @deprecated never dispatched actions and is unused on this path.
          *     Configure {@link #orchestratorExecutor(ExecutorService)}.
          */
-        @Deprecated(since = "1.3", forRemoval = true)
+        @Deprecated(since = "0.4", forRemoval = true)
         public Builder actionExecutor(ExecutorService exec) {
             this.actionExecutor = Objects.requireNonNull(exec, "actionExecutor");
             return this;

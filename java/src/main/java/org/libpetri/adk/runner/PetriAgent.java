@@ -151,6 +151,21 @@ public final class PetriAgent extends BaseAgent {
         }
     }
 
+    /**
+     * The net's transition failures, typed as an {@code Event} stream that only
+     * ever errors, so a turn can merge it and be settled by whichever comes
+     * first: its terminal event or a failure.
+     *
+     * <p>Scope matters here. {@link PetriRunner#failures()} is per session and
+     * deliberately never terminates, so merging it must be bounded by the turn
+     * ({@code take(1)} or {@code takeUntil}); otherwise the subscription
+     * outlives the invocation that created it and accumulates on a long-lived
+     * runner.
+     */
+    private static Flowable<Event> turnFailureSignal(PetriRunner runner) {
+        return runner.failureSignal().flatMap(t -> Flowable.<Event>error(t));
+    }
+
     private PetriAgent(String name,
                        String description,
                        SessionExecutorRegistry registry,
@@ -282,10 +297,16 @@ public final class PetriAgent extends BaseAgent {
         openInvocationSpan(ctx, key);
 
         if (ctx.runConfig().streamingMode() == RunConfig.StreamingMode.SSE) {
+            // Merge the net's failure signal so a transition that dies mid-turn
+            // ends THIS turn with an error instead of stalling it. takeUntil's
+            // terminal predicate then drops the failure subscription with the
+            // rest of the turn, so it never outlives the invocation and the
+            // session's hot egress is left intact for the next one.
             var egress = runner.adkEvents()
-                    .map(e -> e.toBuilder().invocationId(ctx.invocationId()).build())
+                    .map(e -> e.toBuilder().invocationId(ctx.invocationId()).build());
+            var turn = Flowable.merge(egress, turnFailureSignal(runner))
                     .takeUntil((Event e) -> !e.partial().orElse(false));
-            var replayed = egress.replay();
+            var replayed = turn.replay();
             replayed.connect();
             runner.inject(AdkColours.USER_IN, userContent);
             return replayed;
@@ -301,8 +322,21 @@ public final class PetriAgent extends BaseAgent {
         // ignored so a streaming-capable net run under NONE still preserves
         // the legacy one-final-event contract.
         CompletableFuture<Event> nextEvent = new CompletableFuture<>();
-        runner.adkEvents()
-                .filter(e -> !e.partial().orElse(false))
+        // Same merge as the SSE path: the first of (terminal event, transition
+        // failure) settles the turn. take(1) then disposes both upstreams, so a
+        // turn that succeeds leaves no failure subscription behind on a
+        // long-lived session runner.
+        Flowable.merge(
+                        runner.adkEvents()
+                                // Stamp the ADK invocation id, exactly as the SSE branch
+                                // does above. Without it this path emits whatever the
+                                // subnet's invocationIdSupplier produced, which defaults
+                                // to a fresh random UUID per event: the reply would be
+                                // persisted under an id unrelated to the user message it
+                                // answers, and to the span opened for the turn.
+                                .map(e -> e.toBuilder().invocationId(ctx.invocationId()).build())
+                                .filter(e -> !e.partial().orElse(false)),
+                        turnFailureSignal(runner))
                 .take(1)
                 .subscribe(
                         nextEvent::complete,

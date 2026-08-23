@@ -150,7 +150,7 @@ class LlmStreamingStepSubnetTest {
         var result = SmtVerifier.forNet(net)
                 .environmentPlaces(EnvironmentPlace.of(LlmStreamingStepSubnet.Places.CHUNK))
                 .environmentMode(EnvironmentAnalysisMode.bounded(1))
-                .property(AdkNetInvariants.reaskBudgetIsBounded(
+                .property(AdkNetInvariants.budgetPlaceBounded(
                         LlmStreamingStepSubnet.Places.CHUNK_BUDGET, k))
                 .verify();
 

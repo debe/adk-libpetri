@@ -74,9 +74,11 @@ import org.libpetri.smt.SmtVerifier;
  *       {@link PetriRunner} declares six typed env places ({@link
  *       AdkColours#USER_IN} for ADK ingress, plus five voice signals).
  *       Side-channel signals (voice activity, interrupt, response-awaited,
- *       model-active) inject via {@link
- *       PetriRunner#inject(Place, Object)} from any thread; the user
- *       utterance arrives through {@link InMemoryRunner#runAsync}.</li>
+ *       model-active) are {@code Place<Void>}, so they go through
+ *       {@link PetriRunner#signal(Place)} from any thread; typed side
+ *       channels would use {@link PetriRunner#inject(Place, Object)}.
+ *       The user utterance arrives through
+ *       {@link InMemoryRunner#runAsync}.</li>
  *   <li><b>Per-chunk env-place injection</b> —
  *       {@link LlmStreamingStepSubnet} injects each partial chunk
  *       individually via {@code executor.inject}; subscribers on
@@ -192,7 +194,6 @@ class VoiceSessionDemoTest {
                         .environmentPlace(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED)
                         .environmentPlace(LiveApiRecoverySubnet.Places.MODEL_ACTIVE)
                         .deferredExecutorRef(execRef)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start(),
                 ctx -> sessionOwners.computeIfAbsent(
@@ -221,7 +222,6 @@ class VoiceSessionDemoTest {
                         .environmentPlace(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED)
                         .environmentPlace(LiveApiRecoverySubnet.Places.MODEL_ACTIVE)
                         .deferredExecutorRef(execRef)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start());
 
@@ -236,11 +236,11 @@ class VoiceSessionDemoTest {
         // ============================================================
         //  5. Side-channel: the user's voice window opens *before* the
         //     utterance arrives. This is what an audio frontend would
-        //     signal when it detects voice activity. Void-typed env
-        //     places go through runner.executor() since PetriRunner's
-        //     inject() rejects null tokens at the public surface.
+        //     signal when it detects voice activity. A Void-typed env
+        //     place is signalled with runner.signal(place); there is no
+        //     reason to drop to runner.executor() for it.
         // ============================================================
-        injectVoid(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
+        signal(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
 
         // ============================================================
         //  6. Drive an ADK turn. PetriAgent injects USER_IN; T_StartStream
@@ -271,16 +271,16 @@ class VoiceSessionDemoTest {
         //     awaited signal that the silence-recovery subnet times out
         //     into Nudge → Reconnect.
         // ============================================================
-        injectVoid(runner, BargeInSubnet.Places.INTERRUPTED);
-        injectVoid(runner, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED);
+        signal(runner, BargeInSubnet.Places.INTERRUPTED);
+        signal(runner, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED);
 
-        // Wait past the chained timed deadlines (nudge 80ms + reconnect 80ms),
-        // then poll for quiescence. The leading sleep avoids a race where
-        // env-place injections have been accepted but not yet propagated
-        // into the in-net marking — without it, the first quiescent-poll
-        // observes enabledCount==0 transiently before the timed
-        // transitions have a chance to enable.
-        Thread.sleep(300);
+        // Wait on the property, not on a clock. A quiescence poll taken right
+        // after an inject can read the pre-injection state, because acceptance
+        // completes inside the orchestrator's external-event drain and before
+        // enablement is recomputed. Awaiting the marking closes that window
+        // without betting that 300ms is longer than the chained nudge and
+        // reconnect deadlines on whatever box this runs on.
+        awaitMarked(runner, LiveApiRecoverySubnet.Places.RECONNECT_NEEDED, 5_000);
         awaitQuiescent(runner, 2_000);
 
         // ============================================================
@@ -461,7 +461,6 @@ class VoiceSessionDemoTest {
                         .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
                         .environmentPlace(BIDI_TURN_COMPLETE)
                         .eventStore(otelEventStore)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start(),
                 ctx -> sessionOwners.computeIfAbsent(
@@ -482,7 +481,6 @@ class VoiceSessionDemoTest {
                         .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
                         .environmentPlace(BIDI_TURN_COMPLETE)
                         .eventStore(otelEventStore)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start());
 
@@ -507,7 +505,7 @@ class VoiceSessionDemoTest {
                         .build())
                 .get(1, java.util.concurrent.TimeUnit.SECONDS);
         // Open voice window and simulate a barge-in to exercise the BargeIn subnet.
-        injectVoid(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
+        signal(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
 
         connection.pushResponse(LlmResponse.builder()
                 .content(Content.builder().role("model")
@@ -521,8 +519,8 @@ class VoiceSessionDemoTest {
         // receive pump's inject is asynchronous and fire-and-forget, so both chunks may
         // still be sitting in LLM_RESPONSE at this point. Bidi_EmitTurnEnd's inhibitor
         // on LLM_RESPONSE is what keeps the terminal behind them.
-        injectVoid(runner, BIDI_TURN_COMPLETE);
-        injectVoid(runner, BargeInSubnet.Places.INTERRUPTED);
+        signal(runner, BIDI_TURN_COMPLETE);
+        signal(runner, BargeInSubnet.Places.INTERRUPTED);
 
         awaitQuiescent(runner, 2_000);
 
@@ -653,7 +651,6 @@ class VoiceSessionDemoTest {
                 .environmentPlace(AdkColours.LLM_RESPONSE)
                 .environmentPlace(BargeInSubnet.Places.INTERRUPTED)
                 .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
-                .actionExecutor(EXECUTOR)
                 .orchestratorExecutor(EXECUTOR)
                 .start();
 
@@ -661,7 +658,7 @@ class VoiceSessionDemoTest {
             TestSubscriber<Event> egress = runner.adkEvents().test();
 
             // The user is speaking, so the interrupt is a genuine barge-in.
-            injectVoid(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
+            signal(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
 
             // A model turn streams in faster than it can be emitted, then the user
             // cuts in. Everything still queued must never reach the client.
@@ -672,7 +669,7 @@ class VoiceSessionDemoTest {
                                 .parts(List.of(Part.fromText("chunk " + i))).build())
                         .build());
             }
-            injectVoid(runner, BargeInSubnet.Places.INTERRUPTED);
+            signal(runner, BargeInSubnet.Places.INTERRUPTED);
 
             // Wait on the property, not on quiescence. Acceptance completes inside the
             // orchestrator's external-event drain, before enablement is recomputed, so a
@@ -758,7 +755,6 @@ class VoiceSessionDemoTest {
                 key -> PetriRunner.builder(net)
                         .environmentPlace(AdkColours.USER_IN)
                         .environmentPlace(UTTERANCE_IN)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start(),
                 ctx -> sessionOwners.computeIfAbsent(
@@ -774,7 +770,6 @@ class VoiceSessionDemoTest {
                 key -> PetriRunner.builder(net)
                         .environmentPlace(AdkColours.USER_IN)
                         .environmentPlace(UTTERANCE_IN)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start());
 
@@ -888,7 +883,7 @@ class VoiceSessionDemoTest {
                         BargeInSubnet.Places.INTERRUPT_DISCARDED,
                         LiveApiRecoverySubnet.Places.NUDGE_NEEDED,
                         LiveApiRecoverySubnet.Places.RECONNECT_NEEDED)
-                .property(AdkNetInvariants.reaskBudgetIsBounded(
+                .property(AdkNetInvariants.budgetPlaceBounded(
                         LlmStreamingStepSubnet.Places.CHUNK_BUDGET, 4))
                 .property(SmtProperty.deadlockFree())
                 .verify();
@@ -981,9 +976,17 @@ class VoiceSessionDemoTest {
         }
     }
 
-    private static void injectVoid(PetriRunner runner, Place<Void> place) throws Exception {
-        runner.executor().inject(runner.envPlace(place), (Void) null)
-                .get(1, java.util.concurrent.TimeUnit.SECONDS);
+    /**
+     * Signal a {@code Place<Void>} through the sanctioned public surface.
+     *
+     * <p>This used to call {@code runner.executor().inject(...)}, justified by a
+     * comment claiming {@code PetriRunner.inject()} rejects null tokens. That is
+     * what {@link PetriRunner#signal(Place)} is for, and its javadoc says so:
+     * "there is no reason to drop to executor() for signals". Since these demos
+     * are the documentation, the bypass was teaching itself to every reader.
+     */
+    private static void signal(PetriRunner runner, Place<Void> place) throws Exception {
+        runner.signal(place).get(1, java.util.concurrent.TimeUnit.SECONDS);
     }
 
     /** Await a token on {@code place}, which is a stronger barrier than quiescence. */

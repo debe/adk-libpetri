@@ -58,20 +58,24 @@ class SessionExecutorRegistryStrongOwnedTest {
     }
 
     @Test
-    void strong_mode_does_not_evict_when_owner_is_collected() throws Exception {
-        // The headline behaviour of strongOwned() — the entry survives
-        // owner GC. In cleanerOwned() this same scenario tears the runner
-        // down asynchronously. Here, the entry must remain until we
-        // explicitly close it.
+    void strong_mode_pins_the_owner_so_gc_can_never_evict() throws Exception {
+        // The headline behaviour of strongOwned(). This test used to be called
+        // "does_not_evict_when_owner_is_collected" and waited for the owner to
+        // be collected, which cannot happen: STRONG mode stores
+        // OwnerRef.Strong(owner), a strong reference, so the registry itself
+        // keeps the owner alive. The old wait silently timed out and the test
+        // passed having exercised nothing.
+        //
+        // The real guarantee is the stronger one: under GC pressure the owner
+        // is NOT collected, so no GC-driven eviction is even reachable, and
+        // only an explicit close removes the entry. Flip OwnerRef.Strong to
+        // Weak and the first assertion below fails.
         try (var registry = SessionExecutorRegistry.strongOwned()) {
             WeakReference<Object> ownerRef = registerAndForget(registry);
 
-            // Force GC; in cleaner mode this would shrink the registry.
-            forceGc(() -> ownerRef.refersTo(null), 2_000);
+            applyGcPressure(500);
 
-            // Sleep gives any rogue cleaner thread a chance to fire — it
-            // shouldn't, but if it did we'd want the test to catch it.
-            Thread.sleep(200);
+            assertThat(ownerRef.refersTo(null)).isFalse();
             assertThat(registry.size()).isEqualTo(1);
 
             // Explicit close is required and sufficient.
@@ -114,12 +118,17 @@ class SessionExecutorRegistryStrongOwnedTest {
         return new WeakReference<>(owner);
     }
 
+    /**
+     * Runs GC repeatedly for a fixed window without asserting anything.
+     *
+     * <p>Used where the expected outcome is that an object is <i>not</i>
+     * collected, so there is no condition to await; the point is to give a
+     * collector every chance and then check the reference is still live.
+     */
     @SuppressWarnings("BusyWait")
-    private static void forceGc(java.util.function.BooleanSupplier condition,
-                                long timeoutMillis) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + timeoutMillis;
+    private static void applyGcPressure(long millis) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + millis;
         while (System.currentTimeMillis() < deadline) {
-            if (condition.getAsBoolean()) return;
             System.gc();
             Thread.sleep(50);
         }
@@ -143,7 +152,6 @@ class SessionExecutorRegistryStrongOwnedTest {
                 .bindActions(LlmAgentSubnet.actionBindings(llm, config));
         return PetriRunner.builder(net)
                 .environmentPlace(AdkColours.USER_IN)
-                .actionExecutor(EXECUTOR)
                 .orchestratorExecutor(EXECUTOR)
                 .start();
     }

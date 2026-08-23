@@ -193,7 +193,9 @@ class ToolDispatchSubnetTest {
                 if (bothStarted.await(2, TimeUnit.SECONDS)) {
                     releaseAll.countDown();
                 }
-            } catch (InterruptedException ignored) {}
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         });
 
         var fixture = run(
@@ -224,16 +226,17 @@ class ToolDispatchSubnetTest {
                 return Single.just(Map.of());
             }
         };
-        // Synthetic non-null context value — we just verify pass-through.
-        var sentinel = (ToolContext) null;  // null is the documented default
+        // A real instance, not null. `captured` starts out null, so asserting
+        // that a null sentinel arrived was asserting null == null and the
+        // pass-through property was never exercised. (The old comment said
+        // "non-null context value" while the value was literally null.)
+        var sentinel = org.mockito.Mockito.mock(ToolContext.class);
         var fixture = runWithContextSupplier(
                 Map.of("capture", capturingTool),
                 () -> sentinel,
                 callBatch(call("capture", Map.of(), "c-1")));
 
         assertThat(fixture.responses()).hasSize(1);
-        // The captured context should match what the supplier returned —
-        // in this case null, which is documented as acceptable.
         assertThat(captured.get()).isSameInstanceAs(sentinel);
     }
 

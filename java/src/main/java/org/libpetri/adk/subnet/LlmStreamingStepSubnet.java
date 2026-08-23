@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.libpetri.adk.Experimental;
@@ -56,7 +57,7 @@ import org.libpetri.runtime.PetriNetExecutor;
  * <b>K-invariant</b>: it never exceeds and never drops below K (modulo
  * the brief window while the emit action is in-flight). This is the
  * SMT-verifiable property — {@code PlaceBound(CHUNK_BUDGET, K)} via
- * {@code AdkNetInvariants.reaskBudgetIsBounded(...)} — that proves
+ * {@code AdkNetInvariants.budgetPlaceBounded(...)} — that proves
  * the at-most-K-concurrent-emissions invariant holds across all
  * reachable markings.
  *
@@ -240,77 +241,102 @@ public final class LlmStreamingStepSubnet {
 
     private static TransitionAction llmCallStreamAction(BaseLlm baseLlm, Config config) {
         return ctx -> {
-            var request = ctx.input(Places.LLM_REQUEST_INTERNAL);
-            CompletableFuture<Void> done = new CompletableFuture<>();
-            var collected = new ArrayList<LlmResponse>();
-            var injections = new ArrayList<CompletableFuture<Boolean>>();
-            // Load-bearing contract: this fabricates a FRESH EnvironmentPlace
-            // wrapper, yet it injects onto the SAME env place the runner
-            // registered for Places.CHUNK. That works because libpetri resolves
-            // env injection by the underlying Place (name, type) identity, not by
-            // EnvironmentPlace wrapper-instance identity. Any port must preserve
-            // that resolution rule, or a fresh-wrapper self-injection lands nowhere.
-            var chunkEnv = EnvironmentPlace.of(Places.CHUNK);
-
             var executor = config.executorRef().get();
             if (executor == null) {
-                done.completeExceptionally(new IllegalStateException(
+                return CompletableFuture.failedFuture(new IllegalStateException(
                         "Config.executorRef has not been populated. Set the"
                                 + " AtomicReference after BitmapNetExecutor.build()"
                                 + " and before runAsync()."));
-                return done;
             }
-
-            baseLlm.generateContent(request, /* stream */ true)
-                    .subscribe(
-                            chunk -> {
-                                collected.add(chunk);
-                                // True incremental injection: each partial chunk lands
-                                // on CHUNK as the model stream produces it. Completion
-                                // waits until all partial injections are accepted, then
-                                // appends one terminal CHUNK marker carrying the merged
-                                // response. Because T_EmitChunk has higher priority than
-                                // Router, the terminal cannot overtake queued partials.
-                                injections.add(executor.inject(chunkEnv, new LlmResponseChunk(chunk)));
-                            },
-                            err -> done.completeExceptionally(err),
-                            () -> {
-                                if (collected.isEmpty()) {
-                                    done.completeExceptionally(new IllegalStateException(
-                                            "BaseLlm streaming call yielded no chunks"));
-                                    return;
-                                }
-                                CompletableFuture<?>[] accepted = injections.toArray(CompletableFuture<?>[]::new);
-                                CompletableFuture.allOf(accepted).whenComplete((_, err) -> {
-                                    if (err != null) {
-                                        done.completeExceptionally(err);
-                                        return;
-                                    }
-                                    for (var injection : injections) {
-                                        if (!injection.join()) {
-                                            done.completeExceptionally(new IllegalStateException(
-                                                    "chunk injection was rejected before streaming completed"));
-                                            return;
-                                        }
-                                    }
-                                    var terminal = executor.inject(chunkEnv,
-                                            new LlmResponseChunk(mergeChunks(collected), true));
-                                    terminal.whenComplete((acceptedTerminal, terminalErr) -> {
-                                        if (terminalErr != null) {
-                                            done.completeExceptionally(terminalErr);
-                                            return;
-                                        }
-                                        if (!acceptedTerminal) {
-                                            done.completeExceptionally(new IllegalStateException(
-                                                    "terminal chunk injection was rejected before streaming completed"));
-                                            return;
-                                        }
-                                        done.complete(null);
-                                    });
-                                });
-                            });
-            return done;
+            return streamChunks(baseLlm, ctx.input(Places.LLM_REQUEST_INTERNAL), executor);
         };
+    }
+
+    /**
+     * Drives one streaming model call, injecting each chunk as it arrives and a
+     * terminal merged chunk once every partial has been accepted.
+     *
+     * <p>Split out of the action so the action stays a guard plus a call. The
+     * completion path below is a chain rather than nested callbacks because it
+     * is genuinely sequential: wait for every partial injection, check none was
+     * rejected, then inject the terminal one. Structured concurrency would
+     * express it more directly, but it is still a preview API in Java 25 and
+     * this module builds without preview features.
+     */
+    private static CompletableFuture<Void> streamChunks(
+            BaseLlm baseLlm, LlmRequest request, PetriNetExecutor executor) {
+
+        // Load-bearing contract: this fabricates a FRESH EnvironmentPlace
+        // wrapper, yet it injects onto the SAME env place the runner
+        // registered for Places.CHUNK. That works because libpetri resolves
+        // env injection by the underlying Place (name, type) identity, not by
+        // EnvironmentPlace wrapper-instance identity. Any port must preserve
+        // that resolution rule, or a fresh-wrapper self-injection lands nowhere.
+        var chunkEnv = EnvironmentPlace.of(Places.CHUNK);
+
+        // Written on the subscriber thread and read in onComplete. Safe without
+        // synchronisation only because RxJava serialises onNext against
+        // onComplete for a single subscription; do not read them elsewhere.
+        var collected = new ArrayList<LlmResponse>();
+        var injections = new ArrayList<CompletableFuture<Boolean>>();
+
+        CompletableFuture<Void> done = new CompletableFuture<>();
+        baseLlm.generateContent(request, /* stream */ true)
+                .subscribe(
+                        chunk -> {
+                            // True incremental injection: each partial chunk lands on
+                            // CHUNK as the model stream produces it. T_EmitChunk
+                            // outranks Router, so the terminal cannot overtake a
+                            // queued partial.
+                            collected.add(chunk);
+                            injections.add(executor.inject(chunkEnv, new LlmResponseChunk(chunk)));
+                        },
+                        done::completeExceptionally,
+                        () -> completeStream(executor, chunkEnv, collected, injections, done));
+        return done;
+    }
+
+    /** Terminal half of {@link #streamChunks}: drain, verify, emit the merged chunk. */
+    private static void completeStream(
+            PetriNetExecutor executor,
+            EnvironmentPlace<LlmResponseChunk> chunkEnv,
+            List<LlmResponse> collected,
+            List<CompletableFuture<Boolean>> injections,
+            CompletableFuture<Void> done) {
+
+        if (collected.isEmpty()) {
+            done.completeExceptionally(new IllegalStateException(
+                    "BaseLlm streaming call yielded no chunks"));
+            return;
+        }
+
+        CompletableFuture.allOf(injections.toArray(CompletableFuture<?>[]::new))
+                .thenCompose(_ -> {
+                    // Every future above is already complete here, so join() does
+                    // not block. A false result means the orchestrator refused the
+                    // token, which is not an exception and would otherwise pass
+                    // silently as a dropped chunk.
+                    if (injections.stream().anyMatch(injection -> !injection.join())) {
+                        return CompletableFuture.<Boolean>failedFuture(new IllegalStateException(
+                                "chunk injection was rejected before streaming completed"));
+                    }
+                    return executor.inject(chunkEnv,
+                            new LlmResponseChunk(mergeChunks(collected), true));
+                })
+                .thenAccept(acceptedTerminal -> {
+                    if (!acceptedTerminal) {
+                        throw new IllegalStateException(
+                                "terminal chunk injection was rejected before streaming completed");
+                    }
+                })
+                .whenComplete((_, err) -> {
+                    if (err != null) {
+                        done.completeExceptionally(
+                                err instanceof CompletionException ce ? ce.getCause() : err);
+                    } else {
+                        done.complete(null);
+                    }
+                });
     }
 
     private static TransitionAction emitChunkAction(Config config) {

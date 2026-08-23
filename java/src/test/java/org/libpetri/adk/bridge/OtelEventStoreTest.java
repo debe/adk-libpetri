@@ -63,7 +63,7 @@ class OtelEventStoreTest {
     }
 
     @Test
-    void transition_failed_produces_error_span_with_exception_attributes() {
+    void transition_failed_records_an_exception_event_on_an_error_span() {
         var store = new OtelEventStore(tracer);
         var at = Instant.parse("2026-05-23T12:00:00Z");
 
@@ -76,7 +76,14 @@ class OtelEventStoreTest {
         assertThat(span.getName()).isEqualTo("BrokenTransition");
         assertThat(span.getStatus().getStatusCode()).isEqualTo(StatusCode.ERROR);
         assertThat(span.getStatus().getDescription()).isEqualTo("model returned 500");
-        assertThat(span.getAttributes().asMap()).containsAtLeast(
+        // OpenTelemetry models a failure as an "exception" span event carrying
+        // the exception.* attributes. These used to be set as attributes on the
+        // span itself, where no backend looks for them, so a failed transition
+        // never rendered as an exception in any UI.
+        assertThat(span.getEvents()).hasSize(1);
+        var exceptionEvent = span.getEvents().get(0);
+        assertThat(exceptionEvent.getName()).isEqualTo("exception");
+        assertThat(exceptionEvent.getAttributes().asMap()).containsAtLeast(
                 AttributeKey.stringKey("exception.type"),
                 "java.io.IOException",
                 AttributeKey.stringKey("exception.message"),
@@ -99,10 +106,13 @@ class OtelEventStoreTest {
         assertThat(span.getAttributes().asMap()).containsAtLeast(
                 AttributeKey.stringKey("libpetri.deadline"),
                 "PT5S");
-        // Pin the exception-type attribute. It used to be a hardcoded FQCN
-        // string literal, which would have gone silently wrong if libpetri
-        // ever moved the class; it is now derived from the class itself.
-        assertThat(span.getAttributes().asMap()).containsAtLeast(
+        // Pin the exception type. It used to be a hardcoded FQCN string literal,
+        // which would have gone silently wrong if libpetri ever moved the class;
+        // it is now derived from the class itself, and reported on the
+        // "exception" span event rather than as a span attribute.
+        assertThat(span.getEvents()).hasSize(1);
+        assertThat(span.getEvents().get(0).getName()).isEqualTo("exception");
+        assertThat(span.getEvents().get(0).getAttributes().asMap()).containsAtLeast(
                 AttributeKey.stringKey("exception.type"),
                 "org.libpetri.event.NetEvent.TransitionTimedOut");
         // span duration = actualDuration

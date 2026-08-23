@@ -231,7 +231,7 @@ class AdkNetInvariantsTest {
     @Test
     void reask_budget_is_bounded_factory_produces_correct_property() {
         var budget = Place.of("budget", Void.class);
-        var prop = AdkNetInvariants.reaskBudgetIsBounded(budget, 3);
+        var prop = AdkNetInvariants.budgetPlaceBounded(budget, 3);
         assertThat(prop).isInstanceOf(SmtProperty.PlaceBound.class);
         var pb = (SmtProperty.PlaceBound) prop;
         assertThat(pb.place()).isEqualTo(budget);
@@ -261,7 +261,7 @@ class AdkNetInvariantsTest {
         var budget = Place.of("budget", Void.class);
         Assertions.assertThrows(
                 IllegalArgumentException.class,
-                () -> AdkNetInvariants.reaskBudgetIsBounded(budget, 0));
+                () -> AdkNetInvariants.budgetPlaceBounded(budget, 0));
         Assertions.assertThrows(
                 IllegalArgumentException.class,
                 () -> AdkNetInvariants.eventOutBounded(0));
@@ -292,7 +292,7 @@ class AdkNetInvariantsTest {
 
         var result = SmtVerifier.forNet(net)
                 .initialMarking(b -> b.tokens(in, 1))
-                .property(AdkNetInvariants.reaskBudgetIsBounded(budget, 1))
+                .property(AdkNetInvariants.budgetPlaceBounded(budget, 1))
                 .verify();
 
         // The property is provable: max one token can sit on "budget"
@@ -321,7 +321,7 @@ class AdkNetInvariantsTest {
 
         var result = SmtVerifier.forNet(net)
                 .initialMarking(b -> b.tokens(in, 1))
-                .property(AdkNetInvariants.reaskBudgetIsBounded(budget, 1))
+                .property(AdkNetInvariants.budgetPlaceBounded(budget, 1))
                 .verify();
 
         // The budget grows without bound — PlaceBound(1) is violated.

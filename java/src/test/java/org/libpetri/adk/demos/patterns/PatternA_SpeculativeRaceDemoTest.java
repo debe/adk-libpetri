@@ -146,7 +146,6 @@ class PatternA_SpeculativeRaceDemoTest {
                 registry,
                 key -> PetriRunner.builder(bound)
                         .environmentPlace(AdkColours.USER_IN)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start(),
                 ctx -> sessionOwners.computeIfAbsent(

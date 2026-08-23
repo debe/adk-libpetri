@@ -196,6 +196,27 @@ class BidiPetriAgentTest {
         }
     }
 
+    /**
+     * Cancelling must close the transport, not just stop reading it.
+     *
+     * <p>{@code close()} is otherwise only reachable from the inbound side: an
+     * explicit {@code shouldClose}, a send failure, or an inbound error. A
+     * consumer that simply cancels -- a user hanging up, ADK abandoning the turn
+     * -- used to dispose the pumps and leave the websocket open, with the
+     * connection reference held by nobody who could still close it.
+     */
+    @Test
+    void cancelling_the_outbound_stream_closes_the_connection() throws Exception {
+        try (var f = newFixture()) {
+            assertThat(f.conn.closed.get()).isFalse();
+
+            f.sub.cancel();
+
+            await(() -> f.conn.closed.get(), 2000);
+            assertThat(f.conn.closed.get()).isTrue();
+        }
+    }
+
     // ============================================================
     //  Fixture
     // ============================================================
@@ -250,7 +271,6 @@ class BidiPetriAgentTest {
         PetriRunner runner = PetriRunner.builder(net)
                 .environmentPlace(MODEL_CHUNK)
                 .environmentPlace(TURN_COMPLETE)
-                .actionExecutor(EXECUTOR)
                 .orchestratorExecutor(EXECUTOR)
                 .start();
 

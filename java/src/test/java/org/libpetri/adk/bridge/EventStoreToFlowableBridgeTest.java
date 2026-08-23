@@ -66,16 +66,91 @@ class EventStoreToFlowableBridgeTest {
     }
 
     @Test
-    void transition_failed_errors_the_flowable() {
+    void transition_failed_is_published_on_the_failure_signal() {
+        var bridge = new EventStoreToFlowableBridge(EVENT_OUT, EventStore.noop());
+        TestSubscriber<Throwable> failures = bridge.failureSignal().test();
+
+        bridge.append(new NetEvent.TransitionFailed(
+                Instant.now(), "T_llm_call", "model returned 500", "java.io.IOException"));
+
+        failures.assertValueCount(1);
+        // Identity intact, not flattened into a message a consumer has to regex.
+        var f = (TransitionFailure) failures.values().get(0);
+        assertThat(f.transitionName()).isEqualTo("T_llm_call");
+        assertThat(f.kind()).isEqualTo(TransitionFailure.Kind.ACTION_THREW);
+        assertThat(f.exceptionType()).hasValue("java.io.IOException");
+        assertThat(f.deadline()).isEmpty();
+        assertThat(f.getMessage())
+                .isEqualTo("Transition T_llm_call failed: model returned 500 (java.io.IOException)");
+        // Non-terminal: the signal stays open for the next failure.
+        failures.assertNotComplete();
+        failures.assertNoErrors();
+    }
+
+    /**
+     * The regression that motivated the failure signal. This used to call
+     * {@code events.onError}, which is terminal on a per-session processor, so
+     * one failed transition ended the egress for every later turn even though
+     * libpetri had contained the failure and the net was still running.
+     */
+    /**
+     * A blown deadline is a failure the caller must hear about. It used to fall
+     * into the switch's default branch and emit nothing, so a turn whose only
+     * terminal event was going to come from the timed-out transition waited
+     * forever. PersistStateSubnet ships a 5s deadline, so this is reachable.
+     */
+    @Test
+    void a_deadline_timeout_is_also_published_on_the_failure_signal() {
+        var bridge = new EventStoreToFlowableBridge(EVENT_OUT, EventStore.noop());
+        TestSubscriber<Throwable> failures = bridge.failureSignal().test();
+
+        bridge.append(new NetEvent.TransitionTimedOut(
+                Instant.now(), "PersistState_Persist",
+                Duration.ofSeconds(5), Duration.ofSeconds(7)));
+
+        failures.assertValueCount(1);
+        var f = (TransitionFailure) failures.values().get(0);
+        assertThat(f.transitionName()).isEqualTo("PersistState_Persist");
+        assertThat(f.kind()).isEqualTo(TransitionFailure.Kind.DEADLINE_EXCEEDED);
+        assertThat(f.deadline()).hasValue(Duration.ofSeconds(5));
+        assertThat(f.actualDuration()).hasValue(Duration.ofSeconds(7));
+        // Nothing was thrown, so there is no exception type to report.
+        assertThat(f.exceptionType()).isEmpty();
+    }
+
+    @Test
+    void a_transition_failure_does_not_kill_the_event_stream() {
         var bridge = new EventStoreToFlowableBridge(EVENT_OUT, EventStore.noop());
         TestSubscriber<Event> sub = bridge.asFlowable().test();
 
         bridge.append(new NetEvent.TransitionFailed(
                 Instant.now(), "T_llm_call", "model returned 500", "java.io.IOException"));
 
-        sub.assertError(RuntimeException.class);
-        sub.assertError(t -> "Transition T_llm_call failed: model returned 500 (java.io.IOException)"
-                .equals(t.getMessage()));
+        sub.assertNoErrors();
+        sub.assertNotComplete();
+
+        // ... and an Event produced after the failure still reaches subscribers.
+        bridge.append(new NetEvent.TokenAdded(
+                Instant.now(), EVENT_OUT.name(), Token.of(Event.builder().invocationId("inv-2").author("agent").build())));
+
+        sub.assertNoErrors();
+        sub.assertValueCount(1);
+    }
+
+    @Test
+    void a_late_subscriber_after_a_failure_still_receives_events() {
+        var bridge = new EventStoreToFlowableBridge(EVENT_OUT, EventStore.noop());
+
+        // Failure happens with nobody attached, as between ADK turns.
+        bridge.append(new NetEvent.TransitionFailed(
+                Instant.now(), "T_llm_call", "model returned 500", "java.io.IOException"));
+
+        TestSubscriber<Event> late = bridge.asFlowable().test();
+        bridge.append(new NetEvent.TokenAdded(
+                Instant.now(), EVENT_OUT.name(), Token.of(Event.builder().invocationId("inv-3").author("agent").build())));
+
+        late.assertNoErrors();
+        late.assertValueCount(1);
     }
 
     @Test

@@ -102,6 +102,9 @@ class PetriAgentLiveTest {
                             queue,
                             RunConfig.builder().streamingMode(RunConfig.StreamingMode.BIDI).build())
                     .test();
+            // Effectively-final alias so the bounded awaits below can close over it
+            // (`events` is declared null and reassigned, for the finally block).
+            final TestSubscriber<Event> sub = events;
 
             Content userContent = content("user", "hello over live");
             queue.content(userContent);
@@ -111,7 +114,10 @@ class PetriAgentLiveTest {
             assertThat(connection.contentSends).containsExactly(userContent);
 
             connection.raw.onNext(signalFrame());
-            events.awaitCount(1);
+            // Bounded via this class's own await(): TestSubscriber.awaitCount(int)
+            // has NO timeout, so a regression hung the CI job to its limit
+            // instead of failing.
+            await(() -> sub.values().size() >= 1, 2_000);
             assertThat(callbackFrames.get()).isEqualTo(1);
             assertThat(events.values()).hasSize(1);
             Event callbackEvent = events.values().get(0);
@@ -119,7 +125,7 @@ class PetriAgentLiveTest {
             assertThat(callbackEvent.content().map(Content::text)).hasValue("callback fired");
 
             connection.raw.onNext(modelContent("model says hi"));
-            events.awaitCount(2);
+            await(() -> sub.values().size() >= 2, 2_000);
 
             Event modelEvent = events.values().stream()
                     .filter(e -> "model_net".equals(e.author()))
@@ -195,7 +201,6 @@ class PetriAgentLiveTest {
         return PetriRunner.builder(net)
                 .environmentPlace(CALLBACK_SIGNAL)
                 .environmentPlace(MODEL_CHUNK)
-                .actionExecutor(EXECUTOR)
                 .orchestratorExecutor(EXECUTOR)
                 .start();
     }

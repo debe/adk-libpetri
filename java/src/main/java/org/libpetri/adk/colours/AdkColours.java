@@ -38,9 +38,13 @@ import org.libpetri.core.Place;
  * "state bag" place would destroy the colour discipline: no
  * compose-time type matching, no per-domain typed access, no diagram-
  * as-domain-process. The only thing close to that shape in this
- * catalog is {@link LegacySessionWrite} — and it is named loudly
+ * catalog is {@link LegacySessionWrite}, and it is named loudly
  * because it exists for exactly one purpose: write-only export to
- * ADK's {@code Session.state} legacy API.
+ * ADK's {@code Session.state} legacy API. There is deliberately no
+ * general-purpose "raw payload" colour here. A feature this catalog
+ * does not model yet belongs on a place <i>you</i> declare, typed to
+ * that feature, so two unrelated escape hatches cannot collide on one
+ * shared place; see {@code RawProviderPassthroughDemoTest}.
  */
 public final class AdkColours {
 
@@ -91,33 +95,6 @@ public final class AdkColours {
     public static final Place<Void> END_INVOCATION =
             Place.of("endInvocation", Void.class);
 
-    /**
-     * <b>Escape hatch — inbound.</b> The seam where a feature the typed ADK /
-     * genai surface does not model yet enters the net. Inject via
-     * {@code executor.inject(RAW_PROVIDER_REQUEST, Token.of(new RawProviderRequest(...)))}.
-     *
-     * <p>This is the one colour in the catalog whose payload is deliberately
-     * <b>opaque</b> — like {@link LegacySessionWrite}, it is named loudly because
-     * it suspends the typed-per-concept discipline on purpose. A small
-     * user-supplied transition consumes it, calls the raw provider API directly,
-     * and emits the result onto {@link #RAW_PROVIDER_EVENT}. ADK and the stock
-     * subnets remain the brain for everything they <i>do</i> model; the raw flow
-     * runs concurrently as just another coloured token, fully visible in the
-     * marking and the EventStore chain. This is the raw-provider passthrough
-     * escape hatch: ADK stays the brain for everything it models, and a
-     * not-yet-modelled provider feature can still be driven without a fork.
-     */
-    public static final Place<RawProviderRequest> RAW_PROVIDER_REQUEST =
-            Place.of("rawProviderRequest", RawProviderRequest.class);
-
-    /**
-     * <b>Escape hatch — outbound.</b> Where the raw result of a not-yet-modelled
-     * provider feature re-enters the net so downstream transitions can fold it
-     * back into the typed flow. See {@link #RAW_PROVIDER_REQUEST}.
-     */
-    public static final Place<RawProviderEvent> RAW_PROVIDER_EVENT =
-            Place.of("rawProviderEvent", RawProviderEvent.class);
-
     private AdkColours() {
         // colour catalog — no instances
     }
@@ -155,19 +132,4 @@ public final class AdkColours {
     /** Wrapper colour for an agent-transfer target. */
     public record TransferTarget(String agentName) {}
 
-    /**
-     * Opaque escape-hatch envelope — inbound. {@code feature} is a free-form tag
-     * the user-supplied raw transition switches on (e.g. {@code "live.newModality"},
-     * {@code "models.experimentalConfig"}); {@code payload} is whatever the raw
-     * provider call needs and is intentionally untyped (the net does not interpret
-     * it). See {@link AdkColours#RAW_PROVIDER_REQUEST}.
-     */
-    public record RawProviderRequest(String feature, Object payload) {}
-
-    /**
-     * Opaque escape-hatch envelope — outbound. Mirror of {@link RawProviderRequest};
-     * {@code payload} carries the raw provider result for downstream transitions to
-     * fold back into the typed flow. See {@link AdkColours#RAW_PROVIDER_EVENT}.
-     */
-    public record RawProviderEvent(String feature, Object payload) {}
 }

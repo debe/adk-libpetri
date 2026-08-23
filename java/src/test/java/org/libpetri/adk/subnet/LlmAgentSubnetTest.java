@@ -378,4 +378,29 @@ class LlmAgentSubnetTest {
                     .toList();
         }
     }
+
+    /**
+     * The composite must forward the toolContextSupplier it is given.
+     *
+     * <p>It used to hard-code {@code () -> null} when delegating to
+     * {@link ToolDispatchSubnet}, so a tool needing state, artifacts or auth
+     * could not be used through {@code LlmAgentSubnet} at all, with no way to
+     * override it from the outside.
+     */
+    @Test
+    void the_composite_forwards_the_configured_tool_context_supplier() {
+        var marker = org.mockito.Mockito.mock(com.google.adk.tools.ToolContext.class);
+        var config = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .dispatchExecutor(EXECUTOR)
+                .toolContextSupplier(() -> marker)
+                .build();
+
+        assertThat(config.toolContextSupplier().get()).isSameInstanceAs(marker);
+        // Default stays the documented () -> null rather than becoming required.
+        var plain = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        assertThat(plain.toolContextSupplier().get()).isNull();
+        assertThat(plain.callbacks()).isEqualTo(LlmStepSubnet.Callbacks.none());
+    }
 }

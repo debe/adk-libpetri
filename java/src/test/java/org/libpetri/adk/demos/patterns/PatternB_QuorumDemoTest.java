@@ -139,7 +139,6 @@ class PatternB_QuorumDemoTest {
                 registry,
                 key -> PetriRunner.builder(bound)
                         .environmentPlace(AdkColours.USER_IN)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start(),
                 ctx -> sessionOwners.computeIfAbsent(
@@ -166,7 +165,10 @@ class PatternB_QuorumDemoTest {
 
         // The synthesis content references the three winning branches.
         String text = agentEvents.get(0).content().get().text();
-        assertThat(text).contains("synth(");
+        // The quorum is the three FASTEST branches, in completion order.
+        // contains("synth(") only proved synthesizeAction ran at all, which it
+        // always does; it said nothing about which branches formed the quorum.
+        assertThat(text).isEqualTo("synth(b1,b2,b3)");
 
         // The load-bearing assertion: the agent completed well before the
         // slowest branch's delay (400ms). With a barrier-join (e.g.

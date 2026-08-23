@@ -243,6 +243,13 @@ class SessionExecutorRegistryTest {
             System.gc();
             Thread.sleep(50);
         }
+        // Throw rather than return. Returning on timeout made the callers'
+        // headline assertion unfalsifiable: if the owner is never collected,
+        // nothing is evicted, the registry size is whatever it already was,
+        // and the test passed without ever exercising the GC path it names.
+        throw new AssertionError(
+                "owner was not collected within " + timeoutMillis + "ms; "
+                        + "the GC-dependent property under test never ran");
     }
 
     private static PetriRunner testRunner() {
@@ -264,7 +271,6 @@ class SessionExecutorRegistryTest {
                 .bindActions(LlmAgentSubnet.actionBindings(llm, config));
         return PetriRunner.builder(net)
                 .environmentPlace(AdkColours.USER_IN)
-                .actionExecutor(EXECUTOR)
                 .orchestratorExecutor(EXECUTOR)
                 .start();
     }

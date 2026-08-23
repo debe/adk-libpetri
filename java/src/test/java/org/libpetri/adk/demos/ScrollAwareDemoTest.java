@@ -137,7 +137,6 @@ class ScrollAwareDemoTest {
                         .environmentPlace(SCROLL_IN)
                         .initialMarking(Map.of(
                                 SCROLL_COUNT, List.of(Token.of(0L))))
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start(),
                 ctx -> sessionOwners.computeIfAbsent(
@@ -168,7 +167,6 @@ class ScrollAwareDemoTest {
                         .environmentPlace(SCROLL_IN)
                         .initialMarking(Map.of(
                                 SCROLL_COUNT, List.of(Token.of(0L))))
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start());
 
@@ -178,14 +176,20 @@ class ScrollAwareDemoTest {
         //    arbitrary external signals reach the running net through
         //    the same env-place injection model as USER_IN.
         // ============================================================
-        var scrollerDone = CompletableFuture.runAsync(() -> {
-            for (int i = 0; i < 5; i++) {
-                registry.get(sessionKey)
-                        .inject(SCROLL_IN, new Scroll(0, 40))
-                        .join();
-            }
-        }, Executors.newSingleThreadExecutor());
-        scrollerDone.get(2, TimeUnit.SECONDS);
+        // try-with-resources: ExecutorService is AutoCloseable since Java 21.
+        // This used to pass an anonymous newSingleThreadExecutor() with no
+        // reference kept and no shutdown, leaking a non-daemon platform thread
+        // for the life of the JVM -- in a file presented as copy-and-adapt
+        // guidance.
+        try (var scroller = Executors.newSingleThreadExecutor()) {
+            CompletableFuture.runAsync(() -> {
+                for (int i = 0; i < 5; i++) {
+                    registry.get(sessionKey)
+                            .inject(SCROLL_IN, new Scroll(0, 40))
+                            .join();
+                }
+            }, scroller).get(2, TimeUnit.SECONDS);
+        }
 
         // Wait until the orchestrator has fired T_RecordScroll for every
         // injected scroll. Inject acceptance only guarantees the token
@@ -212,7 +216,9 @@ class ScrollAwareDemoTest {
         assertThat(lastFromAgent.content().get().text())
                 .isEqualTo("you scrolled 5 times; you said: hello");
 
-        // Ensure the registry shuts down cleanly via owner GC path.
+        // Explicit teardown, which is the documented default for strongOwned()
+        // and works for either mode. (The comment here used to claim this was
+        // the owner-GC path; it is the opposite of that.)
         registry.closeAll();
     }
 

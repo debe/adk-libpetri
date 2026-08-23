@@ -248,8 +248,10 @@ public final class SessionExecutorRegistry implements AutoCloseable {
                 + "lifetime owner. One owner per key, ever — sharing a key "
                 + "across owners is a lifetime bug. If you are passing a "
                 + "freshly-built per-call wrapper as the owner, hold a "
-                + "stable identity for the session instead, or use "
-                + "strongOwned(), which needs no external owner at all.");
+                + "stable identity for the session instead: a websocket "
+                + "session, or a value from your own per-session map. "
+                + "Note ctx.session() is NOT stable under "
+                + "InMemorySessionService, which returns defensive copies.");
     }
 
     /** Returns the runner if present (no creation), or {@code null}. */

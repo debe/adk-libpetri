@@ -88,7 +88,7 @@ import org.libpetri.smt.SmtVerifier;
  * <h2>Structural properties (Z3)</h2>
  * <ul>
  *   <li>{@code PlaceBound(COMMITTED, 1)} — at most one commit fires per turn.</li>
- *   <li>{@code atMostOneCommits(VALIDATION_PASSED, VALIDATION_FAILED)}
+ *   <li>{@code SmtProperty.mutualExclusion(VALIDATION_PASSED, VALIDATION_FAILED)}
  *       — the validation outputs are XOR by construction, so the two
  *       commit transitions are never simultaneously enabled by their
  *       respective downstream guards.</li>
@@ -205,7 +205,7 @@ class PatternC_OptimisticCommitDemoTest {
                         VALIDATION_FAILED,
                         CHEAP_PENDING)
                 .property(SmtProperty.placeBound(COMMITTED, 1))
-                .property(AdkNetInvariants.atMostOneCommits(
+                .property(SmtProperty.mutualExclusion(
                         VALIDATION_PASSED, VALIDATION_FAILED))
                 .property(SmtProperty.deadlockFree())
                 .verify();
@@ -396,7 +396,6 @@ class PatternC_OptimisticCommitDemoTest {
                 registry,
                 key -> PetriRunner.builder(bound)
                         .environmentPlace(AdkColours.USER_IN)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start(),
                 ctx -> sessionOwners.computeIfAbsent(

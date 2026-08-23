@@ -160,7 +160,13 @@ public final class ToolDispatchSubnet {
             // RxJava Single as a normal value-returning call here.
             var result = tool.runAsync(args, toolContext).blockingGet();
             return successResponse(call, result);
-        } catch (Throwable err) {
+        } catch (Exception err) {
+            // Exception, not Throwable. A per-call failure becoming a structured
+            // error response is the point; an Error is not a per-call failure.
+            // Catching it would tell the model its weather tool had a problem
+            // while the JVM is going down, and would swallow the one class of
+            // failure that must reach the orchestrator. libpetri rethrows Error
+            // for the same reason.
             return errorResponse(call, err.getMessage(), err.getClass().getName());
         }
     }

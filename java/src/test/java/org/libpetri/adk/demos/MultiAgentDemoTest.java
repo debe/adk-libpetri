@@ -202,7 +202,6 @@ class MultiAgentDemoTest {
                 key -> PetriRunner.builder(bound)
                         .environmentPlace(AdkColours.USER_IN)
                         .eventStore(observabilityChain)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start(),
                 ctx -> sessionOwners.computeIfAbsent(
@@ -228,8 +227,17 @@ class MultiAgentDemoTest {
                 .toList()
                 .blockingGet();
 
-        // The runner emits the user-message event and the agent's response.
-        assertThat(events).isNotEmpty();
+        // Assert the agent's actual reply, not just that events exist.
+        // InMemoryRunner emits the user-message event unconditionally, so
+        // isNotEmpty() stayed green even if the net produced nothing at all,
+        // which is the whole thing this demo is here to show.
+        var agentText = events.stream()
+                .filter(e -> "planner".equals(e.author()))
+                .map(e -> e.content().map(Content::text).orElse(""))
+                .filter(t -> t != null && !t.isBlank())
+                .reduce((a, b) -> b)
+                .orElse(null);
+        assertThat(agentText).isEqualTo("Here's the answer to your question.");
 
         // ============================================================
         //  6. Observability assertion — OT spans were emitted for the
@@ -319,7 +327,6 @@ class MultiAgentDemoTest {
                 registry,
                 key -> PetriRunner.builder(net)
                         .environmentPlace(AdkColours.USER_IN)
-                        .actionExecutor(EXECUTOR)
                         .orchestratorExecutor(EXECUTOR)
                         .start(),
                 ctx -> sessionOwners.computeIfAbsent(
@@ -336,11 +343,16 @@ class MultiAgentDemoTest {
                 .toList()
                 .blockingGet();
 
-        // No exception, no NPE. The agent's response is the typed error event:
-        // either the planner-author event (if the unknown demux completed before
-        // PetriAgent's take(1) fired) or the planner's eventual event. Either
-        // way, the runner returns events successfully.
-        assertThat(events).isNotEmpty();
+        // No exception, no NPE. But "the runner returned events" is not the
+        // claim this test's name makes: assert the hallucinated name actually
+        // surfaced as a typed error event. The previous comment widened the
+        // claim until nothing could falsify it, and isNotEmpty() passes on the
+        // user-message event alone.
+        var errorText = events.stream()
+                .map(e -> e.content().map(Content::text).orElse(""))
+                .filter(t -> t != null && t.contains("hallucinated_typo"))
+                .findFirst();
+        assertThat(errorText).isPresent();
 
         registry.closeAll();
     }
@@ -427,8 +439,8 @@ class MultiAgentDemoTest {
                 .content(Content.builder().role("model")
                         .parts(List.of(Part.builder().functionCall(
                                 FunctionCall.builder()
-                                        .name(RouterSubnetMirror.TRANSFER_TO_AGENT_FN)
-                                        .args(Map.of(RouterSubnetMirror.TRANSFER_AGENT_NAME_ARG, targetAgent))
+                                        .name(RouterSubnet.TRANSFER_TO_AGENT_FN)
+                                        .args(Map.of(RouterSubnet.TRANSFER_AGENT_NAME_ARG, targetAgent))
                                         .build()).build()))
                         .build())
                 .build();
@@ -448,20 +460,4 @@ class MultiAgentDemoTest {
         };
     }
 
-    @SuppressWarnings("unused")
-    private static BaseTool fakeTool(String name) {
-        return new BaseTool(name, "demo tool") {
-            @Override public Single<Map<String, Object>> runAsync(Map<String, Object> args, ToolContext c) {
-                return Single.just(Map.of("answer", "ok"));
-            }
-        };
-    }
-
-    /** Local re-import to avoid Spring of doom; same constants as RouterSubnet. */
-    private static final class RouterSubnetMirror {
-        static final String TRANSFER_TO_AGENT_FN =
-                RouterSubnet.TRANSFER_TO_AGENT_FN;
-        static final String TRANSFER_AGENT_NAME_ARG =
-                RouterSubnet.TRANSFER_AGENT_NAME_ARG;
-    }
 }
