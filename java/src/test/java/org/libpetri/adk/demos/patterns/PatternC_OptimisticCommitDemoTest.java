@@ -7,7 +7,6 @@ import com.google.adk.events.Event;
 import com.google.adk.runner.InMemoryRunner;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
-import com.microsoft.z3.Context;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -140,8 +139,7 @@ class PatternC_OptimisticCommitDemoTest {
     }
 
     static boolean z3Available() {
-        try { new Context().close(); return true; }
-        catch (UnsatisfiedLinkError | NoClassDefFoundError _) { return false; }
+        return SmtVerifier.z3Available();
     }
 
     @Test
@@ -204,14 +202,21 @@ class PatternC_OptimisticCommitDemoTest {
                         VALIDATION_PASSED,
                         VALIDATION_FAILED,
                         CHEAP_PENDING)
+                // Strict deadlock-freedom (libpetri 5.0+) reads a resting
+                // token on a non-sink place as a stranding. SLOW_TRIGGER is
+                // stranded by design once the cheap path commits: Opt_RunSlow
+                // is inhibited by COMMITTED, which is the cancellation. Excuse
+                // it only under that marker, so a SLOW_TRIGGER left behind
+                // without a commit would still be reported.
+                .sinkPlacesWhen(COMMITTED, SLOW_TRIGGER)
                 .property(SmtProperty.placeBound(COMMITTED, 1))
                 .property(SmtProperty.mutualExclusion(
                         VALIDATION_PASSED, VALIDATION_FAILED))
                 .property(SmtProperty.deadlockFree())
                 .verify();
-        // libpetri 3.0.1 discharges an IC3 certificate before returning
-        // Proven and replays every counterexample, so a verdict that cannot
-        // be re-validated comes back Unknown. Assert the strong form: this
+        // libpetri validates every Proven (an IC3 certificate or a closed
+        // state-space enumeration) and replays every counterexample, so a
+        // verdict it cannot back comes back Unknown. Assert the strong form: this
         // project claims a proof here, and isViolated()==false alone would
         // also pass on Unknown, letting the claim rot silently.
         assertThat(result.isProven()).isTrue();

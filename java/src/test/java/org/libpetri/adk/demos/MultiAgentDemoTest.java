@@ -12,7 +12,6 @@ import com.google.adk.runner.InMemoryRunner;
 import com.google.adk.tools.BaseTool;
 import com.google.adk.tools.ToolContext;
 import com.google.genai.types.Content;
-import com.microsoft.z3.Context;
 import com.google.genai.types.FunctionCall;
 import com.google.genai.types.Part;
 import io.opentelemetry.api.trace.Tracer;
@@ -118,12 +117,7 @@ class MultiAgentDemoTest {
     }
 
     static boolean z3Available() {
-        try {
-            new Context().close();
-            return true;
-        } catch (UnsatisfiedLinkError | NoClassDefFoundError _) {
-            return false;
-        }
+        return SmtVerifier.z3Available();
     }
 
 
@@ -405,13 +399,26 @@ class MultiAgentDemoTest {
                         TransferRouterSubnet.UNKNOWN_TARGET,
                         TransferRouterSubnet.targetPlace("billing"),
                         TransferRouterSubnet.targetPlace("tech_support"))
+                // Strict deadlock-freedom (libpetri 5.0+) reads a resting
+                // token on a non-sink place as a stranding. A turn with no
+                // tool calls leaves its unspent reask budget behind; the next
+                // BuildPrompt resets it. Excuse it only once the turn has
+                // ended, by emitting or by transferring, so a budget stuck
+                // mid-turn is still a deadlock.
+                .sinkPlacesWhen(AdkColours.EVENT_OUT, LlmAgentSubnet.REASK_BUDGET)
+                .sinkPlacesWhen(TransferRouterSubnet.UNKNOWN_TARGET, LlmAgentSubnet.REASK_BUDGET)
+                .sinkPlacesWhen(TransferRouterSubnet.targetPlace("billing"),
+                        LlmAgentSubnet.REASK_BUDGET)
+                .sinkPlacesWhen(TransferRouterSubnet.targetPlace("tech_support"),
+                        LlmAgentSubnet.REASK_BUDGET)
                 .property(SmtProperty.deadlockFree())
                 .verify();
 
         // No counterexample = no reachable deadlock from the seeded initial
         // marking. Assert the strong form: the README and CLAUDE.md both say
-        // Z3 *proves* this net deadlock-free, and libpetri 3.0.1 downgrades a
-        // verdict whose IC3 certificate does not re-validate to Unknown.
+        // Z3 *proves* this net deadlock-free, and libpetri downgrades a
+        // verdict it cannot validate (certificate or closed enumeration) to
+        // Unknown.
         // isViolated()==false alone also passes on Unknown, which would let
         // the claim rot silently.
         assertThat(result.isProven()).isTrue();

@@ -20,18 +20,20 @@ Java 25, Maven 3.9.x via wrapper.
 
 | | Version |
 |---|---|
-| `org.libpetri:libpetri`              | 3.0.1  (Maven Central) |
-| `com.google.adk:google-adk`          | 1.8.0  (Maven Central) |
+| `org.libpetri:libpetri`              | 8.0.0  (Maven Central) |
+| `com.google.adk:google-adk`          | 1.10.1 (Maven Central) |
 | `com.google.genai:google-genai`      | 1.58.0 (transitive via google-adk) |
 | `io.reactivex.rxjava3:rxjava`        | 3.1.12 |
 | `io.opentelemetry:opentelemetry-api` | 1.51.0 (transitive via google-adk and libpetri); tests pin `opentelemetry-sdk-testing` 1.65.0 |
 
-Z3 (`com.microsoft.z3`) comes transitively from libpetri's
-`org.sosy-lab:javasmt-solver-z3`. SMT-using tests are gated via
-`@EnabledIf("z3Available")` so the build passes without native Z3
-libs installed. CI does not take that shortcut: it installs the JNI
-natives and sets `REQUIRE_Z3`, so `Z3NativeGateTest` fails the build
-rather than letting the verification suite skip silently.
+Since libpetri 4.0, SMT verification runs an external `z3` binary
+(4.8 or later, on `PATH` or named by `LIBPETRI_Z3`); there are no JNI
+natives and no Z3 Maven artifact. SMT-using tests are gated via
+`@EnabledIf("z3Available")`, which delegates to
+`SmtVerifier.z3Available()`, so the build passes without Z3 installed.
+CI does not take that shortcut: it installs `z3` and sets `REQUIRE_Z3`,
+so `Z3NativeGateTest` fails the build rather than letting the
+verification suite skip silently.
 
 ## Install
 

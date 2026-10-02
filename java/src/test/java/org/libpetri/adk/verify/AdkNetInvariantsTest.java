@@ -7,7 +7,6 @@ import com.google.adk.models.BaseLlmConnection;
 import com.google.adk.models.LlmRequest;
 import com.google.adk.models.LlmResponse;
 import com.google.adk.sessions.InMemorySessionService;
-import com.microsoft.z3.Context;
 import io.reactivex.rxjava3.core.Flowable;
 import java.util.Map;
 import java.util.Set;
@@ -50,12 +49,7 @@ class AdkNetInvariantsTest {
     // ============================================================
 
     static boolean z3Available() {
-        try {
-            new Context().close();
-            return true;
-        } catch (UnsatisfiedLinkError | NoClassDefFoundError _) {
-            return false;
-        }
+        return SmtVerifier.z3Available();
     }
 
     // ============================================================

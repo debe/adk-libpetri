@@ -7,7 +7,6 @@ import com.google.adk.events.Event;
 import com.google.adk.runner.InMemoryRunner;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
-import com.microsoft.z3.Context;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -126,8 +125,7 @@ class PatternA_SpeculativeRaceDemoTest {
     }
 
     static boolean z3Available() {
-        try { new Context().close(); return true; }
-        catch (UnsatisfiedLinkError | NoClassDefFoundError _) { return false; }
+        return SmtVerifier.z3Available();
     }
 
     @Test
@@ -190,6 +188,13 @@ class PatternA_SpeculativeRaceDemoTest {
                         AdkColours.EVENT_OUT,
                         RACE_WON,
                         RACE_DISCARDED)
+                // Strict deadlock-freedom (libpetri 5.0+) reads a resting
+                // token on a non-sink place as a stranding. Losing branches
+                // that never started keep their trigger: the inhibitor on
+                // RACE_WON is the structural cancellation. Excuse those
+                // triggers only once the race is won, so a trigger stranded
+                // without a winner would still be reported.
+                .sinkPlacesWhen(RACE_WON, TRIGGER_A, TRIGGER_B, TRIGGER_C)
                 // RACE_WON acts as the structural mutex: at most one commit
                 // ever produces a token there, and the inhibitor on every
                 // other commit guarantees mutual exclusion.
@@ -197,9 +202,9 @@ class PatternA_SpeculativeRaceDemoTest {
                 .property(SmtProperty.placeBound(AdkColours.EVENT_OUT, 1))
                 .property(SmtProperty.deadlockFree())
                 .verify();
-        // libpetri 3.0.1 discharges an IC3 certificate before returning
-        // Proven and replays every counterexample, so a verdict that cannot
-        // be re-validated comes back Unknown. Assert the strong form: this
+        // libpetri validates every Proven (an IC3 certificate or a closed
+        // state-space enumeration) and replays every counterexample, so a
+        // verdict it cannot back comes back Unknown. Assert the strong form: this
         // project claims a proof here, and isViolated()==false alone would
         // also pass on Unknown, letting the claim rot silently.
         assertThat(result.isProven()).isTrue();
