@@ -12,7 +12,6 @@ import com.google.adk.runner.InMemoryRunner;
 import com.google.genai.types.Blob;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
-import com.microsoft.z3.Context;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
@@ -123,12 +122,7 @@ class VoiceSessionDemoTest {
     }
 
     static boolean z3Available() {
-        try {
-            new Context().close();
-            return true;
-        } catch (UnsatisfiedLinkError | NoClassDefFoundError _) {
-            return false;
-        }
+        return SmtVerifier.z3Available();
     }
 
     @Test
@@ -888,9 +882,9 @@ class VoiceSessionDemoTest {
                 .property(SmtProperty.deadlockFree())
                 .verify();
 
-        // libpetri 3.0.1 discharges an IC3 certificate before returning
-        // Proven and replays every counterexample, so a verdict that cannot
-        // be re-validated comes back Unknown. Assert the strong form: this
+        // libpetri validates every Proven (an IC3 certificate or a closed
+        // state-space enumeration) and replays every counterexample, so a
+        // verdict it cannot back comes back Unknown. Assert the strong form: this
         // project claims a proof here, and isViolated()==false alone would
         // also pass on Unknown, letting the claim rot silently.
         assertThat(result.isProven()).isTrue();

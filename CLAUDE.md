@@ -30,10 +30,11 @@ cd java
 ./mvnw test -Dtest="*Streaming*"                # Wildcard
 ```
 
-Java 25 (no preview features needed). Maven 3.9.x via wrapper. Z3 is
-pulled transitively from libpetri. Tests requiring Z3 native libs
-use `@EnabledIf("z3Available")` so the build does not fail without
-them.
+Java 25 (no preview features needed). Maven 3.9.x via wrapper. SMT
+verification (libpetri 4.0+) runs an external `z3` binary (4.8+, on
+`PATH` or via `LIBPETRI_Z3`). Tests requiring it use
+`@EnabledIf("z3Available")` (delegating to `SmtVerifier.z3Available()`)
+so the build does not fail without it.
 
 ### Diagrams (`docs/diagrams/`)
 

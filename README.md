@@ -22,8 +22,8 @@ the provider-neutral `BidiPetriAgent` bridge over `LiveConnection`.
 There is no fork of ADK and no fork of genai.
 
 Both shipped demo nets are Z3-proved deadlock-free on every
-`mvn verify`, CI included: the workflow installs the Z3 JNI natives and a
-gate test fails the build if they stop loading, so the proofs cannot
+`mvn verify`, CI included: the workflow installs the `z3` binary and a
+gate test fails the build if it cannot be found, so the proofs cannot
 quietly turn into skips. The composed BIDI voice net additionally has its
 reachable state space confirmed finite by bounded state-class graph
 exploration.
@@ -739,18 +739,19 @@ cd java
 ```
 
 The Java suite includes unit, integration, demo, and verification tests.
-Z3 (`com.microsoft.z3`) is pulled transitively for the deadlock-free and
-bounded-state tests; those carry `@EnabledIf("z3Available")` so the build
-passes even without native Z3 libs installed. That skip is a convenience
-for contributors, not for CI: the workflow installs the natives and sets
-`REQUIRE_Z3`, which turns `Z3NativeGateTest` into a hard failure if they
-are missing. Otherwise the verification suite could disappear and the
+The deadlock-free and bounded-state tests need a `z3` binary (4.8 or
+later) on `PATH`, or named by `LIBPETRI_Z3`; libpetri runs it as an
+external process. Those tests carry `@EnabledIf("z3Available")` so the
+build passes even without Z3 installed. That skip is a convenience for
+contributors, not for CI: the workflow installs `z3` and sets
+`REQUIRE_Z3`, which turns `Z3NativeGateTest` into a hard failure if it
+is missing. Otherwise the verification suite could disappear and the
 badge would stay green. See [`java/README.md`](java/README.md) for
 composition patterns and the two end-to-end demos.
 
 ### Consuming from a project: protobuf version floor
 
-ADK 1.8.0's transitives (notably `com.google.cloud:google-cloud-dlp`
+ADK 1.10.1's transitives (notably `com.google.cloud:google-cloud-dlp`
 and `com.google.longrunning`) ship protobuf gencode compiled against
 4.33.x. The protobuf runtime contract is "runtime at least linked
 gencode," so consumers that pin protobuf-java to an older version hit
@@ -783,13 +784,13 @@ watch-item: shipped at 33.5.0 but commonly managed to 32.x).
 Which ADK version each claim here was verified against, what changed
 between ADK releases, and how to re-check it on the next bump are recorded
 in the version-compatibility ADRs, most recently
-[ADR 0003](docs/adr/0003-libpetri-3-and-adk-1.8.md); the re-check procedure
+[ADR 0004](docs/adr/0004-libpetri-8-and-adk-1.10.md); the re-check procedure
 itself lives in [ADR 0002](docs/adr/0002-adk-version-compat.md).
 
 ## Relationship to libpetri
 
 adk-libpetri consumes libpetri from Maven Central
-(`org.libpetri:libpetri:3.0.1`). It is a sibling project, not a fork.
+(`org.libpetri:libpetri:8.0.0`). It is a sibling project, not a fork.
 The shared design principles (env-place-only interaction, typed colours
 per concept, marking-as-state, EventStore-decorated observability) come
 from libpetri and apply identically here.

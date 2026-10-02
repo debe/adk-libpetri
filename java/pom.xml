@@ -38,11 +38,11 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>25</maven.compiler.release>
 
-        <libpetri.version>3.0.1</libpetri.version>
-        <google-adk.version>1.8.0</google-adk.version>
+        <libpetri.version>8.0.0</libpetri.version>
+        <google-adk.version>1.10.1</google-adk.version>
         <rxjava.version>3.1.12</rxjava.version>
         <!--
-          Protobuf floor required by ADK 1.8.0 transitives. Gencode in
+          Protobuf floor required by ADK 1.10.1 transitives. Gencode in
           com.google.cloud:google-cloud-dlp and com.google.longrunning is
           compiled against 4.33.x; a runtime older than the linked gencode
           throws ProtobufRuntimeVersionException at first class-load. The

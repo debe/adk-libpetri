@@ -9,7 +9,6 @@ import com.google.adk.models.LlmRequest;
 import com.google.adk.models.LlmResponse;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
-import com.microsoft.z3.Context;
 import io.reactivex.rxjava3.core.Flowable;
 import io.reactivex.rxjava3.subscribers.TestSubscriber;
 import java.util.ArrayDeque;
@@ -41,12 +40,7 @@ import org.libpetri.smt.SmtVerifier;
 class LlmStreamingStepSubnetTest {
 
     static boolean z3Available() {
-        try {
-            new Context().close();
-            return true;
-        } catch (UnsatisfiedLinkError | NoClassDefFoundError _) {
-            return false;
-        }
+        return SmtVerifier.z3Available();
     }
 
     // ============================================================

@@ -12,6 +12,29 @@ down when the project was first published; no 1.x tag or artifact ever
 existed.
 
 
+## Unreleased
+
+### Java
+
+- **Dependencies**: libpetri `3.0.1` -> `8.0.0` and google-adk `1.8.0` ->
+  `1.10.1`. genai stays `1.58.0`, protobuf stays `4.33.5` and rxjava stays
+  `3.1.12`, so the protobuf floor guidance is unchanged. ADK 1.10.x moves
+  `io.modelcontextprotocol.sdk:mcp` to `2.0.0`; adk-libpetri does not use it.
+  See [ADR 0004](docs/adr/0004-libpetri-8-and-adk-1.10.md).
+- **Z3 is now an external binary** (libpetri 4.0). SMT verification runs a
+  `z3` executable (4.8+, on `PATH` or named by `LIBPETRI_Z3`) instead of JNI
+  natives. This matters only to consumers who run libpetri's verifier; the
+  runtime path never needed Z3. The test probes use
+  `SmtVerifier.z3Available()`, and CI installs `z3` via apt.
+- **Stricter deadlock-freedom proofs.** libpetri 5.0's `deadlockFree()` treats
+  any token left on a non-sink place as a stranding. The speculative-race,
+  optimistic-commit and multi-agent demo proofs now declare their by-design
+  leftovers (cancelled triggers, an unspent reask budget) with
+  `sinkPlacesWhen(marker, ...)`, which excuses them only while the
+  explaining marker holds. Every mutex and bound claim still proves under
+  libpetri 8.0's in-flight splitting.
+
+
 ## Java 0.4.0 - 2026-08-21
 
 ### Java
