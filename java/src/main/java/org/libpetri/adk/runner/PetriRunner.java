@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -21,6 +22,7 @@ import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
 import org.libpetri.core.Token;
 import org.libpetri.event.EventStore;
+import org.libpetri.adk.Experimental;
 import org.libpetri.adk.bridge.EventStoreToFlowableBridge;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.runtime.BitmapNetExecutor;
@@ -643,6 +645,24 @@ public final class PetriRunner implements AutoCloseable {
          */
         public Builder restore(Map<String, List<Token<?>>> marking) {
             this.restore = Objects.requireNonNull(marking, "restore");
+            return this;
+        }
+
+        /**
+         * Resume this session from its latest checkpoint in {@code store}, if
+         * there is one: {@link #restore(Map)} with a fresh
+         * {@link #executionScope(String)}. Without a checkpoint this does
+         * nothing and the run starts from {@link #initialMarking(Map)}.
+         * The store is read once, here, before the executor exists.
+         */
+        @Experimental
+        public Builder resumeFrom(SessionCheckpointStore store, SessionKey key) {
+            Objects.requireNonNull(store, "store");
+            Objects.requireNonNull(key, "key");
+            store.load(key).ifPresent(marking -> {
+                restore(marking);
+                executionScope("resume-" + UUID.randomUUID());
+            });
             return this;
         }
 

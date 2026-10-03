@@ -3,10 +3,15 @@ package org.libpetri.adk.runner;
 import java.lang.ref.Cleaner;
 import java.lang.ref.Reference;
 import java.lang.ref.WeakReference;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import org.libpetri.adk.Experimental;
+import org.libpetri.runtime.SnapshotResult;
 
 /**
  * Lazy {@code Map<SessionKey, PetriRunner>} — preserves the
@@ -101,8 +106,14 @@ public final class SessionExecutorRegistry implements AutoCloseable {
         @Override public String toString() { return "<no owner>"; }
     };
 
+    private static final Logger LOG = Logger.getLogger(SessionExecutorRegistry.class.getName());
+
+    /** How long teardown waits for a session to reach a restore point. */
+    private static final Duration CHECKPOINT_WAIT = Duration.ofSeconds(2);
+
     private final ConcurrentMap<SessionKey, Entry> entries = new ConcurrentHashMap<>();
     private final Mode mode;
+    private final SessionCheckpointStore checkpoints;   // nullable
 
     /**
      * Slot per key. The owner reference is either weak (CLEANER mode,
@@ -129,8 +140,9 @@ public final class SessionExecutorRegistry implements AutoCloseable {
         }
     }
 
-    private SessionExecutorRegistry(Mode mode) {
+    private SessionExecutorRegistry(Mode mode, SessionCheckpointStore checkpoints) {
         this.mode = mode;
+        this.checkpoints = checkpoints;
     }
 
     /**
@@ -139,7 +151,18 @@ public final class SessionExecutorRegistry implements AutoCloseable {
      * Use when you have a stable strong-referenced lifetime owner.
      */
     public static SessionExecutorRegistry cleanerOwned() {
-        return new SessionExecutorRegistry(Mode.CLEANER);
+        return new SessionExecutorRegistry(Mode.CLEANER, null);
+    }
+
+    /**
+     * {@link #cleanerOwned()} that also saves each session's marking to
+     * {@code checkpoints} when its runner is torn down. See
+     * {@link SessionCheckpointStore}.
+     */
+    @Experimental
+    public static SessionExecutorRegistry cleanerOwned(SessionCheckpointStore checkpoints) {
+        return new SessionExecutorRegistry(Mode.CLEANER,
+                Objects.requireNonNull(checkpoints, "checkpoints"));
     }
 
     /**
@@ -148,7 +171,18 @@ public final class SessionExecutorRegistry implements AutoCloseable {
      * when your framework does not give you a clean strong owner.
      */
     public static SessionExecutorRegistry strongOwned() {
-        return new SessionExecutorRegistry(Mode.STRONG);
+        return new SessionExecutorRegistry(Mode.STRONG, null);
+    }
+
+    /**
+     * {@link #strongOwned()} that also saves each session's marking to
+     * {@code checkpoints} on {@link #close(SessionKey)} and
+     * {@link #closeAll()}. See {@link SessionCheckpointStore}.
+     */
+    @Experimental
+    public static SessionExecutorRegistry strongOwned(SessionCheckpointStore checkpoints) {
+        return new SessionExecutorRegistry(Mode.STRONG,
+                Objects.requireNonNull(checkpoints, "checkpoints"));
     }
 
     /**
@@ -307,8 +341,46 @@ public final class SessionExecutorRegistry implements AutoCloseable {
      */
     private void drain(SessionKey key) {
         Entry removed = entries.remove(key);
-        if (removed != null) {
+        if (removed == null) return;
+        if (checkpoints == null) {
             removed.runner().drainAsync();
+            return;
+        }
+        // Checkpointing may wait for a restore point; never on the Cleaner daemon.
+        Thread.ofVirtual().name("petri-checkpoint-" + key).start(() -> {
+            checkpoint(key, removed.runner());
+            removed.runner().drainAsync();
+        });
+    }
+
+    /**
+     * Saves {@code runner}'s marking if a checkpoint store is configured and
+     * the session reaches a restore point within {@link #CHECKPOINT_WAIT}.
+     * A snapshot taken while an action is in flight would miss the tokens
+     * that action consumed, so such a session is skipped, with a warning,
+     * rather than checkpointed wrong.
+     */
+    private void checkpoint(SessionKey key, PetriRunner runner) {
+        if (checkpoints == null) return;
+        long deadline = System.nanoTime() + CHECKPOINT_WAIT.toNanos();
+        try {
+            while (true) {
+                SnapshotResult snapshot = runner.snapshot();
+                if (snapshot.isRestorePoint()) {
+                    checkpoints.save(key, snapshot.marking());
+                    return;
+                }
+                if (System.nanoTime() >= deadline) {
+                    LOG.warning(() -> "Session " + key + " had an action in flight for "
+                            + CHECKPOINT_WAIT + "; not checkpointed.");
+                    return;
+                }
+                Thread.sleep(10);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, e, () -> "Checkpointing session " + key + " failed.");
         }
     }
 
@@ -321,6 +393,7 @@ public final class SessionExecutorRegistry implements AutoCloseable {
     public boolean close(SessionKey key) {
         Entry removed = entries.remove(key);
         if (removed == null) return false;
+        checkpoint(key, removed.runner());
         removed.runner().shutdown();
         return true;
     }
@@ -344,6 +417,9 @@ public final class SessionExecutorRegistry implements AutoCloseable {
 
     private void evictAndShutdown(SessionKey key, Entry expected) {
         if (entries.remove(key, expected)) {
+            // Saved before the caller creates the replacement runner, so a
+            // factory that resumes from the store picks this marking up.
+            checkpoint(key, expected.runner());
             expected.runner().shutdown();
         }
     }
