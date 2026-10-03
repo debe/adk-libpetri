@@ -673,13 +673,20 @@ and rejects a missing, unknown or doubly-bound transition, where
 `PetriNet.bindActions(Map)` would silently bind `passthrough()`.
 
 *Experimental:* a registry built with a `SessionCheckpointStore`
-(`strongOwned(store)`) saves each session's marking when it is torn
-down, provided no action is in flight, and a runner factory that calls
-`.resumeFrom(store, key)` starts from it. The marking stays the state:
-the store is written at session end and read before a runner starts,
-never during execution. The `AgentStateCheckpointStore` exemplar keeps
-the checkpoint in ADK's own session history, as an event's
-`EventActions.agentState`.
+(`strongOwned(store)`) checkpoints each session when it is torn down. It
+drains the runner first, refusing new injects and letting actions in
+flight finish, then saves the marking the run ended in, without
+`EVENT_OUT` (delivered events are egress, not state). A runner factory
+that calls `.resumeFrom(store, key)` starts from that checkpoint, or from
+its `initialMarking` when there is none. Until the save lands, a
+`getOrCreate` for the key waits, so the replacement always resumes from
+what its predecessor left. A run that does not drain within the
+checkpoint timeout loses its checkpoint rather than keep a stale one, and
+`registry.discard(key)` ends a session without saving it. The marking
+stays the state: the store is written at session end and read before a
+runner starts, never during execution. The `AgentStateCheckpointStore`
+exemplar keeps the checkpoint in ADK's own session history, as an
+event's `EventActions.agentState`.
 
 ### Why ADK and not pure libpetri?
 
