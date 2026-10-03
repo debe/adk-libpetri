@@ -168,7 +168,7 @@ public final class PersistStateSubnet {
                             persisted -> done.complete(null),
                             err -> done.completeExceptionally(err));
             return done
-                    .orTimeout(config.persistTimeout().toMillis(), TimeUnit.MILLISECONDS)
+                    .orTimeout(config.persistTimeout().toNanos(), TimeUnit.NANOSECONDS)
                     .whenComplete((v, err) -> {
                         if (err != null) subscription.dispose();
                     });

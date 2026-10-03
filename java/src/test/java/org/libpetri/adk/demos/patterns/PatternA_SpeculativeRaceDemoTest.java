@@ -170,25 +170,27 @@ class PatternA_SpeculativeRaceDemoTest {
                 .description("Speculative race across three branches")
                 .build();
 
-        var runner = new InMemoryRunner(agent);
-        var session = runner.sessionService()
-                .createSession(runner.appName(), "u", (Map<String, Object>) null, "s")
-                .blockingGet();
+        try {
+            var runner = new InMemoryRunner(agent);
+            var session = runner.sessionService()
+                    .createSession(runner.appName(), "u", (Map<String, Object>) null, "s")
+                    .blockingGet();
 
-        var events = runner.runAsync(
-                        session.userId(), session.id(),
-                        userMessage("which branch wins?"),
-                        RunConfig.builder().build())
-                .toList().blockingGet();
+            var events = runner.runAsync(
+                            session.userId(), session.id(),
+                            userMessage("which branch wins?"),
+                            RunConfig.builder().build())
+                    .toList().blockingGet();
 
-        // The agent emits exactly one Event — the fast branch's result.
-        // The losers' tokens, if any landed, drained via T_DiscardX.
-        var agentEvents = events.stream()
-                .filter(e -> "race_agent".equals(e.author())).toList();
-        assertThat(agentEvents).hasSize(1);
-        assertThat(agentEvents.get(0).content().get().text()).contains("fast");
-
-        registry.closeAll();
+            // The agent emits exactly one Event — the fast branch's result.
+            // The losers' tokens, if any landed, drained via T_DiscardX.
+            var agentEvents = events.stream()
+                    .filter(e -> "race_agent".equals(e.author())).toList();
+            assertThat(agentEvents).hasSize(1);
+            assertThat(agentEvents.get(0).content().get().text()).contains("fast");
+        } finally {
+            registry.closeAll();
+        }
     }
 
     /**

@@ -36,13 +36,22 @@ public final class ManualClock implements ExecutionEnvironment {
     private final Condition changed = lock.newCondition();
 
     private volatile long nanos;
+    /**
+     * The last {@link #nanoTime()} each thread read. The executor computes
+     * {@code delayNanos} from its own last reading, so the timer it waits on
+     * is due at that reading plus the delay, not at whatever the clock says
+     * once {@link #awaitWork} takes the lock.
+     */
+    private final ThreadLocal<Long> lastRead = ThreadLocal.withInitial(() -> 0L);
     /** Times the executor has started blocking in {@link #awaitWork}. */
     private long parks;
     private boolean parked;
 
     @Override
     public long nanoTime() {
-        return nanos;
+        long n = nanos;
+        lastRead.set(n);
+        return n;
     }
 
     @Override
@@ -53,14 +62,24 @@ public final class ManualClock implements ExecutionEnvironment {
     @Override
     public void awaitWork(BooleanSupplier ready, long delayNanos) {
         if (delayNanos <= 0 || ready.getAsBoolean()) return;
+        // Due at the reading the delay was computed from. An advance between
+        // that reading and this point would otherwise be absorbed into
+        // `entry` below, and the executor would park past a due timer until
+        // the next advance. Long.MAX_VALUE means no timer: never due.
+        long due = delayNanos == Long.MAX_VALUE
+                ? Long.MAX_VALUE
+                : saturatingAdd(lastRead.get(), delayNanos);
         lock.lock();
         try {
+            if (nanos >= due) return;
             long entry = nanos;
             parks++;
             parked = true;
             changed.signalAll();
             // Injected work does not signal this condition, so poll ready on a
-            // short real-time interval. Time itself only moves on advance().
+            // short real-time interval. Time itself only moves on advance(),
+            // and any advance returns, so the executor re-reads the clock and
+            // settle() sees it park again.
             while (!ready.getAsBoolean() && nanos == entry) {
                 changed.awaitNanos(POLL_NANOS);
             }
@@ -72,6 +91,11 @@ public final class ManualClock implements ExecutionEnvironment {
             changed.signalAll();
             lock.unlock();
         }
+    }
+
+    private static long saturatingAdd(long a, long b) {
+        long sum = a + b;
+        return ((a ^ sum) & (b ^ sum)) < 0 ? Long.MAX_VALUE : sum;
     }
 
     /** Moves logical time forward by {@code d} and wakes the executor. */
@@ -92,8 +116,14 @@ public final class ManualClock implements ExecutionEnvironment {
 
     /**
      * Runs {@code action}, then waits until the executor has parked again
-     * after it, i.e. has processed whatever the action caused and is idle
-     * or waiting on its next timer.
+     * after it, i.e. has processed whatever the action caused and is idle,
+     * waiting on its next timer, or waiting on an action still in flight.
+     *
+     * <p>That last case means "settled" is not "done": an executor with an
+     * asynchronous action in flight parks too (with no timer, so
+     * {@code Long.MAX_VALUE}), and this returns while the action is still
+     * running. A test that needs the action's output waits for it by a
+     * property of the marking or the egress, not by settling.
      */
     public void settle(Runnable action) {
         long before;

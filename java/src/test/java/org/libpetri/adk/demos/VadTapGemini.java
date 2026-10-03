@@ -72,14 +72,30 @@ public class VadTapGemini extends Gemini {
         return transport.thenApply(t -> new Tapped(t, onSignal));
     }
 
-    /** Delegates everything; {@code receive} sees each message first. */
+    /**
+     * Delegates everything; {@code receive} sees each message first.
+     *
+     * <p>{@code onSignal} runs inside ADK's receive callback, so a throw from
+     * it would propagate into the transport's receive loop and can end the
+     * live stream for the whole connection. Each signal is delivered in
+     * isolation instead: a failure is logged, and ADK still gets the message.
+     */
     private record Tapped(GeminiLiveTransport delegate, Consumer<VoiceSignal> onSignal)
             implements GeminiLiveTransport {
+
+        private static final System.Logger LOG = System.getLogger(VadTapGemini.class.getName());
 
         @Override
         public CompletableFuture<Void> receive(Consumer<LiveServerMessage> onMessage, Runnable onStreamEnd) {
             return delegate.receive(message -> {
-                SyncGeminiLiveConnection.voiceSignals(message).forEach(onSignal);
+                for (var signal : SyncGeminiLiveConnection.voiceSignals(message)) {
+                    try {
+                        onSignal.accept(signal);
+                    } catch (RuntimeException e) {
+                        LOG.log(System.Logger.Level.WARNING,
+                                "onSignal failed for " + signal + "; the live stream continues", e);
+                    }
+                }
                 onMessage.accept(message);
             }, onStreamEnd);
         }

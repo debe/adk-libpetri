@@ -111,14 +111,20 @@ existed.
   streaming wiring shared one `executorRef` across every session, so a
   second session misrouted the first one's chunks and its turn hung. Use
   `StreamingLlmAgentSubnet.runnerFactory(llm, config, customize)`, which
-  binds per session; `Config.executorRef` is now optional.
+  binds per session; `Config.executorRef` is now optional. `customize` is a
+  `BiConsumer<SessionKey, PetriRunner.Builder>`: it gets the session's key
+  (for `.resumeFrom(store, key)`) and runs before the factory's own
+  settings, so it cannot replace the per-session executor reference, and
+  declaring `USER_IN` or `CHUNK` in it fails the start.
 - **Fix: `PersistStateSubnet` now bounds `appendEvent`.** Its
   `Timing.deadline(5s)` bounded how long the transition may stay enabled,
   not how long the call runs, and under libpetri 8.0 a late orchestrator
   reaped it and stranded the write. It is now an action timeout,
-  `Config.persistTimeout` (default 5 s).
-- **Proofs match the README.** `StockSubnetProofsTest` proves each stock
-  subnet alone (`SubnetDef.verify`, `arrivals(k, k)`), and the composed
+  `Config.persistTimeout` (default 5 s, honoured to the nanosecond), and a
+  timed-out append has its Rx subscription disposed.
+- **Proofs match the README.** `StockSubnetProofsTest` proves `LlmStep`,
+  `Router`, `ToolDispatch`, `TransferRouter` and `PersistState` each alone
+  (`SubnetDef.verify`, `arrivals(k, k)`), and the composed
   `LlmAgentSubnet` turns every user input into exactly one answer,
   fallback or transfer; the reask budget is proved not to stack across
   inputs (design commitment 6), along with one turn and one conversation
@@ -133,12 +139,18 @@ existed.
   the owner extractor optional under `strongOwned()` (new
   `SessionExecutorRegistry.getOrCreate(key, factory)`); the `of`/`ofLive`
   overloads remain. Demos use `strongOwned()`, the documented default.
+  Mixing the ownerless `getOrCreate` with an explicit owner for one key
+  throws with a message that says so.
 - **libpetri runtime options.** `PetriRunner.Builder` gains `restore`,
   `executionScope`, `executionEnvironment` and `deadlineTolerance`, and
   `PetriRunner.snapshot()`; `snapshot`, `restore` and `executionScope` are
-  experimental, since the checkpoint format is the snapshot format. A terminal `END_INVOCATION` place ends a
-  session's run without a drain. `OtelEventStore(tracer, delegate, net)`
-  tags spans with `libpetri.transition` and `libpetri.subnet`.
+  experimental, since the checkpoint format is the snapshot format.
+  `OtelEventStore(tracer, delegate, net)` tags spans with
+  `libpetri.transition` and `libpetri.subnet`. libpetri 7.0's terminal
+  places need no new API here; `PetriRunnerTest` demonstrates one on
+  `END_INVOCATION`. A terminal token ends the whole per-session run, so it
+  is a session end rather than ADK's per-invocation `endInvocation`, and
+  the registry keeps returning the stopped runner until the key is closed.
 - **Session checkpoints** *(experimental)*: `SessionCheckpointStore`
   (`save`, `load`, `remove`); `SessionExecutorRegistry.strongOwned(store)`/
   `cleanerOwned(store)` drain a session's runner at teardown (new injects
@@ -157,12 +169,23 @@ existed.
   in ADK's `EventActions.agentState`, with an append-only tombstone for
   `remove`.
 - **Exemplars and tests.** `VadTapGemini` recovers the voice-activity edges
-  ADK drops by wrapping ADK 1.9's `GeminiLiveTransport`, with no fork.
+  ADK drops by wrapping ADK 1.9's `GeminiLiveTransport`, with no fork; a
+  throwing signal callback is logged rather than ending the live stream.
   `ManualClock` drives timed tests on a virtual clock; the silence-recovery
   tests no longer sleep.
 
-### Breaking
+#### Breaking
 
+- **libpetri `3.0.1` -> `8.0.0` arrives transitively**, five majors at
+  once. Code that uses libpetri directly should read libpetri's own
+  CHANGELOG. Three changes reach most such code: SMT verification needs a
+  `z3` binary, and `org.sosy-lab:javasmt-solver-z3` (with
+  `com.microsoft.z3`) is no longer on the classpath (4.0);
+  `deadlockFree()` counts any token left on a non-sink place as a
+  stranding, so a proof that passed may now come back Violated (5.0); and
+  a transition whose outputs another transition tests with an inhibitor,
+  reset or drain is verified as separate start and completion steps, which
+  can flip a bound or mutex proof (8.0, VER-004).
 - `AdkColours.ToolCalls` and `ToolResults` gained a `modelTurn` component,
   so record patterns must name two components and `equals`/`hashCode`
   now compare the model turn too. `ToolCalls` keeps its one-argument
@@ -191,7 +214,16 @@ existed.
 - `PetriRunner.ExecutorFactory.build` takes one `ExecutorSpec` record
   instead of six arguments.
 - `PersistStateSubnet.Config` gained `persistTimeout`, and `DEF` no longer
-  carries a `Timing.deadline`.
+  carries a `Timing.deadline`. A session service that has not answered
+  within `persistTimeout` (default 5 s) now fails the `Persist` transition
+  with a `TimeoutException`, and that write is dropped.
+- `SubnetActions` binding-mismatch messages now start with the net's name
+  in quotes (`'LlmAgent' action-binding mismatch: ...`) rather than
+  `Subnet 'LlmAgent' ...`, since `bindComposed` reports a composed net.
+  Code matching the old text needs updating.
+- *(experimental)* `StreamingLlmAgentSubnet.Config.executorRef` is no
+  longer required, so `executorRef()` may return `null`; the builder no
+  longer throws without one. `actionBindings` still requires it.
 - `AdkNetInvariants.noFireAfterEndInvocation` is removed; use
   `SmtProperty.mutualExclusion(AdkColours.END_INVOCATION, place)`.
 - *(experimental)* `LlmStreamingStepSubnet` drops `Places.CHUNK_BUDGET`,

@@ -374,8 +374,8 @@ public final class PetriRunner implements AutoCloseable {
      * {@link #precompiled()}; callers can supply their own, for example a
      * debug-wrapped executor decorator.
      *
-     * <p>A custom factory takes on two obligations the built-ins already meet,
-     * and getting either wrong fails quietly rather than loudly:
+     * <p>A custom factory takes on the obligations the built-ins already
+     * meet, and getting any of them wrong fails quietly rather than loudly:
      *
      * <ul>
      *   <li>Propagate {@code contextProvider} to the executor builder (e.g.
@@ -388,7 +388,19 @@ public final class PetriRunner implements AutoCloseable {
      *       {@link #loudActionFailure()}. Without one, a throwing action is
      *       silent on this runner's default {@code EventStore.noop()} wiring
      *       and its consumed tokens vanish from the marking unreported.</li>
+     *   <li>Apply every optional component of the {@link ExecutorSpec}:
+     *       {@code restore}, {@code executionScope}, {@code environment} and
+     *       {@code deadlineTolerance} (the built-ins show how). Each one is a
+     *       {@link Builder} setting the caller asked for; dropped, a
+     *       {@link Builder#resumeFrom resumed} session silently starts from
+     *       an empty marking, minted names can collide with restored ones,
+     *       and a virtual clock is ignored for the real one.</li>
      * </ul>
+     *
+     * <p>{@link ExecutorSpec} is constructed by the runtime, not by callers,
+     * and may gain components as libpetri grows executor options. A factory
+     * that reads it by accessor keeps compiling when it does; a new
+     * component is one more thing to apply.
      *
      * <p>{@code orchestratorExecutor} hosts libpetri's own loop under
      * {@code run(Duration)}. Note that actions are invoked inline rather than
@@ -444,9 +456,12 @@ public final class PetriRunner implements AutoCloseable {
     }
 
     /**
-     * Everything an {@link ExecutorFactory} needs to build one executor. The
-     * optional components are libpetri executor-builder options that are
-     * left at libpetri's defaults when absent:
+     * Everything an {@link ExecutorFactory} needs to build one executor.
+     * {@link Builder#start()} constructs it; callers only read it, and it may
+     * gain components in any minor release as libpetri adds executor options.
+     * The optional components are libpetri executor-builder options that are
+     * left at libpetri's defaults when absent, and a factory must apply each
+     * one that is present:
      *
      * <ul>
      *   <li>{@code restore}: a marking from {@code snapshot()} to resume
@@ -601,7 +616,8 @@ public final class PetriRunner implements AutoCloseable {
          * genuine worker pool because that action submits to it explicitly.
          *
          * <p>Retained and still accepted so existing callers keep compiling;
-         * no longer required. Scheduled for removal in 1.0.
+         * no longer required. It may be removed in any minor release, as
+         * the 0.x line allows.
          *
          * @deprecated never dispatched actions and is unused on this path.
          *     Configure {@link #orchestratorExecutor(ExecutorService)}.

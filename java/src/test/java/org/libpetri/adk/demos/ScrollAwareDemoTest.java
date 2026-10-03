@@ -136,82 +136,84 @@ class ScrollAwareDemoTest {
                 .description("Echoes user message + recorded scroll count")
                 .build();
 
-        var adkRunner = new InMemoryRunner(agent);
-        var session = adkRunner.sessionService()
-                .createSession(adkRunner.appName(), "user-1", (Map<String, Object>) null, "session-1")
-                .blockingGet();
+        try {
+            var adkRunner = new InMemoryRunner(agent);
+            var session = adkRunner.sessionService()
+                    .createSession(adkRunner.appName(), "user-1", (Map<String, Object>) null, "session-1")
+                    .blockingGet();
 
-        // ============================================================
-        // 3. Force the per-session runner to be created BEFORE we
-        //    inject scrolls — otherwise registry.get(key) is null
-        //    (no active runner yet). The realistic application pattern
-        //    is identical: the session-start path (e.g. websocket open)
-        //    drives runner creation before any side-channel inject.
-        //
-        //    We do this by initiating one no-op ADK invocation first,
-        //    or — more directly — by calling getOrCreate on the
-        //    registry the way PetriAgent does. The dedicated init step
-        //    is what an HTTP handler would also do.
-        // ============================================================
-        var sessionKey = SessionKey.from(session);
-        registry.getOrCreate(sessionKey,
-                key -> PetriRunner.builder(net)
-                        .environmentPlace(AdkColours.USER_IN)
-                        .environmentPlace(SCROLL_IN)
-                        .initialMarking(Map.of(
-                                SCROLL_COUNT, List.of(Token.of(0L))))
-                        .orchestratorExecutor(EXECUTOR)
-                        .start());
+            // ============================================================
+            // 3. Force the per-session runner to be created BEFORE we
+            //    inject scrolls — otherwise registry.get(key) is null
+            //    (no active runner yet). The realistic application pattern
+            //    is identical: the session-start path (e.g. websocket open)
+            //    drives runner creation before any side-channel inject.
+            //
+            //    We do this by initiating one no-op ADK invocation first,
+            //    or — more directly — by calling getOrCreate on the
+            //    registry the way PetriAgent does. The dedicated init step
+            //    is what an HTTP handler would also do.
+            // ============================================================
+            var sessionKey = SessionKey.from(session);
+            registry.getOrCreate(sessionKey,
+                    key -> PetriRunner.builder(net)
+                            .environmentPlace(AdkColours.USER_IN)
+                            .environmentPlace(SCROLL_IN)
+                            .initialMarking(Map.of(
+                                    SCROLL_COUNT, List.of(Token.of(0L))))
+                            .orchestratorExecutor(EXECUTOR)
+                            .start());
 
-        // ============================================================
-        // 4. Inject scrolls from a separate (non-ADK) thread, BEFORE
-        //    the ADK turn. This is the load-bearing demonstration:
-        //    arbitrary external signals reach the running net through
-        //    the same env-place injection model as USER_IN.
-        // ============================================================
-        // try-with-resources: ExecutorService is AutoCloseable since Java 21.
-        // This used to pass an anonymous newSingleThreadExecutor() with no
-        // reference kept and no shutdown, leaking a non-daemon platform thread
-        // for the life of the JVM -- in a file presented as copy-and-adapt
-        // guidance.
-        try (var scroller = Executors.newSingleThreadExecutor()) {
-            CompletableFuture.runAsync(() -> {
-                for (int i = 0; i < 5; i++) {
-                    registry.get(sessionKey)
-                            .inject(SCROLL_IN, new Scroll(0, 40))
-                            .join();
-                }
-            }, scroller).get(2, TimeUnit.SECONDS);
+            // ============================================================
+            // 4. Inject scrolls from a separate (non-ADK) thread, BEFORE
+            //    the ADK turn. This is the load-bearing demonstration:
+            //    arbitrary external signals reach the running net through
+            //    the same env-place injection model as USER_IN.
+            // ============================================================
+            // try-with-resources: ExecutorService is AutoCloseable since Java 21.
+            // This used to pass an anonymous newSingleThreadExecutor() with no
+            // reference kept and no shutdown, leaking a non-daemon platform thread
+            // for the life of the JVM -- in a file presented as copy-and-adapt
+            // guidance.
+            try (var scroller = Executors.newSingleThreadExecutor()) {
+                CompletableFuture.runAsync(() -> {
+                    for (int i = 0; i < 5; i++) {
+                        registry.get(sessionKey)
+                                .inject(SCROLL_IN, new Scroll(0, 40))
+                                .join();
+                    }
+                }, scroller).get(2, TimeUnit.SECONDS);
+            }
+
+            // Wait until the orchestrator has fired T_RecordScroll for every
+            // injected scroll. Inject acceptance only guarantees the token
+            // is in the env place; we need the recording transition to have
+            // completed for SCROLL_COUNT to reflect the new total before
+            // T_Echo reads it.
+            awaitQuiescent(registry.get(sessionKey), 2_000);
+
+            // ============================================================
+            // 5. Drive an ADK turn. T_Echo reads SCROLL_COUNT and emits
+            //    an Event reflecting the recorded scrolls.
+            // ============================================================
+            var events = adkRunner.runAsync(
+                            session.userId(),
+                            session.id(),
+                            userMessage("hello"),
+                            RunConfig.builder().build())
+                    .toList().blockingGet();
+
+            var lastFromAgent = events.stream()
+                    .filter(e -> "scroll_aware_agent".equals(e.author()))
+                    .reduce((first, second) -> second)
+                    .orElseThrow();
+            assertThat(lastFromAgent.content().get().text())
+                    .isEqualTo("you scrolled 5 times; you said: hello");
+        } finally {
+            // Explicit teardown: with strongOwned(), the documented default, this
+            // is how a session's runner ends (from a session-end hook in an app).
+            registry.closeAll();
         }
-
-        // Wait until the orchestrator has fired T_RecordScroll for every
-        // injected scroll. Inject acceptance only guarantees the token
-        // is in the env place; we need the recording transition to have
-        // completed for SCROLL_COUNT to reflect the new total before
-        // T_Echo reads it.
-        awaitQuiescent(registry.get(sessionKey), 2_000);
-
-        // ============================================================
-        // 5. Drive an ADK turn. T_Echo reads SCROLL_COUNT and emits
-        //    an Event reflecting the recorded scrolls.
-        // ============================================================
-        var events = adkRunner.runAsync(
-                        session.userId(),
-                        session.id(),
-                        userMessage("hello"),
-                        RunConfig.builder().build())
-                .toList().blockingGet();
-
-        var lastFromAgent = events.stream()
-                .filter(e -> "scroll_aware_agent".equals(e.author()))
-                .reduce((first, second) -> second)
-                .orElseThrow();
-        assertThat(lastFromAgent.content().get().text())
-                .isEqualTo("you scrolled 5 times; you said: hello");
-
-        // Explicit teardown: with strongOwned(), the documented default, this
-        // is how a session's runner ends (from a session-end hook in an app).
-        registry.closeAll();
     }
 
     // ============================================================

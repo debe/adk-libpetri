@@ -50,7 +50,7 @@ user event inside `runAgentForUserEvent`, with the same order and events.
 The new `GeminiLiveTransport` seam is the first upstream hook that sees raw
 `LiveServerMessage`s before ADK maps them. It could replace the direct
 `client.async.live` read for VAD with a wrapping transport, staying fork-free.
-Deferred; see below.
+Taken up in the same release; see Follow-up.
 
 ## libpetri 3.0.1 -> 8.0.0: what it cost us
 
@@ -59,7 +59,9 @@ Deferred; see below.
 libpetri now drives Z3 as an external process (`z3` 4.8+ on `PATH`, or
 `LIBPETRI_Z3`). `com.microsoft.z3.Context` no longer arrives transitively, so
 every `z3Available()` probe that constructed a `Context` stopped compiling.
-All seven now delegate to `SmtVerifier.z3Available()`. `Z3NativeGateTest`
+Eight places constructed one: seven `z3Available()` probes and
+`Z3NativeGateTest`. All eight now call `SmtVerifier.z3Available()` (and
+`StockSubnetProofsTest`, added later, does the same). `Z3NativeGateTest`
 keeps its job (fail the build under `REQUIRE_Z3` rather than let the SMT suite
 skip silently) and now checks for the binary.
 
@@ -78,11 +80,12 @@ counterexample from closed state-space enumeration:
 |---|---|---|
 | `PatternA_SpeculativeRaceDemoTest` | `triggerB`, `triggerC` | Losing branches that never started; `inhibitor(RACE_WON)` is the cancellation. |
 | `PatternC_OptimisticCommitDemoTest` | `slowTrigger` | The slow path, cancelled by `inhibitor(COMMITTED)`. |
-| `MultiAgentDemoTest` | `LlmAgent_reaskBudget` | Unspent budget after a turn with no tool calls; the next `BuildPrompt` resets it. Surfaces on both the `EVENT_OUT` and the transfer-target endings. |
+| `MultiAgentDemoTest` | `LlmAgent_reaskBudget`, and `LlmAgent_conversation` once the re-ask carried the conversation | Unspent budget and the finished turn's conversation; the next `BuildPrompt` resets both. Surfaces on both the `EVENT_OUT` and the transfer-target endings. |
 
-Superseded in part by ADR 0005: the agent's turn ends now reset the reask
-budget and return the turn permit, so `MultiAgentDemoTest` no longer excuses
-`LlmAgent_reaskBudget`; it declares the permit a sink instead.
+Superseded in part by ADR 0005: the agent's turn ends now clear the reask
+budget and the conversation and return the turn permit, so
+`MultiAgentDemoTest` no longer excuses `LlmAgent_reaskBudget` or
+`LlmAgent_conversation`; it declares the permit a sink instead.
 
 We did not answer with plain `sinkPlaces`, which would excuse those tokens
 unconditionally and hide a real stranding mid-turn. Each one is declared with
@@ -169,6 +172,17 @@ The items this ADR first deferred were taken up in the same release:
   deadline never bounded what it claimed to (a hung `appendEvent`), so it
   became an action timeout rather than a choice between `assumeNoReaping`
   and stranded writes.
+
+Adopted alongside them, though never deferred:
+
+- libpetri's newer executor-builder options (`restore`, `executionScope`,
+  `executionEnvironment`, `deadlineTolerance`), passed to custom executor
+  factories through one `PetriRunner.ExecutorSpec`.
+- `PetriNet.subnetOf`, which `OtelEventStore` uses to tag each span with
+  the subnet its transition came from.
+- 7.0's terminal places, demonstrated in `PetriRunnerTest` with a terminal
+  `END_INVOCATION`. That ends the whole per-session run, so it is a session
+  end, not ADK's per-invocation end; the `END_INVOCATION` inhibitors stay.
 
 ## Next-bump procedure
 
