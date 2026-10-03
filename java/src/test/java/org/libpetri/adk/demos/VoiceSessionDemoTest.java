@@ -55,7 +55,7 @@ import org.libpetri.core.Token;
 import org.libpetri.core.Transition;
 import org.libpetri.adk.ManualClock;
 import org.libpetri.adk.bridge.OtelEventStore;
-import org.libpetri.adk.verify.AdkNetInvariants;
+import org.libpetri.adk.verify.SmtProofs;
 import org.libpetri.core.TransitionAction;
 import org.libpetri.event.EventStore;
 import org.libpetri.runtime.PetriNetExecutor;
@@ -86,9 +86,6 @@ import org.libpetri.smt.SmtVerifier;
  *       arrive, not at the end. The streaming subnet's executor ref is
  *       typed against {@link PetriNetExecutor}, so it works with any
  *       executor impl the runner picks.</li>
- *   <li><b>Marking-bounded budget</b> — {@code CHUNK_BUDGET} stays
- *       pinned at K via the consume-and-return invariant on the
- *       streaming emit transition.</li>
  *   <li><b>Barge-in via inhibitor/read pair</b> — when the user starts
  *       speaking mid-response, exactly one of two competing transitions
  *       fires (send vs discard), driven by a single shared
@@ -134,7 +131,6 @@ class VoiceSessionDemoTest {
         // ============================================================
         var execRef = new AtomicReference<PetriNetExecutor>();
         var streamingConfig = LlmStreamingStepSubnet.Config.builder("voice_agent")
-                .chunkBudget(4)
                 .executorRef(execRef)
                 .build();
         var recoveryDef = LiveApiRecoverySubnet.def(FAST_RECOVERY);
@@ -299,10 +295,6 @@ class VoiceSessionDemoTest {
                 .isNotEmpty();
         assertThat(finalMarking.peekTokens(LiveApiRecoverySubnet.Places.RECONNECT_NEEDED))
                 .isNotEmpty();
-
-        // Budget invariant: CHUNK_BUDGET back at K after all emits.
-        assertThat(finalMarking.peekTokens(LlmStreamingStepSubnet.Places.CHUNK_BUDGET))
-                .hasSize(4);
 
         registry.closeAll();
     }
@@ -817,7 +809,7 @@ class VoiceSessionDemoTest {
 
     @Test
     @EnabledIf("z3Available")
-    void composed_voice_demo_net_is_smt_proven_deadlock_free_with_bounded_chunk_budget() {
+    void composed_voice_demo_net_is_smt_proven_deadlock_free() {
         var recoveryDef = LiveApiRecoverySubnet.def(FAST_RECOVERY);
         var startStream = Transition.builder(T_START_STREAM)
                 .inputs(Arc.In.one(AdkColours.USER_IN))
@@ -827,10 +819,9 @@ class VoiceSessionDemoTest {
         // must carry a producing action at verification as well as at
         // execution. Bind every composed subnet plus the local StartStream
         // transition (which only moves its token across, hence fork()), so
-        // the bound is proven about the net that runs. The actions are never
+        // the proof is about the net that runs. The actions are never
         // invoked here; only the structure is encoded.
         var verifyStreamConfig = LlmStreamingStepSubnet.Config.builder("voice-verify")
-                .chunkBudget(4)
                 .executorRef(new AtomicReference<PetriNetExecutor>())
                 .build();
         var net = SubnetActions.bindComposed(
@@ -852,33 +843,23 @@ class VoiceSessionDemoTest {
         var responseAwaitedEnv = EnvironmentPlace.of(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED);
         var modelActiveEnv    = EnvironmentPlace.of(LiveApiRecoverySubnet.Places.MODEL_ACTIVE);
 
-        var result = SmtVerifier.forNet(net)
-                .initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
-                .environmentPlaces(userInEnv, chunkEnv, interruptedEnv, voiceOpenEnv,
-                                   responseAwaitedEnv, modelActiveEnv)
-                .environmentMode(EnvironmentAnalysisMode.bounded(1))
-                .sinkPlaces(
-                        AdkColours.EVENT_OUT,
-                        AdkColours.LLM_RESPONSE,
-                        BargeInSubnet.Places.BARGE_IN_SENT,
-                        BargeInSubnet.Places.INTERRUPT_DISCARDED,
-                        LiveApiRecoverySubnet.Places.NUDGE_NEEDED,
-                        LiveApiRecoverySubnet.Places.RECONNECT_NEEDED)
-                // Stated in seeds: libpetri models SeedAndStart's K permits
-                // as one token (no weighted output arcs), so a bound of K
-                // would be vacuous. One seed's worth is the real invariant.
-                .property(AdkNetInvariants.budgetPlaceBounded(
-                        LlmStreamingStepSubnet.Places.CHUNK_BUDGET, 1))
-                .property(SmtProperty.deadlockFree())
-                .verify();
-
-        // libpetri validates every Proven (an IC3 certificate or a closed
-        // state-space enumeration) and replays every counterexample, so a
-        // verdict it cannot back comes back Unknown. Assert the strong form: this
-        // project claims a proof here, and isViolated()==false alone would
-        // also pass on Unknown, letting the claim rot silently.
-        assertThat(result.isProven()).isTrue();
-        assertThat(result.isViolated()).isFalse();
+        // One property, so one verify(). This used to chain a CHUNK_BUDGET
+        // bound in front of deadlockFree(); SmtVerifier.property() replaces
+        // rather than adds, so only deadlock-freedom was ever checked, and
+        // the bound did not hold on its own. The budget is gone.
+        SmtProofs.assertEachProven(net,
+                v -> v.initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
+                        .environmentPlaces(userInEnv, chunkEnv, interruptedEnv, voiceOpenEnv,
+                                           responseAwaitedEnv, modelActiveEnv)
+                        .environmentMode(EnvironmentAnalysisMode.bounded(1))
+                        .sinkPlaces(
+                                AdkColours.EVENT_OUT,
+                                AdkColours.LLM_RESPONSE,
+                                BargeInSubnet.Places.BARGE_IN_SENT,
+                                BargeInSubnet.Places.INTERRUPT_DISCARDED,
+                                LiveApiRecoverySubnet.Places.NUDGE_NEEDED,
+                                LiveApiRecoverySubnet.Places.RECONNECT_NEEDED),
+                Map.of("deadlockFree", SmtProperty.deadlockFree()));
     }
 
     // ============================================================

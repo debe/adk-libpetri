@@ -161,7 +161,6 @@ class PetriAgentSseTest {
             var suppliedInvocationIds = new AtomicInteger();
             var config = StreamingLlmAgentSubnet.Config.builder(AGENT_NAME, "fake-model")
                     .dispatchExecutor(EXECUTOR)
-                    .chunkBudget(4)
                     .invocationIdSupplier(() -> "net-generated-" + suppliedInvocationIds.incrementAndGet())
                     .build();
             var runner = new InMemoryRunner(agentFor(llm, registry, config));

@@ -28,8 +28,7 @@ import org.libpetri.runtime.PetriNetExecutor;
 
 /**
  * Streaming variant of {@link LlmStepSubnet} — does true incremental
- * env-place injection per partial chunk and bounds the in-flight chunk
- * count via a marking-based budget (so the bound is SMT-verifiable).
+ * env-place injection per partial chunk.
  *
  * <h2>Why env-place injection (not batched ctx.output)</h2>
  * <p>A naive "collect the {@code Flowable} into a list then produce N
@@ -48,41 +47,28 @@ import org.libpetri.runtime.PetriNetExecutor;
  * partial markers emit partial {@link Event}s, and the terminal marker
  * releases the merged {@link LlmResponse} to the downstream router.
  *
- * <h2>Budgeting — boundedness via marking</h2>
- * <p>{@code T_EmitChunk} requires <i>both</i> a {@code CHUNK} token
- * (env-injected) <i>and</i> a {@code CHUNK_BUDGET} permit from a
- * fixed pool seeded at K tokens by {@code T_SeedAndStart} on every
- * new request. The emit transition consumes one permit and produces
- * one back, so {@code CHUNK_BUDGET} is structurally
- * <b>K-invariant</b>: it never exceeds and never drops below K (modulo
- * the brief window while the emit action is in-flight). This is the
- * SMT-verifiable property — {@code PlaceBound(CHUNK_BUDGET, K)} via
- * {@code AdkNetInvariants.budgetPlaceBounded(...)} — that proves
- * the at-most-K-concurrent-emissions invariant holds across all
- * reachable markings.
+ * <h2>Emission order and back-pressure</h2>
+ * <p>{@code T_EmitChunk} emits one chunk per firing, in arrival order. Its
+ * action completes synchronously, and the Java executor never starts a
+ * transition again while an earlier firing of it is in flight (libpetri
+ * CONC-002), so emission is serial without any permit place. Earlier
+ * versions threaded a {@code CHUNK_BUDGET} permit pool through the emit
+ * transition; since the transition returned the permit it took, the pool
+ * never bounded anything, and it was removed.
  *
- * <p>The env-side {@code CHUNK} queue itself is not strictly
- * marking-bounded (env-place injections from outside the net's arc
- * semantics) — bounding it requires producer-side back-pressure
- * (e.g. an in-action {@link java.util.concurrent.Semaphore} that
- * {@code T_EmitChunk} releases via a side callback). The example
- * below shows the simpler version that bounds <i>emission concurrency</i>
- * (K-bounded permit pool); producer-side rate-matching is a load-
- * specific extension layered on top.
+ * <p>The env-side {@code CHUNK} queue itself is not marking-bounded: a stream
+ * injects as fast as the model produces. Bounding it needs producer-side
+ * back-pressure (for example an in-action
+ * {@link java.util.concurrent.Semaphore} that {@code T_EmitChunk} releases
+ * through a side callback), a load-specific extension layered on top.
  *
  * <h2>Topology</h2>
  * <pre>
- *   [LLM_REQUEST] --T_SeedAndStart--> Out.and([LLM_REQUEST_INTERNAL],
- *                                              [CHUNK_BUDGET])
- *                  reset(CHUNK_BUDGET); action seeds K budget tokens
+ *   [LLM_REQUEST] --T_LlmCallStream--> (no direct output)
+ *                   side effect: inject N partial chunks, then
+ *                   one terminal merged response into CHUNK env place
  *
- *   [LLM_REQUEST_INTERNAL] --T_LlmCallStream--> (no direct output)
- *                            side effect: inject N partial chunks, then
- *                            one terminal merged response into CHUNK env place
- *
- *   [CHUNK]env + [CHUNK_BUDGET] --T_EmitChunk-->
- *       Out.xor(Out.and([EVENT_OUT], [CHUNK_BUDGET]),
- *               Out.and([LLM_RESPONSE], [CHUNK_BUDGET]))
+ *   [CHUNK]env --T_EmitChunk--> Out.xor([EVENT_OUT], [LLM_RESPONSE])
  * </pre>
  *
  * <h2>Executor wiring</h2>
@@ -100,7 +86,7 @@ import org.libpetri.runtime.PetriNetExecutor;
  * var structure = PetriNet.builder("stream").compose(LlmStreamingStepSubnet.DEF).build();
  * Function<SessionKey, PetriRunner> factory = key -> {
  *     var execRef = new AtomicReference<PetriNetExecutor>();
- *     var config = LlmStreamingStepSubnet.Config.builder("agent").chunkBudget(8)
+ *     var config = LlmStreamingStepSubnet.Config.builder("agent")
  *         .executorRef(execRef).build();
  *     return PetriRunner.builder(structure.bindActions(
  *                 LlmStreamingStepSubnet.actionBindings(llm, config)))
@@ -116,17 +102,12 @@ public final class LlmStreamingStepSubnet {
     public static final String NAME = "LlmStreamingStep";
 
     public static final class Transitions {
-        public static final String SEED_AND_START   = NAME + "_SeedAndStart";
         public static final String LLM_CALL_STREAM  = NAME + "_LlmCallStream";
         public static final String EMIT_CHUNK       = NAME + "_EmitChunk";
         private Transitions() {}
     }
 
     public static final class Places {
-        /** Internal request handoff — keeps LLM_REQUEST as a clean boundary. */
-        public static final Place<LlmRequest> LLM_REQUEST_INTERNAL =
-                Place.of(NAME + "_llmRequestInternal", LlmRequest.class);
-
         /**
          * Per-chunk arrival queue — wrap as {@link EnvironmentPlace} at
          * executor build time. Each injection is a separate partial
@@ -134,15 +115,6 @@ public final class LlmStreamingStepSubnet {
          */
         public static final Place<LlmResponseChunk> CHUNK =
                 Place.of(NAME + "_chunk", LlmResponseChunk.class);
-
-        /**
-         * Budget place — seeded with K {@link Void} permits per request.
-         * Structurally K-invariant since {@code T_EmitChunk} consumes
-         * and returns one permit per fire. The K bound is the
-         * SMT-verifiable concurrent-emission constraint.
-         */
-        public static final Place<Void> CHUNK_BUDGET =
-                Place.of(NAME + "_chunkBudget", Void.class);
 
         private Places() {}
     }
@@ -157,16 +129,12 @@ public final class LlmStreamingStepSubnet {
     public record Config(
             String author,
             Supplier<String> invocationIdSupplier,
-            int chunkBudget,
             AtomicReference<PetriNetExecutor> executorRef) {
 
         public Config {
             Objects.requireNonNull(author, "author");
             Objects.requireNonNull(invocationIdSupplier, "invocationIdSupplier");
             Objects.requireNonNull(executorRef, "executorRef");
-            if (chunkBudget < 1) {
-                throw new IllegalArgumentException("chunkBudget must be >= 1, got: " + chunkBudget);
-            }
         }
 
         public static Builder builder(String author) { return new Builder(author); }
@@ -174,14 +142,12 @@ public final class LlmStreamingStepSubnet {
         public static final class Builder {
             private final String author;
             private Supplier<String> invocationIdSupplier = () -> UUID.randomUUID().toString();
-            private int chunkBudget = 4;
             private AtomicReference<PetriNetExecutor> executorRef;
             private Builder(String author) { this.author = author; }
             public Builder invocationIdSupplier(Supplier<String> s) { this.invocationIdSupplier = s; return this; }
-            public Builder chunkBudget(int n) { this.chunkBudget = n; return this; }
             public Builder executorRef(AtomicReference<PetriNetExecutor> ref) { this.executorRef = ref; return this; }
             public Config build() {
-                return new Config(author, invocationIdSupplier, chunkBudget,
+                return new Config(author, invocationIdSupplier,
                         Objects.requireNonNull(executorRef, "executorRef must be set before build"));
             }
         }
@@ -191,22 +157,13 @@ public final class LlmStreamingStepSubnet {
             .place(AdkColours.LLM_REQUEST)
             .place(AdkColours.LLM_RESPONSE)
             .place(AdkColours.EVENT_OUT)
-            .place(Places.LLM_REQUEST_INTERNAL)
             .place(Places.CHUNK)
-            .place(Places.CHUNK_BUDGET)
-            .transition(Transition.builder(Transitions.SEED_AND_START)
-                    .inputs(Arc.In.one(AdkColours.LLM_REQUEST))
-                    .reset(Places.CHUNK_BUDGET)
-                    .outputs(Arc.Out.and(Places.LLM_REQUEST_INTERNAL, Places.CHUNK_BUDGET))
-                    .build())
             .transition(Transition.builder(Transitions.LLM_CALL_STREAM)
-                    .inputs(Arc.In.one(Places.LLM_REQUEST_INTERNAL))
+                    .inputs(Arc.In.one(AdkColours.LLM_REQUEST))
                     .build())
             .transition(Transition.builder(Transitions.EMIT_CHUNK)
-                    .inputs(Arc.In.one(Places.CHUNK), Arc.In.one(Places.CHUNK_BUDGET))
-                    .outputs(Arc.Out.xor(
-                            Arc.Out.and(AdkColours.EVENT_OUT, Places.CHUNK_BUDGET),
-                            Arc.Out.and(AdkColours.LLM_RESPONSE, Places.CHUNK_BUDGET)))
+                    .inputs(Arc.In.one(Places.CHUNK))
+                    .outputs(Arc.Out.xor(AdkColours.EVENT_OUT, AdkColours.LLM_RESPONSE))
                     .priority(20)
                     .build())
             .inputPort("llmRequest",   AdkColours.LLM_REQUEST)
@@ -218,7 +175,6 @@ public final class LlmStreamingStepSubnet {
         Objects.requireNonNull(baseLlm, "baseLlm");
         Objects.requireNonNull(config, "config");
         var session = new LinkedHashMap<String, TransitionAction>();
-        session.put(Transitions.SEED_AND_START,  seedAndStartAction(config));
         session.put(Transitions.LLM_CALL_STREAM, llmCallStreamAction(baseLlm, config));
         session.put(Transitions.EMIT_CHUNK,      emitChunkAction(config));
         return SubnetActions.bind(DEF, session);
@@ -227,20 +183,6 @@ public final class LlmStreamingStepSubnet {
     // ============================================================
     //  Actions
     // ============================================================
-
-    private static TransitionAction seedAndStartAction(Config config) {
-        return ctx -> {
-            var request = ctx.input(AdkColours.LLM_REQUEST);
-            ctx.output(Places.LLM_REQUEST_INTERNAL, request);
-            // Seed K permits into the budget place. Reset arc already wiped
-            // any stale survivors from a previous request, so the count after
-            // this fire is exactly K.
-            for (int i = 0; i < config.chunkBudget(); i++) {
-                ctx.output(Places.CHUNK_BUDGET, (Void) null);
-            }
-            return CompletableFuture.completedFuture(null);
-        };
-    }
 
     private static TransitionAction llmCallStreamAction(BaseLlm baseLlm, Config config) {
         return ctx -> {
@@ -252,7 +194,7 @@ public final class LlmStreamingStepSubnet {
                                 + " PetriRunner.Builder.deferredExecutorRef(...), or set it"
                                 + " after building the executor and before it runs."));
             }
-            return streamChunks(baseLlm, ctx.input(Places.LLM_REQUEST_INTERNAL), executor);
+            return streamChunks(baseLlm, ctx.input(AdkColours.LLM_REQUEST), executor);
         };
     }
 
@@ -346,7 +288,6 @@ public final class LlmStreamingStepSubnet {
     private static TransitionAction emitChunkAction(Config config) {
         return ctx -> {
             LlmResponseChunk chunk = ctx.input(Places.CHUNK);
-            ctx.input(Places.CHUNK_BUDGET);   // consume permit
             if (chunk.terminal()) {
                 ctx.output(AdkColours.LLM_RESPONSE, chunk.partial());
             } else {
@@ -358,7 +299,6 @@ public final class LlmStreamingStepSubnet {
                         .build();
                 ctx.output(AdkColours.EVENT_OUT, partial);
             }
-            ctx.output(Places.CHUNK_BUDGET, (Void) null);   // return permit
             return CompletableFuture.completedFuture(null);
         };
     }
