@@ -309,6 +309,12 @@ class PetriAgentIntegrationTest {
      * the failure no longer reaches the turn at all, turn 1 stops erroring and
      * instead hangs forever waiting for a terminal event, which is why this
      * runs under a timeout rather than a plain call.
+     *
+     * <p>The net runs one turn at a time, and the failed turn would hold its
+     * permit forever: turn 2 would queue behind it and hang. It runs because
+     * {@code PetriAgent} signals {@link AdkColours#TURN_ABORT} on the failure,
+     * which clears the failed turn. Afterwards the session holds its one
+     * permit and nothing else of either turn.
      */
     @Test
     void a_failed_turn_fails_that_turn_and_leaves_the_session_usable() {
@@ -357,6 +363,15 @@ class PetriAgentIntegrationTest {
         });
 
         assertThat(registry.size()).isEqualTo(1);
+        // The answer and the returned permit are one firing's deposits, so a
+        // snapshot taken once the answer is out holds both.
+        var resting = new java.util.TreeMap<String, Integer>();
+        registry.get(SessionKey.from(session)).snapshot().marking().forEach((place, tokens) -> {
+            if (!tokens.isEmpty() && !place.equals(AdkColours.EVENT_OUT.name())) {
+                resting.put(place, tokens.size());
+            }
+        });
+        assertThat(resting).containsExactly(AdkColours.TURN_PERMIT.name(), 1);
     }
 
     /**

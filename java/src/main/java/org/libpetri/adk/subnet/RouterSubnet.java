@@ -14,6 +14,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import org.libpetri.core.Arc;
+import org.libpetri.core.Place;
 import org.libpetri.core.SubnetDef;
 import org.libpetri.core.Transition;
 import org.libpetri.core.TransitionAction;
@@ -83,13 +84,7 @@ public final class RouterSubnet {
             .place(AdkColours.TOOL_CALLS)
             .place(AdkColours.TRANSFER)
             .place(AdkColours.EVENT_OUT)
-            .transition(Transition.builder(Transitions.ROUTE)
-                    .inputs(Arc.In.one(AdkColours.LLM_RESPONSE))
-                    .outputs(Arc.Out.xor(
-                            AdkColours.TOOL_CALLS,
-                            AdkColours.TRANSFER,
-                            AdkColours.EVENT_OUT))
-                    .build())
+            .transition(routeTransition(AdkColours.TRANSFER, AdkColours.EVENT_OUT))
             .inputPort("llmResponse",  AdkColours.LLM_RESPONSE)
             .outputPort("toolCalls",   AdkColours.TOOL_CALLS)
             .outputPort("transfer",    AdkColours.TRANSFER)
@@ -99,19 +94,36 @@ public final class RouterSubnet {
     public static Map<String, TransitionAction> actionBindings(Config config) {
         Objects.requireNonNull(config, "config");
         var session = new LinkedHashMap<String, TransitionAction>();
-        session.put(Transitions.ROUTE, routeAction(config));
+        session.put(Transitions.ROUTE,
+                routeAction(config, AdkColours.TRANSFER, AdkColours.EVENT_OUT));
         return SubnetActions.bind(DEF, session);
     }
 
-    private static TransitionAction routeAction(Config config) {
+    /**
+     * The {@code Route} transition with its transfer and answer branches
+     * aimed at {@code transfer} and {@code answer}. {@link LlmAgentSubnet}
+     * aims them at places of its own, so the transitions that end its turn
+     * can hand the permit back as they emit; {@link #DEF} aims them at the
+     * boundary places.
+     */
+    static Transition routeTransition(Place<AdkColours.TransferTarget> transfer, Place<Event> answer) {
+        return Transition.builder(Transitions.ROUTE)
+                .inputs(Arc.In.one(AdkColours.LLM_RESPONSE))
+                .outputs(Arc.Out.xor(AdkColours.TOOL_CALLS, transfer, answer))
+                .build();
+    }
+
+    /** The {@code Route} action writing to the places {@link #routeTransition} declares. */
+    static TransitionAction routeAction(
+            Config config, Place<AdkColours.TransferTarget> transfer, Place<Event> answer) {
         return ctx -> {
             LlmResponse response = ctx.input(AdkColours.LLM_RESPONSE);
             List<FunctionCall> functionCalls = extractFunctionCalls(response);
-            var transfer = findTransferCall(functionCalls);
+            var transferCall = findTransferCall(functionCalls);
 
-            if (transfer.isPresent()) {
-                String agentName = transferAgentName(transfer.get());
-                ctx.output(AdkColours.TRANSFER, new AdkColours.TransferTarget(agentName));
+            if (transferCall.isPresent()) {
+                String agentName = transferAgentName(transferCall.get());
+                ctx.output(transfer, new AdkColours.TransferTarget(agentName));
             } else if (!functionCalls.isEmpty()) {
                 ctx.output(AdkColours.TOOL_CALLS, new AdkColours.ToolCalls(functionCalls,
                         response.content().orElse(null)));
@@ -121,7 +133,7 @@ public final class RouterSubnet {
                         .author(config.author())
                         .content(response.content().orElse(null))
                         .build();
-                ctx.output(AdkColours.EVENT_OUT, event);
+                ctx.output(answer, event);
             }
             return CompletableFuture.completedFuture(null);
         };

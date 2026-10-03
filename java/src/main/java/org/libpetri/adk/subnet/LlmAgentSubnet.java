@@ -7,6 +7,7 @@ import com.google.adk.tools.ToolContext;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -26,46 +27,96 @@ import org.libpetri.adk.colours.AdkColours;
 
 /**
  * Stock LLM-agent subnet — composes {@link LlmStepSubnet},
- * {@link RouterSubnet}, {@link ToolDispatchSubnet} into a complete
- * LLM↔tool feedback loop with a structural reask budget.
+ * {@link RouterSubnet}'s route transition and {@link ToolDispatchSubnet} into
+ * a complete LLM↔tool feedback loop with a structural reask budget, run one
+ * turn at a time under a turn permit.
  *
  * <h2>Boundary (interface ports)</h2>
  * <ul>
  *   <li>{@code userIn}      — input,  {@link AdkColours#USER_IN}</li>
+ *   <li>{@code turnAbort}   — input,  {@link AdkColours#TURN_ABORT}: abandon
+ *       the turn in flight (signalled by {@code PetriAgent} on a failure)</li>
  *   <li>{@code eventOut}    — output, {@link AdkColours#EVENT_OUT}</li>
  *   <li>{@code transfer}    — output, {@link AdkColours#TRANSFER}
  *       (parent net demuxes via {@code Out.xor} over per-agent places)</li>
  * </ul>
+ * <p>The net also holds {@link AdkColours#TURN_PERMIT}, which must carry one
+ * token when the net starts. {@code PetriRunner} seeds it; a bare libpetri
+ * executor needs it in its initial marking. {@code DEF.instantiate(prefix)}
+ * renames it to {@code prefix/turnPermit}, which {@code PetriRunner} does not
+ * seed: name it in {@code initialMarking}, or the start fails. The instance's
+ * {@code turnAbort} port must be bound to {@link AdkColours#TURN_ABORT} for
+ * {@code PetriAgent}'s abort to reach it.
  *
  * <h2>Topology</h2>
  * <pre>
- *   [USER_IN] --T_BuildPrompt--> Out.and([LLM_REQUEST], [REASK_BUDGET]*N, [CONVERSATION]),
- *                                reset(REASK_BUDGET), reset(CONVERSATION)
+ *   [USER_IN] + [TURN_PERMIT] --T_StartTurn--> Out.and([TURN_ACTIVE], [TURN_INPUT])
+ *   [TURN_INPUT] --T_BuildPrompt--> Out.and([LLM_REQUEST], [REASK_BUDGET]*N, [CONVERSATION])
  *
  *   [LLM_REQUEST]  --LlmStepSubnet--> [LLM_RESPONSE]
- *   [LLM_RESPONSE] --RouterSubnet---> Out.xor([TOOL_CALLS], [TRANSFER], [EVENT_OUT])
+ *   [LLM_RESPONSE] --Router_Route---> Out.xor([TOOL_CALLS], [HANDOFF], [ANSWER])
  *   [TOOL_CALLS]   --ToolDispatchSubnet--> [TOOL_RESULTS]
  *
  *   [TOOL_RESULTS] + [REASK_BUDGET] + [CONVERSATION]
  *                  --T_ReAsk (prio 10)--> Out.and([LLM_REQUEST], [CONVERSATION])
  *   [TOOL_RESULTS] + inhibitor(REASK_BUDGET)
- *                  --T_ReAskExhaustedFallback (prio -10)--> [EVENT_OUT] (canned)
+ *                  --T_ReAskExhaustedFallback (prio -10)--> [ANSWER] (canned)
+ *
+ *   [ANSWER]  + [TURN_ACTIVE] + [CONVERSATION], reset(REASK_BUDGET)
+ *                  --T_EmitAnswer--> Out.and([EVENT_OUT], [TURN_PERMIT])
+ *   [HANDOFF] + [TURN_ACTIVE] + [CONVERSATION], reset(REASK_BUDGET)
+ *                  --T_EmitTransfer--> Out.and([TRANSFER], [TURN_PERMIT])
+ *
+ *   [TURN_ABORT] + [TURN_ACTIVE], reset(every place the turn holds)
+ *                  --T_AbortTurn (prio 30)--> [TURN_PERMIT]
+ *   [TURN_ABORT] + read(TURN_PERMIT) --T_DropAbort (prio 30)--> (nothing)
  * </pre>
  *
+ * <h2>One turn at a time</h2>
+ * <p>{@code StartTurn} consumes the session's single {@link AdkColours#TURN_PERMIT}
+ * and only a turn's end returns it, so a second {@code USER_IN} that arrives
+ * while a turn is still in its tool loop waits on {@code USER_IN} until that
+ * turn has ended. Turns used to be told apart by position alone: an
+ * overlapping input reset the conversation and the budget of the turn still
+ * in flight, which then answered with the newcomer's turns, or left both
+ * conversations on the place. Every way a turn ends goes through one of
+ * three transitions, and each returns the permit: {@code EmitAnswer} (the
+ * router's answer, a model-error recovery, a {@code BeforeModel}
+ * short-circuit, or the reask-exhausted fallback), {@code EmitTransfer}, and
+ * {@code AbortTurn}. The permit-moving transitions only move tokens, so
+ * none of them can fail and lose it; {@code BuildPrompt}, which can, runs
+ * after {@code StartTurn} has handed the turn its {@code TURN_ACTIVE} token.
+ *
+ * <p>A failed transition consumes its inputs and produces nothing, which
+ * leaves the turn holding the permit with nothing left to end it.
+ * {@link AdkColours#TURN_ABORT} is the way out: {@code AbortTurn} clears the
+ * places the turn holds and returns the permit, and {@code DropAbort} drops
+ * an abort that arrives while no turn is in flight. {@code DropAbort} ranks
+ * above {@code StartTurn}, so an abort and an input that land in one pass
+ * with the permit at rest drop the abort before the input's turn starts. An
+ * abort clears what is at rest; an action of the turn still running when it
+ * lands deposits into the next turn. This agent runs one action at a time,
+ * so a failure of one of its own transitions leaves nothing running. The
+ * streaming agent does not: its stream stays in flight while it emits
+ * chunks, so a failed chunk emission falls under the same late-output
+ * limit. See ADR 0005.
+ *
  * <h2>Reask-budget invariant</h2>
- * <p>Each new user input <b>resets</b> {@link #REASK_BUDGET} (wiping any
- * stale tokens from a prior turn) and seeds {@code N} unit tokens (the
- * configured budget). Each LLM↔tool re-ask consumes one. When the place
- * is empty, the inhibitor-guarded fallback transition fires the
- * configured {@code fallbackContent} as the final event — terminating
- * the loop. The decision lives in the marking and priority, never in
+ * <p>{@code BuildPrompt} seeds {@code N} unit tokens on {@link #REASK_BUDGET}
+ * (the configured budget). Each LLM↔tool re-ask consumes one. When the place
+ * is empty, the inhibitor-guarded fallback transition answers with the
+ * configured {@code fallbackContent} — terminating the loop. Whichever
+ * transition ends the turn resets the place, so no allowance outlives its
+ * turn, and the permit keeps a second turn from seeding while one is
+ * running. The decision lives in the marking and priority, never in
  * action-level branching.
  *
  * <h2>Composition pattern</h2>
  * <p>{@code SubnetDef.Builder} doesn't expose {@code .compose()}; the
  * body net is constructed via {@link PetriNet.Builder#compose} for the
- * three sub-subnets plus {@link PetriNet.Builder#transition} for the
- * agent's own transitions, then wrapped via
+ * step and dispatch subnets plus {@link PetriNet.Builder#transition} for
+ * the router's transition (aimed at {@link #ANSWER} and {@link #HANDOFF})
+ * and the agent's own transitions, then wrapped via
  * {@link SubnetDef#fromNet(PetriNet, Interface)}.
  *
  * <h2>This is a convenience template, not the framework</h2>
@@ -86,9 +137,14 @@ public final class LlmAgentSubnet {
     public static final String NAME = "LlmAgent";
 
     public static final class Transitions {
+        public static final String START_TURN                = NAME + "_StartTurn";
         public static final String BUILD_PROMPT              = NAME + "_BuildPrompt";
         public static final String RE_ASK                    = NAME + "_ReAsk";
         public static final String RE_ASK_EXHAUSTED_FALLBACK = NAME + "_ReAskExhaustedFallback";
+        public static final String EMIT_ANSWER               = NAME + "_EmitAnswer";
+        public static final String EMIT_TRANSFER             = NAME + "_EmitTransfer";
+        public static final String ABORT_TURN                = NAME + "_AbortTurn";
+        public static final String DROP_ABORT                = NAME + "_DropAbort";
         private Transitions() {}
     }
 
@@ -98,16 +154,40 @@ public final class LlmAgentSubnet {
     /**
      * The turns of the current invocation, oldest first: the user turn, then
      * each model function-call turn followed by its function-response turn.
-     * {@code BuildPrompt} resets and seeds it; {@code ReAsk} consumes it and
-     * writes it back extended, so every continuation request carries the whole
-     * exchange rather than the tool responses alone. Like the reask budget it
-     * rests between turns and is reset by the next {@code BuildPrompt}.
+     * {@code BuildPrompt} seeds it; {@code ReAsk} consumes it and writes it
+     * back extended, so every continuation request carries the whole exchange
+     * rather than the tool responses alone. The transition that ends the turn
+     * consumes it.
      *
      * <p>Scope is one invocation. History across invocations is the caller's
      * own typed place, read by their prompt-building transition.
      */
     public static final Place<Conversation> CONVERSATION =
             Place.of(NAME + "_conversation", Conversation.class);
+
+    /**
+     * Internal place — marked while a turn is in flight: {@code StartTurn}
+     * trades the {@link AdkColours#TURN_PERMIT} for it, and the transition
+     * that ends the turn trades it back.
+     */
+    public static final Place<Void> TURN_ACTIVE = Place.of(NAME + "_turnActive", Void.class);
+
+    /** Internal place — the admitted user input, waiting for {@code BuildPrompt}. */
+    public static final Place<Content> TURN_INPUT = Place.of(NAME + "_turnInput", Content.class);
+
+    /**
+     * Internal place — the turn's final answer: the router's text answer or
+     * the reask-exhausted fallback. {@code EmitAnswer} puts it on
+     * {@link AdkColours#EVENT_OUT} and returns the permit.
+     */
+    public static final Place<Event> ANSWER = Place.of(NAME + "_answer", Event.class);
+
+    /**
+     * Internal place — the model's hand-off. {@code EmitTransfer} puts it on
+     * {@link AdkColours#TRANSFER} and returns the permit.
+     */
+    public static final Place<AdkColours.TransferTarget> HANDOFF =
+            Place.of(NAME + "_handoff", AdkColours.TransferTarget.class);
 
     /** Colour of {@link #CONVERSATION}: the invocation's turns, oldest first. */
     public record Conversation(List<Content> turns) {
@@ -215,12 +295,19 @@ public final class LlmAgentSubnet {
 
     static SubnetDef<Void> buildComposedDef(String netName, SubnetDef<Void> stepDef) {
         var body = PetriNet.builder(netName)
+                .place(AdkColours.TURN_PERMIT)
+                .place(TURN_ACTIVE)
+                .place(TURN_INPUT)
                 .place(REASK_BUDGET)
                 .place(CONVERSATION)
+                .place(ANSWER)
+                .place(HANDOFF)
+                .transition(Transition.builder(Transitions.START_TURN)
+                        .inputs(Arc.In.one(AdkColours.USER_IN), Arc.In.one(AdkColours.TURN_PERMIT))
+                        .outputs(Arc.Out.and(TURN_ACTIVE, TURN_INPUT))
+                        .build())
                 .transition(Transition.builder(Transitions.BUILD_PROMPT)
-                        .inputs(Arc.In.one(AdkColours.USER_IN))
-                        .reset(REASK_BUDGET)
-                        .reset(CONVERSATION)
+                        .inputs(Arc.In.one(TURN_INPUT))
                         .outputs(Arc.Out.and(AdkColours.LLM_REQUEST, REASK_BUDGET, CONVERSATION))
                         .build())
                 .transition(Transition.builder(Transitions.RE_ASK)
@@ -232,19 +319,64 @@ public final class LlmAgentSubnet {
                 .transition(Transition.builder(Transitions.RE_ASK_EXHAUSTED_FALLBACK)
                         .inputs(Arc.In.one(AdkColours.TOOL_RESULTS))
                         .inhibitor(REASK_BUDGET)
-                        .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
+                        .outputs(Arc.Out.place(ANSWER))
                         .priority(-10)
                         .build())
+                .transition(RouterSubnet.routeTransition(HANDOFF, ANSWER))
+                .transition(Transition.builder(Transitions.EMIT_ANSWER)
+                        .inputs(Arc.In.one(ANSWER), Arc.In.one(TURN_ACTIVE), Arc.In.one(CONVERSATION))
+                        .reset(REASK_BUDGET)
+                        .outputs(Arc.Out.and(AdkColours.EVENT_OUT, AdkColours.TURN_PERMIT))
+                        .build())
+                .transition(Transition.builder(Transitions.EMIT_TRANSFER)
+                        .inputs(Arc.In.one(HANDOFF), Arc.In.one(TURN_ACTIVE), Arc.In.one(CONVERSATION))
+                        .reset(REASK_BUDGET)
+                        .outputs(Arc.Out.and(AdkColours.TRANSFER, AdkColours.TURN_PERMIT))
+                        .build())
+                .transition(abortTurn(stepDef))
+                // Above StartTurn: an abort and an input that land in one
+                // pass with the permit at rest drop the abort first. At equal
+                // priority StartTurn would take the permit and AbortTurn would
+                // then wipe the fresh turn. The read leaves StartTurn enabled.
+                .transition(Transition.builder(Transitions.DROP_ABORT)
+                        .inputs(Arc.In.one(AdkColours.TURN_ABORT))
+                        .read(AdkColours.TURN_PERMIT)
+                        .priority(30)
+                        .build())
                 .compose(stepDef)
-                .compose(RouterSubnet.DEF)
                 .compose(ToolDispatchSubnet.DEF)
                 .build();
         var iface = Interface.builder()
                 .inputPort("userIn", AdkColours.USER_IN)
+                .inputPort("turnAbort", AdkColours.TURN_ABORT)
                 .outputPort("eventOut", AdkColours.EVENT_OUT)
                 .outputPort("transfer", AdkColours.TRANSFER)
                 .build();
         return SubnetDef.fromNet(body, iface);
+    }
+
+    /**
+     * {@code AbortTurn}: takes the turn's {@link #TURN_ACTIVE} token back for
+     * the permit and resets every place a turn holds, the step subnet's own
+     * places included (all of {@code stepDef}'s places but its egress).
+     */
+    private static Transition abortTurn(SubnetDef<Void> stepDef) {
+        var held = new LinkedHashSet<Place<?>>(List.of(
+                TURN_INPUT, REASK_BUDGET, CONVERSATION, ANSWER, HANDOFF,
+                AdkColours.LLM_REQUEST, AdkColours.LLM_RESPONSE,
+                AdkColours.TOOL_CALLS, AdkColours.TOOL_RESULTS));
+        for (var place : stepDef.body().places()) {
+            if (!place.equals(AdkColours.EVENT_OUT)) held.add(place);
+        }
+        // Above every step of the turn, the streaming step's chunk emission
+        // (20) included: a chunk admitted in the same pass as the abort is
+        // reset with the turn instead of being emitted as a partial of it.
+        var builder = Transition.builder(Transitions.ABORT_TURN)
+                .inputs(Arc.In.one(AdkColours.TURN_ABORT), Arc.In.one(TURN_ACTIVE))
+                .outputs(Arc.Out.place(AdkColours.TURN_PERMIT))
+                .priority(30);
+        for (var place : held) builder.reset(place);
+        return builder.build();
     }
 
     /**
@@ -258,18 +390,30 @@ public final class LlmAgentSubnet {
 
         return SubnetActions.bind(DEF, SubnetActions.merge(
                 LlmStepSubnet.actionBindings(baseLlm, config.callbacks()),
-                RouterSubnet.actionBindings(routerConfig(config)),
                 ToolDispatchSubnet.actionBindings(
                         config.tools(), config.toolContextSupplier(), config.dispatchExecutor()),
                 ownActions(config)));
     }
 
-    /** The agent's own three transitions, shared with {@link StreamingLlmAgentSubnet}. */
+    /**
+     * The agent's own transitions, router included, shared with
+     * {@link StreamingLlmAgentSubnet}.
+     */
     static Map<String, TransitionAction> ownActions(Config config) {
         return Map.of(
+                Transitions.START_TURN,                startTurnAction(),
                 Transitions.BUILD_PROMPT,              buildPromptAction(config),
                 Transitions.RE_ASK,                    reAskAction(config),
-                Transitions.RE_ASK_EXHAUSTED_FALLBACK, reAskExhaustedFallbackAction(config));
+                Transitions.RE_ASK_EXHAUSTED_FALLBACK, reAskExhaustedFallbackAction(config),
+                RouterSubnet.Transitions.ROUTE,
+                        RouterSubnet.routeAction(routerConfig(config), HANDOFF, ANSWER),
+                Transitions.EMIT_ANSWER,               emitAction(ANSWER, AdkColours.EVENT_OUT),
+                Transitions.EMIT_TRANSFER,             emitAction(HANDOFF, AdkColours.TRANSFER),
+                Transitions.ABORT_TURN,                abortTurnAction(),
+                Transitions.DROP_ABORT,                ctx -> {
+                    ctx.input(AdkColours.TURN_ABORT);   // no turn in flight: nothing to abort
+                    return CompletableFuture.completedFuture(null);
+                });
     }
 
     static RouterSubnet.Config routerConfig(Config c) {
@@ -278,18 +422,32 @@ public final class LlmAgentSubnet {
 
     // ======================== Agent-owned actions ========================
 
+    // The permit-moving actions (StartTurn, the emits, AbortTurn) only move
+    // tokens. A failure there would lose the permit with no turn left to
+    // abort, so nothing that can throw belongs in them.
+
+    static TransitionAction startTurnAction() {
+        return ctx -> {
+            ctx.input(AdkColours.TURN_PERMIT);
+            ctx.output(TURN_INPUT, ctx.input(AdkColours.USER_IN));
+            ctx.output(TURN_ACTIVE, (Void) null);
+            return CompletableFuture.completedFuture(null);
+        };
+    }
+
     static TransitionAction buildPromptAction(Config config) {
         return ctx -> {
-            Content userContent = ctx.input(AdkColours.USER_IN);
-            ctx.output(AdkColours.LLM_REQUEST, LlmRequests.build(
+            Content userContent = ctx.input(TURN_INPUT);
+            var request = LlmRequests.build(
                     config.model(),
                     config.systemInstruction(),
                     config.tools(),
-                    List.of(userContent)));
+                    List.of(userContent));
+            ctx.output(AdkColours.LLM_REQUEST, request);
             ctx.output(CONVERSATION, new Conversation(List.of(userContent)));
 
-            // Seed N reask-budget unit tokens. The Reset arc on this transition
-            // wiped any survivors from a previous turn before this action runs.
+            // Seed N reask-budget unit tokens. The place is empty: the
+            // transition that ended the previous turn reset it.
             for (int i = 0; i < config.reaskBudget(); i++) {
                 ctx.output(REASK_BUDGET, (Void) null);
             }
@@ -313,9 +471,7 @@ public final class LlmAgentSubnet {
                 responseParts.add(Part.builder().functionResponse(fr).build());
             }
             Content responseTurn = Content.builder().role("user").parts(responseParts).build();
-            Conversation next = results.modelTurn() != null
-                    ? conversation.append(results.modelTurn(), responseTurn)
-                    : conversation.append(responseTurn);
+            Conversation next = conversation.append(results.modelTurn(), responseTurn);
             ctx.output(AdkColours.LLM_REQUEST, LlmRequests.build(
                     config.model(),
                     config.systemInstruction(),
@@ -334,7 +490,27 @@ public final class LlmAgentSubnet {
                     .author(config.name())
                     .content(config.fallbackContent())
                     .build();
-            ctx.output(AdkColours.EVENT_OUT, event);
+            ctx.output(ANSWER, event);
+            return CompletableFuture.completedFuture(null);
+        };
+    }
+
+    /** {@code EmitAnswer} / {@code EmitTransfer}: forward the outcome, end the turn. */
+    private static <T> TransitionAction emitAction(Place<T> outcome, Place<T> boundary) {
+        return ctx -> {
+            ctx.input(TURN_ACTIVE);
+            ctx.input(CONVERSATION);
+            ctx.output(boundary, ctx.input(outcome));
+            ctx.output(AdkColours.TURN_PERMIT, (Void) null);
+            return CompletableFuture.completedFuture(null);
+        };
+    }
+
+    private static TransitionAction abortTurnAction() {
+        return ctx -> {
+            ctx.input(AdkColours.TURN_ABORT);
+            ctx.input(TURN_ACTIVE);
+            ctx.output(AdkColours.TURN_PERMIT, (Void) null);
             return CompletableFuture.completedFuture(null);
         };
     }

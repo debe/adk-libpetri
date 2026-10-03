@@ -39,7 +39,10 @@ import org.libpetri.adk.colours.AdkColours;
  *   <li>Subscribes to the runner's egress, stamping every {@link Event}
  *       with the ADK invocation id and merging the net's failure signal,
  *       so a transition that fails mid-turn fails the turn instead of
- *       stalling it.</li>
+ *       stalling it. For a runner that declares
+ *       {@link AdkColours#TURN_ABORT} (any net with an {@code LlmAgentSubnet}
+ *       in it), every failure is also signalled there, so the net lets go of
+ *       the failed turn and serves the next one.</li>
  *   <li>{@code runner.inject(USER_IN, userContent)} injects the user's
  *       message onto the net's {@code USER_IN} env place.</li>
  *   <li>Returns the turn: by default the first non-partial {@link Event}
@@ -162,6 +165,28 @@ public final class PetriAgent extends BaseAgent {
         return runner.failureSignal().flatMap(t -> Flowable.<Event>error(t));
     }
 
+    /**
+     * Signals {@link AdkColours#TURN_ABORT} on every transition failure of
+     * {@code runner}, if it declares that place. A failed transition keeps the
+     * turn it was part of from ever ending, and a net that runs one turn at a
+     * time ({@code LlmAgentSubnet}) would then queue every later input behind
+     * it; the abort lets it clear that turn and take the next. The turn's
+     * caller is failed separately, by {@link #turnFailureSignal}.
+     *
+     * <p>One subscription per runner, made when the runner is created, so a
+     * failure aborts once however many invocations are waiting on the
+     * session, and before any of them sees the error. It ends with the run.
+     */
+    private static PetriRunner abortTurnsOnFailure(PetriRunner runner) {
+        if (runner.declaresEnvironmentPlace(AdkColours.TURN_ABORT)) {
+            runner.failureSignal().subscribe(
+                    failure -> runner.signal(AdkColours.TURN_ABORT),
+                    // The signal never errors; a run that ends completes it.
+                    error -> { });
+        }
+        return runner;
+    }
+
     private PetriAgent(String name,
                        String description,
                        SessionExecutorRegistry registry,
@@ -172,7 +197,8 @@ public final class PetriAgent extends BaseAgent {
                        LiveConfig liveConfig) {
         super(name, description, ImmutableList.of(), /*beforeAgentCallback*/ null, /*afterAgentCallback*/ null);
         this.registry = Objects.requireNonNull(registry, "registry");
-        this.runnerFactory = Objects.requireNonNull(runnerFactory, "runnerFactory");
+        Objects.requireNonNull(runnerFactory, "runnerFactory");
+        this.runnerFactory = key -> abortTurnsOnFailure(runnerFactory.apply(key));
         if (ownerExtractor == null && registry.isCleanerOwned()) {
             throw new IllegalArgumentException(
                     "A cleanerOwned() registry needs an ownerExtractor: the owner is what "

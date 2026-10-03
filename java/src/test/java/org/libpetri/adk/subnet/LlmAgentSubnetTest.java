@@ -19,8 +19,11 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import org.junit.jupiter.api.AfterAll;
@@ -32,7 +35,9 @@ import org.libpetri.core.Place;
 import org.libpetri.core.Token;
 import org.libpetri.event.EventStore;
 import org.libpetri.event.NetEvent;
+import org.libpetri.adk.bridge.TransitionFailure;
 import org.libpetri.adk.colours.AdkColours;
+import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.runtime.BitmapNetExecutor;
 
 class LlmAgentSubnetTest {
@@ -299,7 +304,7 @@ class LlmAgentSubnetTest {
         var portNames = LlmAgentSubnet.DEF.iface().ports().stream()
                 .map(p -> p.name()).sorted().toList();
         assertThat(portNames).containsExactly(
-                "eventOut", "transfer", "userIn").inOrder();
+                "eventOut", "transfer", "turnAbort", "userIn").inOrder();
     }
 
     @Test
@@ -308,9 +313,14 @@ class LlmAgentSubnetTest {
                 .map(t -> t.name()).toList();
         assertThat(transitionNames).containsAtLeast(
                 // owned
+                LlmAgentSubnet.Transitions.START_TURN,
                 LlmAgentSubnet.Transitions.BUILD_PROMPT,
                 LlmAgentSubnet.Transitions.RE_ASK,
                 LlmAgentSubnet.Transitions.RE_ASK_EXHAUSTED_FALLBACK,
+                LlmAgentSubnet.Transitions.EMIT_ANSWER,
+                LlmAgentSubnet.Transitions.EMIT_TRANSFER,
+                LlmAgentSubnet.Transitions.ABORT_TURN,
+                LlmAgentSubnet.Transitions.DROP_ABORT,
                 // from LlmStepSubnet
                 LlmStepSubnet.Transitions.BEFORE_MODEL,
                 LlmStepSubnet.Transitions.LLM_CALL,
@@ -335,6 +345,372 @@ class LlmAgentSubnetTest {
     }
 
     // ============================================================
+    //  Turn permit — one turn at a time, every end returns the permit
+    // ============================================================
+
+    /**
+     * Each way a turn ends (answer, tool loop then answer, reask-exhausted
+     * fallback, transfer) gives the permit back and leaves nothing else of
+     * the turn behind: no conversation, no unspent budget.
+     */
+    @Test
+    void every_way_a_turn_ends_leaves_only_the_permit_behind() {
+        var tool = fakeTool("t", args -> Map.of("v", 1));
+        var transfer = FunctionCall.builder()
+                .name(RouterSubnet.TRANSFER_TO_AGENT_FN)
+                .args(Map.of(RouterSubnet.TRANSFER_AGENT_NAME_ARG, "specialist"))
+                .build();
+        var config = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .tools(Map.of("t", tool))
+                .reaskBudget(2)
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        var onlyThePermit = Map.of(AdkColours.TURN_PERMIT.name(), 1);
+
+        assertThat(run(scriptedLlm(textResponse("hi")), config, userMessage("a")).resting())
+                .isEqualTo(onlyThePermit);
+        assertThat(run(scriptedLlm(
+                        responseWithCalls(FunctionCall.builder().name("t").build()),
+                        textResponse("done")),
+                config, userMessage("b")).resting())
+                .isEqualTo(onlyThePermit);
+        assertThat(run(endlesslyToolCallingLlm("t"), config, userMessage("c")).resting())
+                .isEqualTo(onlyThePermit);
+        var handedOff = run(scriptedLlm(responseWithCalls(transfer)), config, userMessage("d"));
+        assertThat(handedOff.transfers()).hasSize(1);
+        assertThat(handedOff.resting()).isEqualTo(onlyThePermit);
+    }
+
+    /**
+     * Replays the marking the overlapping-turn bug started from (review
+     * experiment E2): turn 1 is in its tool loop, holding the permit, with its
+     * tool results, one budget token and its conversation on the places, and
+     * turn 2's input has just arrived.
+     *
+     * <p>Turn 2's prompt build used to fire right away and reset the budget
+     * and the conversation turn 1 was about to re-ask with. Turn 1's re-ask
+     * then took turn 2's conversation, and because a reset only sees the
+     * marking a pass started with, both conversations could end up on the
+     * place, so turn 2 replayed turn 1's turns. Now turn 2 waits for the
+     * permit: turn 1 re-asks with its own conversation and answers, then
+     * turn 2 starts with nothing but its own input.
+     */
+    @Test
+    void an_input_that_arrives_mid_turn_waits_for_that_turn_to_end() {
+        var requests = new ArrayList<LlmRequest>();
+        var llm = capturingLlm(requests, textResponse("turn-1 answer"), textResponse("turn-2 answer"));
+        var config = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .reaskBudget(2)
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        var net = PetriNet.builder("test-host")
+                .compose(LlmAgentSubnet.DEF)
+                .build()
+                .bindActions(LlmAgentSubnet.actionBindings(llm, config));
+
+        var user1 = userMessage("turn-1 user");
+        var user2 = userMessage("turn-2 user");
+        var call1 = Content.builder().role("model").parts(List.of(Part.builder()
+                .functionCall(FunctionCall.builder().name("t1").id("c1").build()).build())).build();
+        var results1 = new AdkColours.ToolResults(List.of(com.google.genai.types.FunctionResponse
+                .builder().name("t1").id("c1").response(Map.of("r", "turn-1 result")).build()), call1);
+
+        Map<Place<?>, List<Token<?>>> midTurnOne = Map.of(
+                AdkColours.USER_IN, List.of(Token.of(user2)),
+                AdkColours.TOOL_RESULTS, List.of(Token.of(results1)),
+                LlmAgentSubnet.REASK_BUDGET, List.of(Token.unit()),
+                LlmAgentSubnet.CONVERSATION, List.of(Token.of(
+                        new LlmAgentSubnet.Conversation(List.of(user1)))),
+                LlmAgentSubnet.TURN_ACTIVE, List.of(Token.unit()));
+        var marking = BitmapNetExecutor.builder(net, midTurnOne).build().run();
+
+        assertThat(requests).hasSize(2);
+        var turnOneReAsk = requests.get(0).contents();
+        assertThat(turnOneReAsk).hasSize(3);
+        assertThat(turnOneReAsk.get(0)).isEqualTo(user1);
+        assertThat(turnOneReAsk.get(1)).isEqualTo(call1);
+        assertThat(requests.get(1).contents()).containsExactly(user2);
+
+        var answers = marking.peekTokens(AdkColours.EVENT_OUT).stream()
+                .map(t -> t.value().content().get().text()).toList();
+        assertThat(answers).containsExactly("turn-1 answer", "turn-2 answer").inOrder();
+        assertThat(restingTokens(net, marking, AdkColours.EVENT_OUT))
+                .isEqualTo(Map.of(AdkColours.TURN_PERMIT.name(), 1));
+    }
+
+    /**
+     * The same overlap, live: turn 2's input is injected while turn 1's tool
+     * call is still running. It waits for turn 1 to answer, and its request
+     * carries only its own conversation.
+     */
+    @Test
+    void overlapping_turns_on_a_running_net_each_keep_their_own_conversation() throws Exception {
+        var toolEntered = new CountDownLatch(1);
+        var releaseTool = new CountDownLatch(1);
+        var slow = fakeTool("slow", args -> {
+            toolEntered.countDown();
+            try {
+                releaseTool.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return Map.of("ok", true);
+        });
+        var requests = new ArrayList<LlmRequest>();
+        var llm = capturingLlm(requests,
+                responseWithCalls(FunctionCall.builder().name("slow").id("s1").build()),
+                textResponse("turn-1 answer"),
+                textResponse("turn-2 answer"));
+        var config = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .tools(Map.of("slow", slow))
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        var net = PetriNet.builder("test-host")
+                .compose(LlmAgentSubnet.DEF)
+                .build()
+                .bindActions(LlmAgentSubnet.actionBindings(llm, config));
+
+        var user1 = userMessage("turn-1 user");
+        var user2 = userMessage("turn-2 user");
+        try (var runner = PetriRunner.builder(net)
+                .environmentPlace(AdkColours.USER_IN)
+                .orchestratorExecutor(EXECUTOR)
+                .start()) {
+            var events = runner.adkEvents().test();
+            runner.inject(AdkColours.USER_IN, user1).get(5, TimeUnit.SECONDS);
+            assertThat(toolEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(runner.inject(AdkColours.USER_IN, user2).get(5, TimeUnit.SECONDS)).isTrue();
+            releaseTool.countDown();
+
+            assertThat(events.awaitCount(2).values().stream()
+                    .map(e -> e.content().get().text()).toList())
+                    .containsExactly("turn-1 answer", "turn-2 answer").inOrder();
+        }
+
+        synchronized (requests) {
+            assertThat(requests).hasSize(3);
+            assertThat(requests.get(0).contents()).containsExactly(user1);
+            assertThat(requests.get(1).contents()).hasSize(3);
+            assertThat(requests.get(1).contents().get(0)).isEqualTo(user1);
+            assertThat(requests.get(2).contents()).containsExactly(user2);
+        }
+    }
+
+    /**
+     * A transition that fails consumes its inputs and produces nothing, so
+     * the turn it belonged to holds the permit with nothing left to end it.
+     * A model error with no recovery callback is that case. A
+     * {@link AdkColours#TURN_ABORT} clears the turn and returns the permit,
+     * and the next input runs with a fresh conversation.
+     */
+    @Test
+    void a_turn_abort_clears_a_failed_turn_and_the_next_input_runs() throws Exception {
+        var requests = new ArrayList<LlmRequest>();
+        var calls = new AtomicInteger();
+        var llm = new BaseLlm("fails-first") {
+            @Override public Flowable<LlmResponse> generateContent(LlmRequest r, boolean s) {
+                synchronized (requests) { requests.add(r); }
+                return calls.getAndIncrement() == 0
+                        ? Flowable.error(new IllegalStateException("model exploded"))
+                        : Flowable.just(textResponse("recovered"));
+            }
+            @Override public BaseLlmConnection connect(LlmRequest r) {
+                throw new UnsupportedOperationException();
+            }
+        };
+        var config = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .dispatchExecutor(EXECUTOR)
+                .build();
+
+        assertAbortRecovers(llm, config, requests,
+                LlmStepSubnet.Transitions.ON_MODEL_ERROR);
+    }
+
+    /**
+     * The same recovery from a failure in the middle of the tool loop, where
+     * the turn has a conversation and budget on the places: the tool context
+     * supplier throws, so dispatch fails. The abort resets both, and the next
+     * turn starts with its own.
+     */
+    @Test
+    void a_turn_abort_clears_a_turn_that_failed_in_its_tool_loop() throws Exception {
+        var requests = new ArrayList<LlmRequest>();
+        var llm = capturingLlm(requests,
+                responseWithCalls(FunctionCall.builder().name("t").id("c1").build()),
+                textResponse("recovered"));
+        var tool = fakeTool("t", args -> Map.of());
+        var dispatches = new AtomicInteger();
+        var config = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .tools(Map.of("t", tool))
+                .dispatchExecutor(EXECUTOR)
+                .toolContextSupplier(() -> {
+                    if (dispatches.getAndIncrement() == 0) {
+                        throw new IllegalStateException("no tool context");
+                    }
+                    return null;
+                })
+                .build();
+
+        assertAbortRecovers(llm, config, requests, ToolDispatchSubnet.Transitions.DISPATCH);
+    }
+
+    /**
+     * An abort with no turn in flight is dropped, not kept for the next turn
+     * and not turned into a second permit: the next turn runs, and afterwards
+     * there is still exactly one permit.
+     */
+    @Test
+    void a_turn_abort_with_no_turn_in_flight_is_dropped() throws Exception {
+        var llm = scriptedLlm(textResponse("fine"));
+        var config = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        var net = PetriNet.builder("test-host")
+                .compose(LlmAgentSubnet.DEF)
+                .build()
+                .bindActions(LlmAgentSubnet.actionBindings(llm, config));
+
+        try (var runner = PetriRunner.builder(net)
+                .environmentPlace(AdkColours.USER_IN)
+                .orchestratorExecutor(EXECUTOR)
+                .start()) {
+            var events = runner.adkEvents().test();
+            runner.signal(AdkColours.TURN_ABORT).get(5, TimeUnit.SECONDS);
+            runner.inject(AdkColours.USER_IN, userMessage("go")).get(5, TimeUnit.SECONDS);
+            events.awaitCount(1);
+            assertThat(events.values().get(0).content().get().text()).isEqualTo("fine");
+            awaitResting(runner, Map.of(AdkColours.TURN_PERMIT.name(), 1));
+        }
+    }
+
+    /**
+     * A stale abort that lands in the same pass as an input, with the permit
+     * at rest, is dropped before the input starts its turn. If the input won
+     * the permit first, the abort would find a turn in flight and wipe it.
+     */
+    @Test
+    void a_stale_turn_abort_in_the_same_pass_as_an_input_does_not_abort_it() {
+        var llm = scriptedLlm(textResponse("fine"));
+        var config = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        var net = PetriNet.builder("test-host")
+                .compose(LlmAgentSubnet.DEF)
+                .build()
+                .bindActions(LlmAgentSubnet.actionBindings(llm, config));
+        Map<Place<?>, List<Token<?>>> initial = Map.of(
+                AdkColours.USER_IN, List.of(Token.of(userMessage("go"))),
+                AdkColours.TURN_ABORT, List.of(Token.unit()),
+                AdkColours.TURN_PERMIT, List.of(Token.unit()));
+
+        var marking = BitmapNetExecutor.builder(net, initial).build().run();
+
+        var answers = List.copyOf(marking.peekTokens(AdkColours.EVENT_OUT));
+        assertThat(answers).hasSize(1);
+        assertThat(answers.get(0).value().content().get().text()).isEqualTo("fine");
+        assertThat(restingTokens(net, marking, AdkColours.EVENT_OUT))
+                .isEqualTo(Map.of(AdkColours.TURN_PERMIT.name(), 1));
+    }
+
+    /**
+     * An agent composed through {@code DEF.instantiate(prefix)} has its own
+     * prefixed permit, which {@code PetriRunner} does not seed. A fresh start
+     * that leaves it empty fails loudly instead of never starting a turn, and
+     * one that seeds it runs.
+     */
+    @Test
+    void an_instantiated_agent_needs_its_prefixed_permit_seeded() throws Exception {
+        var config = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        var agent = LlmAgentSubnet.DEF.instantiate("billing")
+                .bindActions(LlmAgentSubnet.actionBindings(scriptedLlm(textResponse("fine")), config));
+        var net = PetriNet.builder("test-host")
+                .compose(agent, b -> b.bindPort("userIn", AdkColours.USER_IN)
+                        .bindPort("turnAbort", AdkColours.TURN_ABORT)
+                        .bindPort("eventOut", AdkColours.EVENT_OUT)
+                        .bindPort("transfer", AdkColours.TRANSFER))
+                .build();
+        var permit = Place.of("billing/" + AdkColours.TURN_PERMIT.name(), Void.class);
+        assertThat(net.places()).contains(permit);
+
+        var unseeded = PetriRunner.builder(net)
+                .environmentPlace(AdkColours.USER_IN)
+                .orchestratorExecutor(EXECUTOR);
+        var thrown = Assertions.assertThrows(IllegalStateException.class, unseeded::start);
+        assertThat(thrown).hasMessageThat().contains(permit.name());
+
+        Map<Place<?>, List<Token<?>>> seeded = Map.of(permit, List.of(Token.unit()));
+        try (var runner = PetriRunner.builder(net)
+                .environmentPlace(AdkColours.USER_IN)
+                .initialMarking(seeded)
+                .orchestratorExecutor(EXECUTOR)
+                .start()) {
+            var events = runner.adkEvents().test();
+            runner.inject(AdkColours.USER_IN, userMessage("go")).get(5, TimeUnit.SECONDS);
+            events.awaitCount(1);
+            assertThat(events.values().get(0).content().get().text()).isEqualTo("fine");
+            awaitResting(runner, Map.of(permit.name(), 1));
+        }
+    }
+
+    /**
+     * Drives one failing turn and one recovering turn on a running net,
+     * signalling the abort the way {@code PetriAgent} does: on the failure.
+     */
+    private static void assertAbortRecovers(BaseLlm llm, LlmAgentSubnet.Config config,
+                                            List<LlmRequest> requests, String failingTransition)
+            throws Exception {
+        var net = PetriNet.builder("test-host")
+                .compose(LlmAgentSubnet.DEF)
+                .build()
+                .bindActions(LlmAgentSubnet.actionBindings(llm, config));
+        var user1 = userMessage("fails");
+        var user2 = userMessage("recovers");
+        try (var runner = PetriRunner.builder(net)
+                .environmentPlace(AdkColours.USER_IN)
+                .orchestratorExecutor(EXECUTOR)
+                .start()) {
+            var failures = runner.failureSignal().test();
+            var events = runner.adkEvents().test();
+            runner.inject(AdkColours.USER_IN, user1).get(5, TimeUnit.SECONDS);
+            failures.awaitCount(1);
+            assertThat(((TransitionFailure) failures.values().get(0)).transitionName())
+                    .isEqualTo(failingTransition);
+
+            // Wedged: the failed turn still holds the permit, so this input queues.
+            runner.inject(AdkColours.USER_IN, user2).get(5, TimeUnit.SECONDS);
+            assertThat(runner.snapshot().marking()).containsKey(AdkColours.USER_IN.name());
+            assertThat(runner.snapshot().marking()).doesNotContainKey(AdkColours.TURN_PERMIT.name());
+
+            runner.signal(AdkColours.TURN_ABORT).get(5, TimeUnit.SECONDS);
+            events.awaitCount(1);
+            assertThat(events.values().get(0).content().get().text()).isEqualTo("recovered");
+            awaitResting(runner, Map.of(AdkColours.TURN_PERMIT.name(), 1));
+        }
+        synchronized (requests) {
+            assertThat(requests.getLast().contents()).containsExactly(user2);
+        }
+    }
+
+    /** Waits until the running net's marking, egress aside, is {@code expected}. */
+    private static void awaitResting(PetriRunner runner, Map<String, Integer> expected)
+            throws InterruptedException {
+        Map<String, Integer> resting = Map.of();
+        for (int i = 0; i < 500; i++) {
+            resting = new TreeMap<String, Integer>();
+            for (var e : runner.snapshot().marking().entrySet()) {
+                if (!e.getKey().equals(AdkColours.EVENT_OUT.name()) && !e.getValue().isEmpty()) {
+                    resting.put(e.getKey(), e.getValue().size());
+                }
+            }
+            if (resting.equals(expected)) return;
+            Thread.sleep(10);
+        }
+        assertThat(resting).isEqualTo(expected);
+    }
+
+    // ============================================================
     //  Fixtures + helpers
     // ============================================================
 
@@ -346,7 +722,10 @@ class LlmAgentSubnetTest {
 
         List<Token<?>> userInTokens = new ArrayList<>();
         for (var c : userMessages) userInTokens.add(Token.of(c));
-        Map<Place<?>, List<Token<?>>> initial = Map.of(AdkColours.USER_IN, userInTokens);
+        // A bare executor seeds the turn permit itself; PetriRunner would.
+        Map<Place<?>, List<Token<?>>> initial = Map.of(
+                AdkColours.USER_IN, userInTokens,
+                AdkColours.TURN_PERMIT, List.of(Token.unit()));
 
         var store = EventStore.inMemory();
         var executor = BitmapNetExecutor.builder(net, initial)
@@ -358,7 +737,19 @@ class LlmAgentSubnetTest {
                 marking.peekTokens(AdkColours.EVENT_OUT).stream().map(Token::value).toList(),
                 marking.peekTokens(AdkColours.TOOL_CALLS).stream().map(Token::value).toList(),
                 marking.peekTokens(AdkColours.TRANSFER).stream().map(Token::value).toList(),
-                store.events());
+                store.events(),
+                restingTokens(net, marking, AdkColours.EVENT_OUT, AdkColours.TRANSFER));
+    }
+
+    /** Token count per place name, for every marked place but the egress ones. */
+    private static Map<String, Integer> restingTokens(
+            PetriNet net, org.libpetri.runtime.Marking marking, Place<?>... egress) {
+        var resting = new TreeMap<String, Integer>();
+        for (var place : net.places()) {
+            int n = marking.peekTokens(place).size();
+            if (n > 0 && !List.of(egress).contains(place)) resting.put(place.name(), n);
+        }
+        return resting;
     }
 
     private static Content userMessage(String text) {
@@ -446,7 +837,8 @@ class LlmAgentSubnetTest {
             List<Event> events,
             List<AdkColours.ToolCalls> toolCalls,
             List<AdkColours.TransferTarget> transfers,
-            List<NetEvent> netEvents) {
+            List<NetEvent> netEvents,
+            Map<String, Integer> resting) {
         List<String> firedTransitionNames() {
             return netEvents.stream()
                     .filter(NetEvent.TransitionStarted.class::isInstance)

@@ -28,10 +28,10 @@ existed.
   `SmtVerifier.z3Available()`, and CI installs `z3` via apt.
 - **Stricter deadlock-freedom proofs.** libpetri 5.0's `deadlockFree()` treats
   any token left on a non-sink place as a stranding. The speculative-race,
-  optimistic-commit and multi-agent demo proofs now declare their by-design
-  leftovers (cancelled triggers, an unspent reask budget) with
-  `sinkPlacesWhen(marker, ...)`, which excuses them only while the
-  explaining marker holds.
+  optimistic-commit demo proofs now declare their by-design leftovers
+  (cancelled triggers) with `sinkPlacesWhen(marker, ...)`, which excuses
+  them only while the explaining marker holds. The multi-agent proof needs
+  no such excuse any more: a turn's end clears its reask budget.
 - **Fix: proof tests checked only their last property.** Every test that
   chained `.property(...)` calls on one `SmtVerifier` (the multi-agent,
   voice and three pattern demos) verified only the last one, because
@@ -69,6 +69,44 @@ existed.
   place, the model's call turn travels verbatim (thought signatures
   included) on new `ToolCalls`/`ToolResults` `modelTurn` components, and
   function responses use the `user` role, as ADK's own flow does.
+- **Fix: `LlmAgentSubnet` runs one turn at a time.** It told turns apart
+  by position: a second `USER_IN` while the first turn was in its tool
+  loop reset that turn's conversation and reask budget, the first turn's
+  re-ask then took the second turn's conversation, and since a reset sees
+  only the marking its pass started with, `CONVERSATION` could hold both,
+  so the second turn replayed the first one's turns. ADK's `Runner` does
+  not serialise a session's invocations, so a client retry is enough. Now
+  `StartTurn` takes the session's single `AdkColours.TURN_PERMIT`, and a
+  later input queues until the turn ends. Every turn end returns the
+  permit: the router's answer and transfer land on agent-owned places and
+  `EmitAnswer`/`EmitTransfer` emit them, the reask-exhausted fallback
+  answers the same way, and each end clears the turn's conversation and
+  budget. `PetriRunner` seeds the permit on a fresh start of a net that has
+  the place, so existing wiring keeps working; a bare libpetri executor
+  must seed it. `StreamingLlmAgentSubnet` gets the same. The permit is a
+  seeded token rather than an inhibitor because only a consumed token
+  proves one turn at a time without `assumeAtomicFiring`; see
+  [ADR 0005](docs/adr/0005-llm-agent-turn-permit.md).
+- **A failed transition no longer wedges an agent's session.** A failure
+  consumes its inputs and produces nothing, which would leave the turn
+  holding the permit. `AdkColours.TURN_ABORT` is a new environment place
+  (`PetriRunner` declares it for a net that has it); `PetriAgent` signals
+  it on every transition failure, and the agent's `AbortTurn` clears the
+  turn and returns the permit (`DropAbort` drops an abort with no turn in
+  flight, ahead of an input that lands in the same pass). An abort clears
+  what is at rest: an action of the same turn still running when it lands
+  deposits into the next turn. For `LlmAgentSubnet` that takes a failure
+  outside the agent; for `StreamingLlmAgentSubnet` a failed `EmitChunk`
+  also does it, since the stream is still in flight.
+- **`PetriRunner.start()` serves the turn permit.** On a fresh start of a
+  net that has `AdkColours.TURN_PERMIT` it seeds one token (unless
+  `initialMarking` names the place), and it declares `AdkColours.TURN_ABORT`
+  as an environment place for a net that has it. A fresh start whose net
+  has an instantiated agent's unseeded `prefix/turnPermit` throws. New
+  `PetriRunner.declaresEnvironmentPlace(Place)` tells whether a runner
+  accepts injections on a place; `PetriAgent` uses it to signal aborts.
+- **`ToolDispatchSubnet` fails a batch with no calls** instead of answering
+  it with a model turn of zero parts, which a re-ask would have sent.
 - **Fix: SSE sessions no longer share an executor handle.** The documented
   streaming wiring shared one `executorRef` across every session, so a
   second session misrouted the first one's chunks and its turn hung. Use
@@ -83,12 +121,13 @@ existed.
   subnet alone (`SubnetDef.verify`, `arrivals(k, k)`), and the composed
   `LlmAgentSubnet` turns every user input into exactly one answer,
   fallback or transfer; the reask budget is proved not to stack across
-  inputs (design commitment 6); `eventOutBounded` is proved on the
-  multi-agent net. Budget bounds are stated in seeds, since libpetri
-  models an N-permit seed as one token. Two proofs, the reask budget and
-  the race permit, assume atomic firing; the README says why that is
-  exact on the Java executor. Every other proof runs with libpetri 8.0's
-  in-flight split.
+  inputs (design commitment 6), along with one turn and one conversation
+  at a time, recovery from a failure at any step, and a permit no abort
+  can duplicate; `eventOutBounded` is proved on the multi-agent net.
+  Budget bounds are stated in seeds, since libpetri models an N-permit
+  seed as one token. One proof, the race permit, assumes atomic firing;
+  the README says why that is exact on the Java executor. Every other
+  proof runs with libpetri 8.0's in-flight split.
 - **Wiring helpers.** `SubnetActions.merge` and `bindComposed` bind a
   composed net's maps in one checked call. `PetriAgent.builder(...)`, with
   the owner extractor optional under `strongOwned()` (new
@@ -124,8 +163,31 @@ existed.
 
 ### Breaking
 
-- `AdkColours.ToolCalls` and `ToolResults` gained a `modelTurn` component
-  (one-argument constructors kept).
+- `AdkColours.ToolCalls` and `ToolResults` gained a `modelTurn` component,
+  so record patterns must name two components and `equals`/`hashCode`
+  now compare the model turn too. `ToolCalls` keeps its one-argument
+  constructor (dispatch rebuilds the turn). `ToolResults` drops it, and
+  its `modelTurn` (and `results`) must be non-null: the re-ask sends the
+  model turn back, and a results token has no calls to rebuild it from.
+- `LlmAgentSubnet.DEF` and `StreamingLlmAgentSubnet.DEF` changed topology:
+  new transitions `StartTurn`, `EmitAnswer`, `EmitTransfer`, `AbortTurn`,
+  `DropAbort`; new places `TURN_ACTIVE`, `TURN_INPUT`, `ANSWER`,
+  `HANDOFF` and `AdkColours.TURN_PERMIT`; a new `turnAbort` input port
+  (`AdkColours.TURN_ABORT`). `BuildPrompt` now takes `TURN_INPUT`, not
+  `USER_IN`, and has no reset arcs. The composed `Router_Route`
+  transition writes to `ANSWER`/`HANDOFF` and is bound by
+  `LlmAgentSubnet.actionBindings`, which no longer merges
+  `RouterSubnet.actionBindings`. The reask-exhausted fallback answers on
+  `ANSWER`. `CONVERSATION` and `REASK_BUDGET` no longer rest between
+  turns, so checkpoints no longer carry them; they carry the permit. A
+  net run on a bare libpetri executor must seed `TURN_PERMIT` with one
+  token, or no turn starts. An agent composed through
+  `DEF.instantiate(prefix)` must have its `prefix/turnPermit` seeded in
+  `initialMarking` and its `turnAbort` port bound to
+  `AdkColours.TURN_ABORT`; `PetriRunner` refuses to start it unseeded. `SubnetDef.verify` on the agent needs a
+  `turnAbort` generator.
+- `ToolDispatchSubnet` fails the firing for a `ToolCalls` with no calls,
+  where it used to produce an empty `ToolResults`.
 - `PetriRunner.ExecutorFactory.build` takes one `ExecutorSpec` record
   instead of six arguments.
 - `PersistStateSubnet.Config` gained `persistTimeout`, and `DEF` no longer

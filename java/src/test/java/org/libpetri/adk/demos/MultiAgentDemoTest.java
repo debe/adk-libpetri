@@ -372,7 +372,9 @@ class MultiAgentDemoTest {
         // *proves* this net deadlock-free, and libpetri downgrades a verdict
         // it cannot validate (certificate or closed enumeration) to Unknown.
         SmtProofs.assertEachProven(net,
-                v -> v.initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
+                v -> v.initialMarking(b -> b.tokens(AdkColours.USER_IN, 1)
+                                // The planner's turn permit, which PetriRunner seeds.
+                                .tokens(AdkColours.TURN_PERMIT, 1))
                         .sinkPlaces(
                                 // Terminal places — a marking with tokens here is
                                 // a finished agent turn, not a deadlock.
@@ -380,21 +382,12 @@ class MultiAgentDemoTest {
                                 AdkColours.LEGACY_SESSION_WRITE,
                                 TransferRouterSubnet.UNKNOWN_TARGET,
                                 TransferRouterSubnet.targetPlace("billing"),
-                                TransferRouterSubnet.targetPlace("tech_support"))
-                        // Strict deadlock-freedom (libpetri 5.0+) reads a resting
-                        // token on a non-sink place as a stranding. Every turn leaves
-                        // its conversation and any unspent reask budget behind; the
-                        // next BuildPrompt resets both. Excuse them only once the turn
-                        // has ended, by emitting or by transferring, so either one
-                        // stuck mid-turn is still a deadlock.
-                        .sinkPlacesWhen(AdkColours.EVENT_OUT, LlmAgentSubnet.REASK_BUDGET,
-                                LlmAgentSubnet.CONVERSATION)
-                        .sinkPlacesWhen(TransferRouterSubnet.UNKNOWN_TARGET,
-                                LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION)
-                        .sinkPlacesWhen(TransferRouterSubnet.targetPlace("billing"),
-                                LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION)
-                        .sinkPlacesWhen(TransferRouterSubnet.targetPlace("tech_support"),
-                                LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION),
+                                TransferRouterSubnet.targetPlace("tech_support"),
+                                // The planner at rest holds its permit and nothing
+                                // else: the transition that ends a turn clears its
+                                // conversation and reask budget. Excusing the permit
+                                // cannot hide a stalled turn, which holds no permit.
+                                AdkColours.TURN_PERMIT),
                 Map.of(
                         "deadlockFree",
                         SmtProperty.deadlockFree(),

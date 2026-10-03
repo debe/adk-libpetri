@@ -152,6 +152,11 @@ public final class PetriRunner implements AutoCloseable {
         return (EnvironmentPlace<T>) env;
     }
 
+    /** Whether {@code place} is declared as an env place on this runner. */
+    public boolean declaresEnvironmentPlace(Place<?> place) {
+        return envPlaces.containsKey(Objects.requireNonNull(place, "place"));
+    }
+
     /**
      * Inject a token onto a registered env place. The returned future
      * completes when the orchestrator has accepted the token (not when
@@ -760,7 +765,58 @@ public final class PetriRunner implements AutoCloseable {
             return this;
         }
 
-        /** Build the executor, submit it to the orchestrator pool, and return the running runner. */
+        /**
+         * {@code marking} plus the one {@link AdkColours#TURN_PERMIT} token
+         * a net with that place needs to run its first turn, unless the
+         * caller's marking already names the place.
+         */
+        private Map<Place<?>, List<Token<?>>> withTurnPermit(Map<Place<?>, List<Token<?>>> marking) {
+            if (!net.places().contains(AdkColours.TURN_PERMIT)
+                    || marking.containsKey(AdkColours.TURN_PERMIT)) {
+                return marking;
+            }
+            var seeded = new LinkedHashMap<>(marking);
+            seeded.put(AdkColours.TURN_PERMIT, List.of(Token.unit()));
+            return seeded;
+        }
+
+        /**
+         * Fails a fresh start whose net has a permit place of an instantiated
+         * agent ({@code DEF.instantiate(prefix)} renames it to
+         * {@code prefix/turnPermit}) that {@code seed} leaves empty. Only the
+         * unprefixed {@link AdkColours#TURN_PERMIT} is seeded automatically,
+         * and an unseeded permit means no turn ever starts, silently.
+         */
+        private void requireInstancePermitsSeeded(Map<Place<?>, List<Token<?>>> seed) {
+            var suffix = "/" + AdkColours.TURN_PERMIT.name();
+            for (var place : net.places()) {
+                if (place.name().endsWith(suffix) && !seed.containsKey(place)) {
+                    throw new IllegalStateException(
+                            "Place " + place.name() + " is the turn permit of an instantiated agent "
+                            + "and needs one token to run its first turn. Add it to "
+                            + "initialMarking(...): Place.of(\"" + place.name() + "\", Void.class) "
+                            + "-> List.of(Token.unit()).");
+                }
+            }
+        }
+
+        /**
+         * Build the executor, submit it to the orchestrator pool, and return
+         * the running runner.
+         *
+         * <p>For a net that has {@link AdkColours#TURN_PERMIT}, a fresh start
+         * (no {@link #restore(Map)}, no checkpoint found by
+         * {@link #resumeFrom}) seeds that place with its one token, unless
+         * {@link #initialMarking(Map)} names the place, which then decides.
+         * A net that has {@link AdkColours#TURN_ABORT} gets it declared as an
+         * environment place if the caller did not, so {@code PetriAgent} can
+         * signal it. Both serve the turn permit of {@code LlmAgentSubnet}.
+         * Neither applies to an agent composed through
+         * {@code DEF.instantiate(prefix)}, whose permit is the prefixed
+         * {@code prefix/turnPermit}: a fresh start throws
+         * {@link IllegalStateException} unless {@link #initialMarking(Map)}
+         * seeds that place.
+         */
         public PetriRunner start() {
             if (orchestratorExecutor == null) {
                 throw new IllegalStateException("orchestratorExecutor must be set");
@@ -771,8 +827,16 @@ public final class PetriRunner implements AutoCloseable {
                         + "resumes from the snapshot's marking");
             }
             // A checkpoint found by resumeFrom supersedes the seed: the
-            // initial marking is for a session's first start only.
-            var seed = restore != null ? Map.<Place<?>, List<Token<?>>>of() : initialMarking;
+            // initial marking is for a session's first start only. A restore
+            // carries its own permit, or deliberately none.
+            var seed = restore != null
+                    ? Map.<Place<?>, List<Token<?>>>of()
+                    : withTurnPermit(initialMarking);
+            if (restore == null) requireInstancePermitsSeeded(seed);
+            var envPlaces = new LinkedHashMap<>(this.envPlaces);
+            if (net.places().contains(AdkColours.TURN_ABORT)) {
+                envPlaces.putIfAbsent(AdkColours.TURN_ABORT, EnvironmentPlace.of(AdkColours.TURN_ABORT));
+            }
             var bridge = new EventStoreToFlowableBridge(AdkColours.EVENT_OUT, primaryEventStore);
 
             // actionExecutor is optional and inert (see its setter). When a
