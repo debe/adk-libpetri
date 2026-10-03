@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -25,8 +26,10 @@ import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.runtime.BitmapNetExecutor;
 import org.libpetri.runtime.ActionFailureHandler;
 import org.libpetri.runtime.ExecutionContextProvider;
+import org.libpetri.runtime.ExecutionEnvironment;
 import org.libpetri.runtime.PetriNetExecutor;
 import org.libpetri.runtime.PrecompiledNetExecutor;
+import org.libpetri.runtime.SnapshotResult;
 
 /**
  * Per-session handle around a long-lived {@link PetriNetExecutor}.
@@ -275,6 +278,17 @@ public final class PetriRunner implements AutoCloseable {
         return executor;
     }
 
+    /**
+     * The current marking, keyed by place name, for checkpointing. Only a
+     * result whose {@link SnapshotResult#isRestorePoint()} holds is safe to
+     * {@link Builder#restore(Map) restore} from: while an action is in flight,
+     * the tokens it consumed are in no place. Call it before
+     * {@link #shutdown()}; a drained executor cannot be snapshotted.
+     */
+    public SnapshotResult snapshot() {
+        return executor.snapshot();
+    }
+
     public static Builder builder(PetriNet net) {
         return new Builder(net);
     }
@@ -339,12 +353,7 @@ public final class PetriRunner implements AutoCloseable {
      */
     @FunctionalInterface
     public interface ExecutorFactory {
-        PetriNetExecutor build(PetriNet net,
-                               Map<Place<?>, List<Token<?>>> initialMarking,
-                               Collection<EnvironmentPlace<?>> envPlaces,
-                               EventStore eventStore,
-                               ExecutorService orchestratorExecutor,
-                               ExecutionContextProvider contextProvider);
+        PetriNetExecutor build(ExecutorSpec spec);
 
         /**
          * The action-failure policy the built-in factories install: log a
@@ -357,24 +366,79 @@ public final class PetriRunner implements AutoCloseable {
 
         /** Default: {@link BitmapNetExecutor}. */
         static ExecutorFactory bitmap() {
-            return (net, initial, envs, store, exec, ctx) -> BitmapNetExecutor.builder(net, initial)
-                    .environmentPlaces(envs.toArray(EnvironmentPlace[]::new))
-                    .eventStore(store)
-                    .orchestratorExecutor(exec)
-                    .executionContextProvider(ctx)
-                    .uncaughtActionHandler(LOUD_ACTION_FAILURE)
-                    .build();
+            return spec -> {
+                var b = BitmapNetExecutor.builder(spec.net(), spec.initialMarking())
+                        .environmentPlaces(spec.envPlaces().toArray(EnvironmentPlace[]::new))
+                        .eventStore(spec.eventStore())
+                        .orchestratorExecutor(spec.orchestratorExecutor())
+                        .executionContextProvider(spec.contextProvider())
+                        .uncaughtActionHandler(LOUD_ACTION_FAILURE);
+                spec.restore().ifPresent(b::restore);
+                spec.executionScope().ifPresent(b::executionScope);
+                spec.environment().ifPresent(b::environment);
+                spec.deadlineTolerance().ifPresent(b::deadlineTolerance);
+                return b.build();
+            };
         }
 
         /** Precompiled: {@link PrecompiledNetExecutor}. Faster for hot per-session nets. */
         static ExecutorFactory precompiled() {
-            return (net, initial, envs, store, exec, ctx) -> PrecompiledNetExecutor.builder(net, initial)
-                    .environmentPlaces(envs.toArray(EnvironmentPlace[]::new))
-                    .eventStore(store)
-                    .orchestratorExecutor(exec)
-                    .executionContextProvider(ctx)
-                    .uncaughtActionHandler(LOUD_ACTION_FAILURE)
-                    .build();
+            return spec -> {
+                var b = PrecompiledNetExecutor.builder(spec.net(), spec.initialMarking())
+                        .environmentPlaces(spec.envPlaces().toArray(EnvironmentPlace[]::new))
+                        .eventStore(spec.eventStore())
+                        .orchestratorExecutor(spec.orchestratorExecutor())
+                        .executionContextProvider(spec.contextProvider())
+                        .uncaughtActionHandler(LOUD_ACTION_FAILURE);
+                spec.restore().ifPresent(b::restore);
+                spec.executionScope().ifPresent(b::executionScope);
+                spec.environment().ifPresent(b::environment);
+                spec.deadlineTolerance().ifPresent(b::deadlineTolerance);
+                return b.build();
+            };
+        }
+    }
+
+    /**
+     * Everything an {@link ExecutorFactory} needs to build one executor. The
+     * optional components are libpetri executor-builder options that are
+     * left at libpetri's defaults when absent:
+     *
+     * <ul>
+     *   <li>{@code restore}: a marking from {@code snapshot()} to resume
+     *       from, instead of {@code initialMarking} (never both);</li>
+     *   <li>{@code executionScope}: the scope minted names carry, which must
+     *       be new for each resumed run;</li>
+     *   <li>{@code environment}: an injectable clock (libpetri's
+     *       {@link ExecutionEnvironment}), for tests that drive timed
+     *       transitions without real waits;</li>
+     *   <li>{@code deadlineTolerance}: slack before a missed deadline counts
+     *       (libpetri's default is 5 ms; a virtual clock wants zero).</li>
+     * </ul>
+     */
+    public record ExecutorSpec(
+            PetriNet net,
+            Map<Place<?>, List<Token<?>>> initialMarking,
+            Optional<Map<String, List<Token<?>>>> restore,
+            Collection<EnvironmentPlace<?>> envPlaces,
+            EventStore eventStore,
+            ExecutorService orchestratorExecutor,
+            ExecutionContextProvider contextProvider,
+            Optional<String> executionScope,
+            Optional<ExecutionEnvironment> environment,
+            Optional<Duration> deadlineTolerance) {
+
+        public ExecutorSpec {
+            Objects.requireNonNull(net, "net");
+            Objects.requireNonNull(initialMarking, "initialMarking");
+            Objects.requireNonNull(restore, "restore");
+            Objects.requireNonNull(envPlaces, "envPlaces");
+            Objects.requireNonNull(eventStore, "eventStore");
+            Objects.requireNonNull(orchestratorExecutor, "orchestratorExecutor");
+            Objects.requireNonNull(contextProvider, "contextProvider");
+            Objects.requireNonNull(executionScope, "executionScope");
+            Objects.requireNonNull(environment, "environment");
+            Objects.requireNonNull(deadlineTolerance, "deadlineTolerance");
         }
     }
 
@@ -388,6 +452,10 @@ public final class PetriRunner implements AutoCloseable {
         private ExecutorFactory executorFactory = ExecutorFactory.bitmap();
         private ExecutionContextProvider contextProvider = ExecutionContextProvider.NOOP;
         private AtomicReference<PetriNetExecutor> deferredExecutorRef;
+        private Map<String, List<Token<?>>> restore;
+        private String executionScope;
+        private ExecutionEnvironment environment;
+        private Duration deadlineTolerance;
 
         private Builder(PetriNet net) {
             this.net = Objects.requireNonNull(net, "net");
@@ -566,10 +634,57 @@ public final class PetriRunner implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Resume from a marking taken with {@link PetriRunner#snapshot()}
+         * (libpetri's {@code SnapshotResult.marking()}), instead of an
+         * initial marking. Timers restart: a {@code delayed} transition waits
+         * its full delay again. Pair it with a fresh
+         * {@link #executionScope(String)}.
+         */
+        public Builder restore(Map<String, List<Token<?>>> marking) {
+            this.restore = Objects.requireNonNull(marking, "restore");
+            return this;
+        }
+
+        /**
+         * The scope minted ν-names carry ({@code t#scope:n}). A resumed run
+         * must use a scope its earlier runs did not, or names minted after
+         * the restore could collide with names in the restored marking.
+         */
+        public Builder executionScope(String scope) {
+            this.executionScope = Objects.requireNonNull(scope, "executionScope");
+            return this;
+        }
+
+        /**
+         * An injectable clock for the executor (libpetri's
+         * {@link ExecutionEnvironment}). Production code leaves this unset;
+         * tests use it to fire timed transitions without real waits.
+         */
+        public Builder executionEnvironment(ExecutionEnvironment environment) {
+            this.environment = Objects.requireNonNull(environment, "executionEnvironment");
+            return this;
+        }
+
+        /**
+         * Slack before a missed deadline counts. libpetri's default (5 ms)
+         * absorbs scheduling jitter on a real clock; under a virtual clock,
+         * use {@link Duration#ZERO}.
+         */
+        public Builder deadlineTolerance(Duration tolerance) {
+            this.deadlineTolerance = Objects.requireNonNull(tolerance, "deadlineTolerance");
+            return this;
+        }
+
         /** Build the executor, submit it to the orchestrator pool, and return the running runner. */
         public PetriRunner start() {
             if (orchestratorExecutor == null) {
                 throw new IllegalStateException("orchestratorExecutor must be set");
+            }
+            if (restore != null && !initialMarking.isEmpty()) {
+                throw new IllegalStateException(
+                        "restore(...) and initialMarking(...) are exclusive: a restored run "
+                        + "resumes from the snapshot's marking");
             }
             var bridge = new EventStoreToFlowableBridge(AdkColours.EVENT_OUT, primaryEventStore);
 
@@ -578,13 +693,17 @@ public final class PetriRunner implements AutoCloseable {
             // otherwise create and own a pool it never uses. When absent, fall
             // back to the orchestrator pool so the factory contract, which
             // does not accept null, stays satisfied.
-            var executor = executorFactory.build(
+            var executor = executorFactory.build(new ExecutorSpec(
                     net,
                     initialMarking,
+                    Optional.ofNullable(restore),
                     envPlaces.values(),
                     bridge,
                     actionExecutor != null ? actionExecutor : orchestratorExecutor,
-                    contextProvider);
+                    contextProvider,
+                    Optional.ofNullable(executionScope),
+                    Optional.ofNullable(environment),
+                    Optional.ofNullable(deadlineTolerance)));
 
             if (deferredExecutorRef != null) {
                 deferredExecutorRef.set(executor);

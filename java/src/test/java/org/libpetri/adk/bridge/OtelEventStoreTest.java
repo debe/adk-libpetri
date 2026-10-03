@@ -44,6 +44,49 @@ class OtelEventStoreTest {
         provider.close();
     }
 
+    /**
+     * With the composed net in hand, each span names the subnet that
+     * contributed its transition, so a trace can be grouped by subnet. It is
+     * the subnet composed into the top-level net: LlmStep's transitions roll
+     * up to the LlmAgent that composes them. A transition declared on the
+     * top-level net itself belongs to no subnet and gets no subnet attribute.
+     */
+    @Test
+    void spans_name_the_contributing_subnet_when_the_net_is_known() {
+        var routerDef = org.libpetri.adk.subnet.TransferRouterSubnet.def(java.util.Set.of("billing"));
+        var own = org.libpetri.core.Transition.builder("App_Own")
+                .inputs(org.libpetri.core.Arc.In.one(org.libpetri.core.Place.of("app_in", String.class)))
+                .build();
+        var net = org.libpetri.core.PetriNet.builder("app")
+                .compose(org.libpetri.adk.subnet.LlmAgentSubnet.DEF)
+                .compose(routerDef)
+                .transition(own)
+                .build();
+        var store = new OtelEventStore(tracer, EventStore.noop(), net);
+        var at = Instant.parse("2026-05-23T12:00:00Z");
+
+        for (String name : List.of(
+                org.libpetri.adk.subnet.LlmStepSubnet.Transitions.LLM_CALL,
+                org.libpetri.adk.subnet.LlmAgentSubnet.Transitions.RE_ASK,
+                org.libpetri.adk.subnet.TransferRouterSubnet.Transitions.DEMUX,
+                "App_Own")) {
+            store.append(new NetEvent.TransitionCompleted(at, name, List.of(), Duration.ZERO));
+        }
+
+        var subnetByTransition = new java.util.LinkedHashMap<String, String>();
+        for (var span : exporter.getFinishedSpanItems()) {
+            assertThat(span.getAttributes().get(AttributeKey.stringKey(OtelEventStore.TRANSITION_ATTRIBUTE)))
+                    .isEqualTo(span.getName());
+            subnetByTransition.put(span.getName(), String.valueOf(
+                    span.getAttributes().get(AttributeKey.stringKey(OtelEventStore.SUBNET_ATTRIBUTE))));
+        }
+        assertThat(subnetByTransition).containsExactly(
+                org.libpetri.adk.subnet.LlmStepSubnet.Transitions.LLM_CALL, "LlmAgent",
+                org.libpetri.adk.subnet.LlmAgentSubnet.Transitions.RE_ASK, "LlmAgent",
+                org.libpetri.adk.subnet.TransferRouterSubnet.Transitions.DEMUX, "TransferRouter",
+                "App_Own", "null");
+    }
+
     @Test
     void transition_completed_produces_span_with_correct_duration() {
         var store = new OtelEventStore(tracer);

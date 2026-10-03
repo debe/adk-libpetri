@@ -27,6 +27,7 @@ import org.libpetri.analysis.MarkingState;
 import org.libpetri.analysis.StateClassGraph;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.subnet.LlmStreamingStepSubnet;
+import org.libpetri.adk.ManualClock;
 import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.runtime.BitmapNetExecutor;
 import org.libpetri.runtime.Marking;
@@ -37,27 +38,38 @@ class LiveApiRecoverySubnetTest {
     private static final LiveApiRecoverySubnet.Config FAST =
             new LiveApiRecoverySubnet.Config(Duration.ofMillis(80), Duration.ofMillis(80));
 
+    // Timing tests run on a ManualClock: each step is settled before time
+    // moves, so a timer fires at an exact logical instant and the scenarios
+    // assert boundaries (79 ms vs 80 ms) that real sleeps could only race.
+
     @Test
     void silent_model_triggers_nudge_then_reconnect() throws Exception {
-        var fixture = drive(FAST, executor -> {
-            // Caller signals "model should be responding but isn't"
-            executor.inject(env(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED), (Void) null);
-            // Wait long enough for both nudge (80ms) and reconnect (80ms) to fire.
-            sleep(Duration.ofMillis(400));
+        var fixture = drive(FAST, (executor, clock) -> {
+            // Caller signals "model should be responding but isn't".
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
+
+            clock.advanceAndSettle(Duration.ofMillis(79));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.NUDGE_NEEDED)).isFalse();
+            clock.advanceAndSettle(Duration.ofMillis(1));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.NUDGE_NEEDED)).isTrue();
+
+            // The reconnect window starts when the nudge fires, not before.
+            clock.advanceAndSettle(Duration.ofMillis(79));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.RECONNECT_NEEDED)).isFalse();
+            clock.advanceAndSettle(Duration.ofMillis(1));
         });
 
-        // Nudge fired, then reconnect fired.
         assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.NUDGE_NEEDED)).hasSize(1);
         assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.RECONNECT_NEEDED)).hasSize(1);
     }
 
     @Test
     void model_active_inhibits_nudge() throws Exception {
-        var fixture = drive(FAST, executor -> {
-            // Model is actively responding — drop MODEL_ACTIVE token first.
-            executor.inject(env(LiveApiRecoverySubnet.Places.MODEL_ACTIVE), (Void) null);
-            executor.inject(env(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED), (Void) null);
-            sleep(Duration.ofMillis(300));
+        var fixture = drive(FAST, (executor, clock) -> {
+            // Model is actively responding — MODEL_ACTIVE lands first.
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_ACTIVE));
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
+            clock.advanceAndSettle(Duration.ofSeconds(10));
         });
 
         // Neither nudge nor reconnect fired — model presence inhibited both.
@@ -70,11 +82,11 @@ class LiveApiRecoverySubnetTest {
         // RESPONSE_AWAITED injected, then 40ms later (well before the 80ms
         // nudge deadline) MODEL_ACTIVE arrives — the inhibitor atomically
         // blocks both Nudge and Reconnect.
-        var fixture = drive(FAST, executor -> {
-            executor.inject(env(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED), (Void) null);
-            sleep(Duration.ofMillis(40));
-            executor.inject(env(LiveApiRecoverySubnet.Places.MODEL_ACTIVE), (Void) null);
-            sleep(Duration.ofMillis(300));
+        var fixture = drive(FAST, (executor, clock) -> {
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
+            clock.advanceAndSettle(Duration.ofMillis(40));
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_ACTIVE));
+            clock.advanceAndSettle(Duration.ofSeconds(10));
         });
 
         assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.NUDGE_NEEDED)).isEmpty();
@@ -128,18 +140,16 @@ class LiveApiRecoverySubnetTest {
 
     @Test
     void model_active_appears_between_nudge_and_reconnect_stops_recovery() throws Exception {
-        var fixture = drive(FAST, executor -> {
-            executor.inject(env(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED), (Void) null);
-            // Wait for the nudge to actually fire, rather than sleeping 160ms and
-            // betting the MODEL_ACTIVE inject wins the race against the reconnect
-            // deadline that lands at roughly the same moment. On a loaded box that
-            // bet loses, reconnect fires first, and the assertion below goes red
-            // for reasons that have nothing to do with the code.
-            awaitMarked(executor, LiveApiRecoverySubnet.Places.NUDGE_NEEDED, 5_000);
-            // Now the model finally responds — caller signals MODEL_ACTIVE.
-            executor.inject(env(LiveApiRecoverySubnet.Places.MODEL_ACTIVE), (Void) null);
-            // Recover would have fired after another 80ms; the inhibitor blocks it.
-            sleep(Duration.ofMillis(200));
+        var fixture = drive(FAST, (executor, clock) -> {
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
+            clock.advanceAndSettle(Duration.ofMillis(80));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.NUDGE_NEEDED)).isTrue();
+            // The model responds 79ms into the 80ms reconnect window. On a real
+            // clock this test had to poll for the nudge and then bet the
+            // inject would beat a deadline landing at about the same moment.
+            clock.advanceAndSettle(Duration.ofMillis(79));
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_ACTIVE));
+            clock.advanceAndSettle(Duration.ofSeconds(10));
         });
 
         // Nudge fired (the model went silent for >= 80ms before responding),
@@ -207,17 +217,20 @@ class LiveApiRecoverySubnetTest {
                 .build()
                 .bindActions(LiveApiRecoverySubnet.actionBindings(config));
 
+        var clock = new ManualClock();
         var executor = BitmapNetExecutor.builder(net, Map.of())
                 .environmentPlaces(
                         env(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED),
                         env(LiveApiRecoverySubnet.Places.MODEL_ACTIVE))
                 .eventStore(EventStore.inMemory())
+                .environment(clock)
+                .deadlineTolerance(Duration.ZERO)
                 .build();
 
         var pool = Executors.newVirtualThreadPerTaskExecutor();
         var task = CompletableFuture.supplyAsync(executor::run, pool);
 
-        script.run(executor);
+        script.run(executor, clock);
 
         executor.drain();
         var finalMarking = task.get(5, TimeUnit.SECONDS);
@@ -230,33 +243,16 @@ class LiveApiRecoverySubnetTest {
         return EnvironmentPlace.of(place);
     }
 
-    private static void sleep(Duration d) {
-        try {
-            Thread.sleep(d.toMillis());
-        } catch (InterruptedException e) {
-            // Do not swallow. Every test in this class positions events relative
-            // to real deadlines, so a shortened wait does not fail loudly, it
-            // silently runs a different scenario and asserts the old one.
-            Thread.currentThread().interrupt();
-            throw new AssertionError("interrupted while waiting " + d, e);
-        }
+    private static void inject(BitmapNetExecutor executor, Place<Void> place) {
+        executor.inject(env(place), (Void) null).join();
     }
 
-    /** Polls the live marking until {@code place} holds a token, or fails. */
-    @SuppressWarnings("BusyWait")
-    private static void awaitMarked(BitmapNetExecutor executor, Place<?> place, long timeoutMillis)
-            throws InterruptedException {
-        long deadline = System.currentTimeMillis() + timeoutMillis;
-        while (System.currentTimeMillis() < deadline) {
-            if (!executor.marking().peekTokens(place).isEmpty()) return;
-            Thread.sleep(5);
-        }
-        throw new AssertionError(
-                "place '" + place.name() + "' was not marked within " + timeoutMillis + "ms");
+    private static boolean marked(BitmapNetExecutor executor, Place<?> place) {
+        return !executor.marking().peekTokens(place).isEmpty();
     }
 
     @FunctionalInterface
     private interface ExecutorScript {
-        void run(BitmapNetExecutor executor) throws Exception;
+        void run(BitmapNetExecutor executor, ManualClock clock) throws Exception;
     }
 }

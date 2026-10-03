@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import org.libpetri.core.PetriNet;
 import org.libpetri.event.EventStore;
 import org.libpetri.event.NetEvent;
 
@@ -85,14 +86,37 @@ import org.libpetri.event.NetEvent;
  */
 public final class OtelEventStore implements EventStore {
 
+    /** Span attribute: the firing transition's name. */
+    public static final String TRANSITION_ATTRIBUTE = "libpetri.transition";
+    /** Span attribute: the subnet that contributed the transition, when known. */
+    public static final String SUBNET_ATTRIBUTE = "libpetri.subnet";
+
     private final Tracer tracer;
     private final EventStore delegate;
+    private final PetriNet net;   // nullable: without it, spans carry no subnet
     private final AtomicReference<Context> invocationContext =
             new AtomicReference<>(Context.root());
 
     public OtelEventStore(Tracer tracer, EventStore delegate) {
         this.tracer = Objects.requireNonNull(tracer, "tracer");
         this.delegate = Objects.requireNonNull(delegate, "delegate");
+        this.net = null;
+    }
+
+    /**
+     * As {@link #OtelEventStore(Tracer, EventStore)}, and every span also
+     * names the subnet its transition came from ({@value #SUBNET_ATTRIBUTE}),
+     * resolved through {@link PetriNet#subnetOf(String)}. That is the subnet
+     * composed into {@code net}; nested subnets roll up into it (an
+     * {@code LlmAgentSubnet}'s step, router and dispatch transitions report
+     * {@code LlmAgent}). Pass the composed net the runner executes. A
+     * transition declared directly on the top-level net gets no subnet
+     * attribute.
+     */
+    public OtelEventStore(Tracer tracer, EventStore delegate, PetriNet net) {
+        this.tracer = Objects.requireNonNull(tracer, "tracer");
+        this.delegate = Objects.requireNonNull(delegate, "delegate");
+        this.net = Objects.requireNonNull(net, "net");
     }
 
     /** Convenience: chain on top of {@link EventStore#noop()}. */
@@ -171,6 +195,10 @@ public final class OtelEventStore implements EventStore {
                 .setStartTimestamp(toEpochNanos(record.start()), TimeUnit.NANOSECONDS)
                 .startSpan();
         try {
+            span.setAttribute(TRANSITION_ATTRIBUTE, record.name());
+            if (net != null) {
+                net.subnetOf(record.name()).ifPresent(s -> span.setAttribute(SUBNET_ATTRIBUTE, s));
+            }
             if (record.status() != null) {
                 if (record.status() == StatusCode.ERROR && record.errorMessage() != null) {
                     span.setStatus(StatusCode.ERROR, record.errorMessage());

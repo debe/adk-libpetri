@@ -314,6 +314,41 @@ class PetriRunnerTest {
         }
     }
 
+    /**
+     * Session end as a terminal place (libpetri 7.0): declare
+     * {@code END_INVOCATION} terminal on the top-level net and signal it.
+     * The run ends on its own, with {@code TERMINAL}, without a drain.
+     * Nothing may consume or read a terminal place; the stock subnets do not
+     * touch {@code END_INVOCATION}, so any of them can sit under one.
+     */
+    @Test
+    void signalling_a_terminal_end_invocation_place_ends_the_run_without_a_drain() throws Exception {
+        var structure = PetriNet.builder("terminal-session")
+                .compose(LlmAgentSubnet.DEF)
+                .place(AdkColours.END_INVOCATION)
+                .terminal(AdkColours.END_INVOCATION)
+                .build();
+        var net = structure.bindActions(LlmAgentSubnet.actionBindings(
+                scriptedLlm(textResponse("hi")),
+                LlmAgentSubnet.Config.builder("agent", "fake-model").dispatchExecutor(EXECUTOR).build()));
+        var runner = PetriRunner.builder(net)
+                .environmentPlace(AdkColours.USER_IN)
+                .environmentPlace(AdkColours.END_INVOCATION)
+                .orchestratorExecutor(EXECUTOR)
+                .start();
+
+        TestSubscriber<Event> egress = runner.adkEvents().test();
+        runner.inject(AdkColours.USER_IN, userMessage("hello")).get(1, TimeUnit.SECONDS);
+        egress.awaitCount(1);
+
+        runner.signal(AdkColours.END_INVOCATION).get(1, TimeUnit.SECONDS);
+
+        assertThat(runner.awaitTermination(Duration.ofSeconds(2))).isTrue();
+        assertThat(runner.executor().terminationReason())
+                .isEqualTo(org.libpetri.runtime.TerminationReason.TERMINAL);
+        egress.assertComplete();
+    }
+
     private static PetriRunner newRunner(PetriNet net) {
         return PetriRunner.builder(net)
                 .environmentPlace(AdkColours.USER_IN)

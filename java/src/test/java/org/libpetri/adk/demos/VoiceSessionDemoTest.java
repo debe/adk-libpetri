@@ -35,6 +35,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.libpetri.adk.ManualClock;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.demos.voice.BargeInSubnet;
 import org.libpetri.adk.demos.voice.LiveApiRecoverySubnet;
@@ -52,6 +53,7 @@ import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
 import org.libpetri.core.Token;
 import org.libpetri.core.Transition;
+import org.libpetri.adk.ManualClock;
 import org.libpetri.adk.bridge.OtelEventStore;
 import org.libpetri.adk.verify.AdkNetInvariants;
 import org.libpetri.core.TransitionAction;
@@ -173,6 +175,9 @@ class VoiceSessionDemoTest {
         //     one for the ADK utterance, five for voice signals.
         // ============================================================
         var registry = SessionExecutorRegistry.strongOwned();
+        // The silence-recovery timers run on a virtual clock, so step 7 can
+        // fire Nudge and Reconnect at exact instants instead of waiting.
+        var clock = new ManualClock();
 
         var agent = PetriAgent.builder("voice_agent", registry,
                 key -> PetriRunner.builder(bound)
@@ -183,6 +188,8 @@ class VoiceSessionDemoTest {
                         .environmentPlace(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED)
                         .environmentPlace(LiveApiRecoverySubnet.Places.MODEL_ACTIVE)
                         .deferredExecutorRef(execRef)
+                        .executionEnvironment(clock)
+                        .deadlineTolerance(Duration.ZERO)
                         .orchestratorExecutor(EXECUTOR)
                         .start())
                 .description("BIDI voice agent — streaming, barge-in, silence recovery")
@@ -210,6 +217,8 @@ class VoiceSessionDemoTest {
                         .environmentPlace(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED)
                         .environmentPlace(LiveApiRecoverySubnet.Places.MODEL_ACTIVE)
                         .deferredExecutorRef(execRef)
+                        .executionEnvironment(clock)
+                        .deadlineTolerance(Duration.ZERO)
                         .orchestratorExecutor(EXECUTOR)
                         .start());
 
@@ -259,17 +268,14 @@ class VoiceSessionDemoTest {
         //     awaited signal that the silence-recovery subnet times out
         //     into Nudge → Reconnect.
         // ============================================================
-        signal(runner, BargeInSubnet.Places.INTERRUPTED);
-        signal(runner, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED);
+        clock.settle(() -> signalNow(runner, BargeInSubnet.Places.INTERRUPTED));
+        clock.settle(() -> signalNow(runner, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
 
-        // Wait on the property, not on a clock. A quiescence poll taken right
-        // after an inject can read the pre-injection state, because acceptance
-        // completes inside the orchestrator's external-event drain and before
-        // enablement is recomputed. Awaiting the marking closes that window
-        // without betting that 300ms is longer than the chained nudge and
-        // reconnect deadlines on whatever box this runs on.
-        awaitMarked(runner, LiveApiRecoverySubnet.Places.RECONNECT_NEEDED, 5_000);
-        awaitQuiescent(runner, 2_000);
+        // Each step settles before time moves, so the timers start where the
+        // scenario says: Nudge exactly 80ms after the signal, Reconnect 80ms
+        // after Nudge. No poll, no bet on how long a real deadline takes.
+        clock.advanceAndSettle(FAST_RECOVERY.nudgeAfter());
+        clock.advanceAndSettle(FAST_RECOVERY.reconnectAfter());
 
         // ============================================================
         //  8. Verify the structural outcomes — partials seen on the ADK
@@ -965,6 +971,11 @@ class VoiceSessionDemoTest {
      */
     private static void signal(PetriRunner runner, Place<Void> place) throws Exception {
         runner.signal(place).get(1, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /** {@link #signal} for use inside {@link ManualClock#settle(Runnable)}. */
+    private static void signalNow(PetriRunner runner, Place<Void> place) {
+        runner.signal(place).orTimeout(1, java.util.concurrent.TimeUnit.SECONDS).join();
     }
 
     /** Await a token on {@code place}, which is a stronger barrier than quiescence. */

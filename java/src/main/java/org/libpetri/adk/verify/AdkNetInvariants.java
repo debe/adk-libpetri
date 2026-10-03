@@ -86,6 +86,13 @@ public final class AdkNetInvariants {
      * transitions stop firing, so the net winds down without leaking
      * additional output past the end signal.
      *
+     * <p>Since libpetri 7.0 there is a blunter alternative: declare
+     * {@code END_INVOCATION} a terminal place on the top-level net
+     * ({@code .terminal(AdkColours.END_INVOCATION)}). Its first token ends the
+     * run outright, which makes these inhibitors redundant, but it also
+     * discards any in-flight action's result. Use the inhibitors when work in
+     * flight must be allowed to finish.
+     *
      * @param net              the net to inspect
      * @param advancingNames   the set of transition names that count as
      *                         "advancing" — typically every transition
