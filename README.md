@@ -484,23 +484,29 @@ composition primitives together with `SubnetDef.fromNet(...)`.
 
 | Subnet | Input ports | Output ports | What it does |
 |---|---|---|---|
-| `LlmStepSubnet`         | `LLM_REQUEST` | `LLM_RESPONSE`, internal-error | Calls `BaseLlm.generateContent`. Before/After/Error callback transitions with `Out.xor(continue, shortCircuit)` |
+| `LlmStepSubnet`         | `LLM_REQUEST` | `LLM_RESPONSE`                 | Calls `BaseLlm.generateContent`. Before/After/Error callback transitions with `Out.xor(continue, shortCircuit)` |
 | `ToolDispatchSubnet`    | `TOOL_CALLS`  | `TOOL_RESULTS`                 | Per-call task on a virtual-thread executor, AND-join of results. Per-call errors captured in the response payload |
 | `PromptBuilderSubnet`   | `USER_IN`     | `LLM_REQUEST`                  | Builds `LlmRequest` (model, system instruction, tools) |
 | `RouterSubnet`          | `LLM_RESPONSE`| `Out.xor(TOOL_CALLS, TRANSFER, EVENT_OUT)` | Routes by response shape. `transfer_to_agent` takes precedence |
-| `LlmAgentSubnet`        | `USER_IN`     | `EVENT_OUT`, `LEGACY_SESSION_WRITE`, `TRANSFER` | Composes the above four with a reask-budget feedback loop that structurally bounds the autonomous tool loop |
-| `PersistStateSubnet`    | `LEGACY_SESSION_WRITE` | terminal | Single transition draining `StateDelta` to `BaseSessionService.appendEvent`. Race-free by construction: one writer transition in the entire net |
+| `LlmAgentSubnet`        | `USER_IN`     | `EVENT_OUT`, `TRANSFER`        | Its own `BuildPrompt` plus `LlmStep`, `Router` and `ToolDispatch`, with a reask-budget feedback loop that structurally bounds the autonomous tool loop. Each re-ask replays the invocation's conversation from an in-net `CONVERSATION` place |
+| `PersistStateSubnet`    | `LEGACY_SESSION_WRITE` | terminal | Single transition draining `StateDelta` to `BaseSessionService.appendEvent`, bounded by an action timeout (`persistTimeout`, default 5 s). Race-free by construction: one writer transition in the entire net |
 | `TransferRouterSubnet`  | `TRANSFER`    | `target/<name>*`, `target/_unknown`, `EVENT_OUT` | `Out.xor` over compile-time-known target places. A hallucinated name routes to a typed error Event, not an NPE |
+| `LlmStreamingStepSubnet` *(experimental)* | `LLM_REQUEST` | `LLM_RESPONSE`, `EVENT_OUT` | SSE counterpart of `LlmStep`: each model chunk becomes a partial `Event` through a `CHUNK` env place, under a chunk budget; the merged response continues to `LLM_RESPONSE` |
+| `StreamingLlmAgentSubnet` *(experimental)* | `USER_IN` | `EVENT_OUT`, `TRANSFER` | `LlmAgentSubnet` over `LlmStreamingStep`. Wire it with `StreamingLlmAgentSubnet.runnerFactory(...)`, which gives each session its own executor handle |
 
 The canonical composition is `LlmAgentSubnet`: prompt build, LLM call,
-route, tool dispatch, the reask-budget feedback loop, and the
-legacy-session-write sink. `BuildPrompt` resets `REASK_BUDGET` and seeds
-K tokens (the diagram shows one arc; K is per-session via
-`LlmAgentSubnet.Config.reaskBudget(int)`).
+route, tool dispatch and the reask-budget feedback loop. `BuildPrompt`
+resets `REASK_BUDGET` and `CONVERSATION`, seeds K budget tokens (the
+diagram shows one arc; K is per-session via
+`LlmAgentSubnet.Config.reaskBudget(int)`) and the conversation's user
+turn. Each `ReAsk` consumes a budget token and extends the conversation
+with the model's function-call turn and the tool responses, so the
+continuation request carries the whole invocation. Persisting to ADK's
+`Session.state` is a separate `PersistStateSubnet` you compose alongside.
 
 <p align="center">
   <img src="docs/diagrams/svg/llm-agent-subnet.svg"
-       alt="LlmAgentSubnet topology: PromptBuilder, LlmStep, Router with Out.xor, ToolDispatch, the reask-budget loop, and LegacySessionWrite"
+       alt="LlmAgentSubnet topology: BuildPrompt, LlmStep, Router with Out.xor, ToolDispatch, and the reask-budget loop replaying the CONVERSATION place"
        width="900">
 </p>
 
@@ -521,13 +527,13 @@ diagram and SMT-checkable.
        width="720">
 </p>
 
-Voice-specific demo subnets (`BargeIn`, `LiveApiRecovery`,
-`LlmStreamingStep`, `Vad`) are not part of the shipped library. They
-live under `src/test/java/org/libpetri/adk/demos/voice/` as composable
-exemplars of the patterns in
-[case 4](#4-voice-and-full-duplex-failure-modes). The `Vad` producer
-reads genai's Live session directly and injects speech-activity edges
-into the net.
+Voice-specific demo subnets (`BargeIn`, `LiveApiRecovery`, `Vad`) are
+not part of the shipped library. They live under
+`src/test/java/org/libpetri/adk/demos/voice/` as composable exemplars of
+the patterns in [case 4](#4-voice-and-full-duplex-failure-modes). The
+speech-activity edges `Vad` turns into a window come from the Live API,
+which ADK's wrapper drops; the `VadTapGemini` exemplar recovers them by
+wrapping ADK's own live transport (see design commitment 4).
 
 ### Composition patterns ADK orchestration can't express
 
@@ -568,33 +574,51 @@ integration seam. Its core run paths are:
 @Override
 protected Flowable<Event> runAsyncImpl(InvocationContext ctx) {
     SessionKey key = SessionKey.from(ctx.session());
-    Object owner  = ownerExtractor.apply(ctx);          // lifetime owner
-    PetriRunner runner = registry.getOrCreate(key, owner, runnerFactory);
+    PetriRunner runner = runnerFor(ctx, key);           // registry.getOrCreate
     Content userContent = ctx.userContent().orElse(null);
     if (userContent == null) return Flowable.empty();
 
-    // Subscribe BEFORE inject to avoid the hot-stream race.
-    CompletableFuture<Event> nextEvent = new CompletableFuture<>();
-    runner.adkEvents().take(1).subscribe(nextEvent::complete, nextEvent::completeExceptionally);
+    // One ADK invocation id across the turn, and a transition failure
+    // fails the turn (failureSignal is control flow, not observability).
+    Flowable<Event> egress = runner.adkEvents()
+            .map(e -> e.toBuilder().invocationId(ctx.invocationId()).build());
+
+    if (ctx.runConfig().streamingMode() == StreamingMode.SSE) {
+        // Partials through to the first non-partial event.
+        var turn = Flowable.merge(egress, turnFailureSignal(runner))
+                .takeUntil(e -> !e.partial().orElse(false))
+                .replay();
+        turn.connect();                                 // subscribe BEFORE inject
+        runner.inject(AdkColours.USER_IN, userContent);
+        return turn;
+    }
+
+    // Default: the turn's single terminal (non-partial) event.
+    CompletableFuture<Event> next = new CompletableFuture<>();
+    Flowable.merge(egress.filter(e -> !e.partial().orElse(false)), turnFailureSignal(runner))
+            .take(1)
+            .subscribe(next::complete, next::completeExceptionally);
     runner.inject(AdkColours.USER_IN, userContent);
-    return Single.fromCompletionStage(nextEvent).toFlowable();
+    return Single.fromCompletionStage(next).toFlowable();
 }
 
 @Override
 protected Flowable<Event> runLiveImpl(InvocationContext ctx) {
-    // Egress half only; BidiPetriAgent.bridge handles the raw Live pump
-    // when a consumer wires a provider-specific LiveConnection.
-    SessionKey key = SessionKey.from(ctx.session());
-    Object owner  = ownerExtractor.apply(ctx);
-    PetriRunner runner = registry.getOrCreate(key, owner, runnerFactory);
-    return runner.adkEvents();
+    PetriRunner runner = runnerFor(ctx, SessionKey.from(ctx.session()));
+    if (liveConfig == null) return runner.adkEvents();  // egress only
+    return BidiPetriAgent.bridge(ctx.liveRequestQueue().orElseThrow(),
+            liveConfig.connectionFactory().apply(ctx), runner, liveConfig.onServerMessage());
 }
 ```
 
+(Abridged from `PetriAgent.java`; the real methods also open an
+OpenTelemetry invocation span when tracing is wired.)
+
 The two paths divide cleanly. `runAsyncImpl` replaces ADK
 orchestration: the net is the brain for the whole request/response.
-`runLiveImpl` is deliberately only the egress half: it exposes the
-net's ADK event stream to `Runner`. Full Live/BIDI uses
+`runLiveImpl` is, by default, only the egress half: it exposes the
+net's ADK event stream to `Runner`. An agent built with a `LiveConfig`
+(`PetriAgent.builder(...).live(liveConfig)`) runs full Live/BIDI through
 `BidiPetriAgent.bridge(...)` with a provider-specific `LiveConnection`:
 the helper forwards `LiveRequestQueue` frames to the connection, maps
 model-content server frames to ADK `Event`s, and invokes the consumer
@@ -618,6 +642,35 @@ The catch that makes it opt-in rather than the default (a too-weakly-held
 owner is collected mid-session and the runner is torn down *silently*,
 turning every later `inject(...)` into a no-op) is exactly why a
 framework without a clean strong owner should pick `strongOwned()`.
+
+Wiring is one builder call. Under `strongOwned()` the per-invocation
+owner is only an identity, so it can be left out:
+
+```java
+var registry = SessionExecutorRegistry.strongOwned();
+var agent = PetriAgent.builder("assistant", registry,
+        key -> PetriRunner.builder(SubnetActions.bindComposed(net, agentBindings, routerBindings))
+            .environmentPlace(AdkColours.USER_IN)
+            .orchestratorExecutor(executor)
+            .start())
+    .description("Routes to the right specialist")
+    .build();
+// from the session-end hook:
+registry.close(SessionKey.from(session));
+```
+
+`SubnetActions.bindComposed` binds several subnets' action maps at once
+and rejects a missing, unknown or doubly-bound transition, where
+`PetriNet.bindActions(Map)` would silently bind `passthrough()`.
+
+*Experimental:* a registry built with a `SessionCheckpointStore`
+(`strongOwned(store)`) saves each session's marking when it is torn
+down, provided no action is in flight, and a runner factory that calls
+`.resumeFrom(store, key)` starts from it. The marking stays the state:
+the store is written at session end and read before a runner starts,
+never during execution. The `AgentStateCheckpointStore` exemplar keeps
+the checkpoint in ADK's own session history, as an event's
+`EventActions.agentState`.
 
 ### Why ADK and not pure libpetri?
 
@@ -671,8 +724,12 @@ discouraged.
 4. **Zero forks.** ADK is integrated through the `PetriAgent extends
    BaseAgent` adapter, never by forking it. Where a defect lives in
    ADK's wrapper over genai (the `commonPool` hops, the dropped VAD
-   signals), the wrapper is bypassed in thin user code that calls genai
-   directly, not patched in a fork of genai or ADK.
+   signals), the wrapper is bypassed or wrapped in thin user code, not
+   patched in a fork of genai or ADK. `SyncGeminiLlm` calls genai
+   directly for the LLM path. For VAD the preferred route is
+   `VadTapGemini`, which wraps ADK's own live transport through the
+   `connectLiveTransport` seam ADK 1.9 added; `SyncGeminiLiveConnection`,
+   a direct read of genai's Live session, remains for full control.
 5. **Observability is an `EventStore` decorator chain.**
    `OtelEventStore`, `EventStore.logging()`, and any structured-logging
    or debug-recording store wrap each other via the delegate pattern.
@@ -687,7 +744,7 @@ discouraged.
    application state.
 7. **Stock subnets are templates, not the framework.** The framework is
    the composition primitives (`PetriNet.builder().compose()` plus
-   `SubnetDef.fromNet(...)`). The seven stock subnets are convenient
+   `SubnetDef.fromNet(...)`). The nine stock subnets are convenient
    starting points; you are expected to compose your own.
 8. **Per-session executor lifetime is caller-owned.** A session runner
    lives in `strongOwned()` until the caller invokes `close(SessionKey)`,

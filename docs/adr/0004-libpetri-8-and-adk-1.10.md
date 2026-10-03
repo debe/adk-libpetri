@@ -116,20 +116,20 @@ checks for.
 - Our deadlock-freedom claims are now strictly stronger: they assert that
   nothing is left behind unexplained, not just that a sink was reached.
 
-## Deferred
+## Follow-up
 
-Recorded so the next bump can pick them up deliberately:
+The items this ADR first deferred were taken up in the same release:
 
-- `GeminiLiveTransport` as a fork-free VAD tap (above).
-- libpetri 6.1 snapshot/restore paired with ADK 1.10's
-  `EventActions.agentState` for session checkpoint and resume.
-- libpetri's injectable clock (`ExecutionEnvironment`) for the sleep-based
-  timer tests.
-- Per-subnet proofs via `SubnetDef.verify` with `arrivals(k, k)` (8.0), which
-  would turn the shape-only `AdkNetInvariants` factories into proofs.
-- `PersistStateSubnet`'s `deadline(5s)` is now reaped by a late executor
-  (8.0). No current proof covers it; one that does must choose between
-  `assumeNoReaping` and the reaped semantics, and say which.
+- `GeminiLiveTransport` as a fork-free VAD tap: `VadTapGemini`.
+- Snapshot/restore with `EventActions.agentState`: `SessionCheckpointStore`
+  and the `AgentStateCheckpointStore` exemplar.
+- The injectable clock: `ManualClock`, used by the silence-recovery tests.
+- Per-subnet proofs via `SubnetDef.verify` with `arrivals(k, k)`:
+  `StockSubnetProofsTest`.
+- `PersistStateSubnet`'s reaped deadline: the per-subnet proof showed the
+  deadline never bounded what it claimed to (a hung `appendEvent`), so it
+  became an action timeout rather than a choice between `assumeNoReaping`
+  and stranded writes.
 
 ## Next-bump procedure
 

@@ -33,6 +33,58 @@ existed.
   `sinkPlacesWhen(marker, ...)`, which excuses them only while the
   explaining marker holds. Every mutex and bound claim still proves under
   libpetri 8.0's in-flight splitting.
+- **Fix: re-asks carry the whole invocation.** `LlmAgentSubnet`'s re-ask
+  (shared by `StreamingLlmAgentSubnet`) sent only the function responses,
+  which Gemini rejects because it pairs each response with the preceding
+  call. The turns now live on an in-net `LlmAgentSubnet.CONVERSATION`
+  place, the model's call turn travels verbatim (thought signatures
+  included) on new `ToolCalls`/`ToolResults` `modelTurn` components, and
+  function responses use the `user` role, as ADK's own flow does.
+- **Fix: SSE sessions no longer share an executor handle.** The documented
+  streaming wiring shared one `executorRef` across every session, so a
+  second session misrouted the first one's chunks and its turn hung. Use
+  `StreamingLlmAgentSubnet.runnerFactory(llm, config, customize)`, which
+  binds per session; `Config.executorRef` is now optional.
+- **Fix: `PersistStateSubnet` now bounds `appendEvent`.** Its
+  `Timing.deadline(5s)` bounded how long the transition may stay enabled,
+  not how long the call runs, and under libpetri 8.0 a late orchestrator
+  reaped it and stranded the write. It is now an action timeout,
+  `Config.persistTimeout` (default 5 s).
+- **Proofs match the README.** `StockSubnetProofsTest` proves each stock
+  subnet alone (`SubnetDef.verify`, `arrivals(k, k)`); the reask budget is
+  proved not to stack across inputs (design commitment 6); `eventOutBounded`
+  is proved on the multi-agent net. Budget bounds are stated in seeds,
+  since libpetri models an N-permit seed as one token.
+- **Wiring helpers.** `SubnetActions.merge` and `bindComposed` bind a
+  composed net's maps in one checked call. `PetriAgent.builder(...)`, with
+  the owner extractor optional under `strongOwned()` (new
+  `SessionExecutorRegistry.getOrCreate(key, factory)`); the `of`/`ofLive`
+  overloads remain. Demos use `strongOwned()`, the documented default.
+- **libpetri runtime options.** `PetriRunner.Builder` gains `restore`,
+  `executionScope`, `executionEnvironment` and `deadlineTolerance`, and
+  `PetriRunner.snapshot()`. A terminal `END_INVOCATION` place ends a
+  session's run without a drain. `OtelEventStore(tracer, delegate, net)`
+  tags spans with `libpetri.transition` and `libpetri.subnet`.
+- **Session checkpoints** *(experimental)*: `SessionCheckpointStore`;
+  `SessionExecutorRegistry.strongOwned(store)`/`cleanerOwned(store)` save a
+  session's marking at teardown when no action is in flight, and
+  `PetriRunner.Builder.resumeFrom(store, key)` restores it. Exemplar:
+  `AgentStateCheckpointStore` keeps it in ADK's `EventActions.agentState`.
+- **Exemplars and tests.** `VadTapGemini` recovers the voice-activity edges
+  ADK drops by wrapping ADK 1.9's `GeminiLiveTransport`, with no fork.
+  `ManualClock` drives timed tests on a virtual clock; the silence-recovery
+  tests no longer sleep.
+
+### Breaking
+
+- `AdkColours.ToolCalls` and `ToolResults` gained a `modelTurn` component
+  (one-argument constructors kept).
+- `PetriRunner.ExecutorFactory.build` takes one `ExecutorSpec` record
+  instead of six arguments.
+- `PersistStateSubnet.Config` gained `persistTimeout`, and `DEF` no longer
+  carries a `Timing.deadline`.
+- `AdkNetInvariants.noFireAfterEndInvocation` is removed; use
+  `SmtProperty.mutualExclusion(AdkColours.END_INVOCATION, place)`.
 
 
 ## Java 0.4.0 - 2026-08-21
