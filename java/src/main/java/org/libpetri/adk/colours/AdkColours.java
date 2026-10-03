@@ -8,6 +8,7 @@ import com.google.genai.types.FunctionCall;
 import com.google.genai.types.FunctionResponse;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.libpetri.core.Place;
 
 /**
@@ -95,6 +96,40 @@ public final class AdkColours {
     public static final Place<Void> END_INVOCATION =
             Place.of("endInvocation", Void.class);
 
+    /**
+     * The permit a net that runs one turn at a time holds while it is idle.
+     * A turn takes it to start and every way the turn can end gives it back,
+     * so a second {@link #USER_IN} waits on this place, structurally, until
+     * the turn before it has ended. {@code LlmAgentSubnet} and
+     * {@code StreamingLlmAgentSubnet} use it.
+     *
+     * <p>No net can mint its own first permit and still prove that only one
+     * turn runs (see ADR 0005), so it is seeded: {@code PetriRunner} puts one
+     * token here when it starts a net that has this place, unless the run is
+     * a restore or the caller's initial marking already names the place. A
+     * net run on a bare libpetri executor must seed it itself, and so must a
+     * caller that composes an agent through {@code DEF.instantiate(prefix)}:
+     * the instance's permit is the prefixed {@code prefix/turnPermit}, which
+     * {@code PetriRunner} refuses to start without.
+     */
+    public static final Place<Void> TURN_PERMIT =
+            Place.of("turnPermit", Void.class);
+
+    /**
+     * Abandon the turn in flight. A transition that fails consumes its input
+     * tokens and produces nothing (libpetri EXEC-031), so a failure in the
+     * middle of a turn would otherwise keep that turn's permit forever and
+     * every later {@link #USER_IN} would queue behind it.
+     *
+     * <p>{@code PetriAgent} signals this place on every transition failure of
+     * a runner it created, when the runner declares it; {@code PetriRunner}
+     * declares it on its own for a net that has the place. A net that holds a
+     * turn clears it and returns the permit, and drops the signal when no
+     * turn is in flight.
+     */
+    public static final Place<Void> TURN_ABORT =
+            Place.of("turnAbort", Void.class);
+
     private AdkColours() {
         // colour catalog — no instances
     }
@@ -111,6 +146,7 @@ public final class AdkColours {
      * synthesize a model turn from {@code calls}.
      */
     public record ToolCalls(List<FunctionCall> calls, Content modelTurn) {
+        /** A batch whose producer does not have the model turn; dispatch rebuilds one. */
         public ToolCalls(List<FunctionCall> calls) {
             this(calls, null);
         }
@@ -119,13 +155,17 @@ public final class AdkColours {
     /**
      * Wrapper colour for {@code List<FunctionResponse>} — see class-level note.
      *
-     * <p>{@code modelTurn} carries {@link ToolCalls#modelTurn()} across tool
-     * dispatch so the re-ask can rebuild the conversation; {@code null} when
-     * unknown.
+     * <p>{@code modelTurn} is the model turn whose calls these results answer:
+     * {@link ToolCalls#modelTurn()} carried across tool dispatch, or the turn
+     * dispatch rebuilt from the calls. It is required. The re-ask sends it back
+     * in front of the responses, and a results token has no calls left to
+     * rebuild it from, so a re-ask without it sends responses Gemini cannot
+     * pair with a call and rejects.
      */
     public record ToolResults(List<FunctionResponse> results, Content modelTurn) {
-        public ToolResults(List<FunctionResponse> results) {
-            this(results, null);
+        public ToolResults {
+            Objects.requireNonNull(results, "results");
+            Objects.requireNonNull(modelTurn, "modelTurn");
         }
     }
 

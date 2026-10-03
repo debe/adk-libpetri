@@ -50,6 +50,9 @@ import org.libpetri.adk.colours.AdkColours;
  * for tool errors — the LLM sees the failure as a normal response part
  * and decides how to recover.
  *
+ * <p>A batch with no calls is a transition failure: there is nothing to
+ * answer, and the model turn a re-ask would send back would have no parts.
+ *
  * <p>Bind via
  * {@code petriNet.bindActions(ToolDispatchSubnet.actionBindings(toolsByName, contextSupplier, dispatchExecutor))}.
  */
@@ -112,15 +115,18 @@ public final class ToolDispatchSubnet {
         return ctx -> {
             var batch = ctx.input(AdkColours.TOOL_CALLS);
             var calls = batch.calls();
+
+            // A batch with no calls has nothing to answer, and no model turn
+            // worth sending: rebuilt from no calls it has zero parts, which
+            // Gemini rejects. Fail the firing before writing anything; the
+            // turn's abort path (AdkColours.TURN_ABORT) recovers the session.
+            if (calls.isEmpty()) {
+                return CompletableFuture.failedFuture(new IllegalArgumentException(
+                        "ToolDispatch_Dispatch got a tool-call batch with no calls"));
+            }
             Content modelTurn = batch.modelTurn() != null
                     ? batch.modelTurn()
                     : modelTurnOf(calls);
-
-            if (calls.isEmpty()) {
-                ctx.output(AdkColours.TOOL_RESULTS,
-                        new AdkColours.ToolResults(List.of(), modelTurn));
-                return CompletableFuture.completedFuture(null);
-            }
 
             // Each call runs as its own task on the dispatch executor so
             // libpetri's single action thread doesn't serialize them. With
@@ -148,7 +154,8 @@ public final class ToolDispatchSubnet {
     /**
      * Fallback model turn for a {@link AdkColours.ToolCalls} whose producer did
      * not carry the original. It pairs the responses with their calls, but any
-     * {@code thoughtSignature} the model attached is gone.
+     * {@code thoughtSignature} the model attached is gone. Only called with at
+     * least one call, so the turn always has a part.
      */
     private static Content modelTurnOf(List<FunctionCall> calls) {
         var parts = new ArrayList<Part>(calls.size());

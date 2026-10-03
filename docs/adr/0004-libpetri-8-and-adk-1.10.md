@@ -80,6 +80,10 @@ counterexample from closed state-space enumeration:
 | `PatternC_OptimisticCommitDemoTest` | `slowTrigger` | The slow path, cancelled by `inhibitor(COMMITTED)`. |
 | `MultiAgentDemoTest` | `LlmAgent_reaskBudget` | Unspent budget after a turn with no tool calls; the next `BuildPrompt` resets it. Surfaces on both the `EVENT_OUT` and the transfer-target endings. |
 
+Superseded in part by ADR 0005: the agent's turn ends now reset the reask
+budget and return the turn permit, so `MultiAgentDemoTest` no longer excuses
+`LlmAgent_reaskBudget`; it declares the permit a sink instead.
+
 We did not answer with plain `sinkPlaces`, which would excuse those tokens
 unconditionally and hide a real stranding mid-turn. Each one is declared with
 `sinkPlacesWhen(marker, ...)` (5.1, VER-014) instead, so it is excused only
@@ -115,7 +119,9 @@ Every SMT test now proves one property per `verify()` call, through the
 and asserts `isProven()` per property.
 
 Two proofs set `assumeAtomicFiring(true)`: the reask budget and the Pattern A
-race permit, each across two arrivals. The assumption is exact for both, but
+race permit, each across two arrivals. (Superseded in part by ADR 0005: the
+reask-budget bound now proves without the assumption, under the turn permit,
+so only the race-permit proof still sets it.) The assumption is exact for both, but
 not for the reason first given (that a completed future's outputs land in
 the same step; they land at the end of the pass). Without it, the only
 counterexample starts the seed transition again while an earlier firing is in

@@ -170,8 +170,8 @@ public final class AdkNetInvariants {
      * seed transition that writes N permits is verified as writing one, and a
      * bound of N would hold trivially. {@code maxTokens = 1} is the claim that
      * matters: the place never holds more than one seed's worth, which fails
-     * without a reset arc on the seed transition. Run it with more than one
-     * arrival at the seed, or it cannot fail.
+     * when a second seed can land before the first is cleared. Run it with
+     * more than one arrival at the seed, or it cannot fail.
      *
      * <p>A budget only bounds something if a transition consumes a permit
      * without returning it, and an exhaustion path takes over when none is

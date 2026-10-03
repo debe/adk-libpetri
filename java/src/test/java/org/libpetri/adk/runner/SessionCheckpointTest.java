@@ -61,9 +61,10 @@ class SessionCheckpointTest {
 
     /**
      * A session closed at rest is saved, and a new runner for the same key
-     * resumes from it: the invocation's conversation and the unspent reask
-     * budget are back in the marking, as they were. The delivered event is
-     * not: {@code EVENT_OUT} is egress, and never checkpointed.
+     * resumes from it: the agent's turn permit is back in the marking, as it
+     * was, and the resumed session answers its next turn. Nothing else of the
+     * finished turn rests to be saved. The delivered event is not saved
+     * either: {@code EVENT_OUT} is egress, and never checkpointed.
      */
     @Test
     void a_session_closed_at_rest_resumes_with_its_marking() throws Exception {
@@ -81,15 +82,17 @@ class SessionCheckpointTest {
             var saved = checkpoints.load(KEY).orElseThrow();
             before.remove(AdkColours.EVENT_OUT.name());
             assertThat(saved).isEqualTo(before);
-            assertThat(saved).containsKey(LlmAgentSubnet.CONVERSATION.name());
+            assertThat(saved.get(AdkColours.TURN_PERMIT.name())).hasSize(1);
+            assertThat(saved).doesNotContainKey(LlmAgentSubnet.CONVERSATION.name());
+            assertThat(saved).doesNotContainKey(LlmAgentSubnet.REASK_BUDGET.name());
 
             var resumed = registry.getOrCreate(KEY, key -> startResuming(net, checkpoints, key));
-            var conversation = (LlmAgentSubnet.Conversation)
-                    resumed.snapshot().marking().get(LlmAgentSubnet.CONVERSATION.name())
-                            .getFirst().value();
-            assertThat(conversation.turns()).containsExactly(userMessage("remember me"));
-            assertThat(resumed.snapshot().marking().get(LlmAgentSubnet.REASK_BUDGET.name()))
-                    .hasSize(3);
+            // Restored, not seeded again on top: still exactly one permit.
+            assertThat(resumed.snapshot().marking().get(AdkColours.TURN_PERMIT.name())).hasSize(1);
+            TestSubscriber<Event> resumedEgress = resumed.adkEvents().test();
+            resumed.inject(AdkColours.USER_IN, userMessage("still there?")).get(1, TimeUnit.SECONDS);
+            resumedEgress.awaitCount(1);
+            assertThat(resumedEgress.values().getFirst().content().get().text()).isEqualTo("ok");
         }
     }
 

@@ -117,6 +117,52 @@ class PetriAgentSseTest {
         }
     }
 
+    /**
+     * The streaming agent runs one turn at a time too, so a stream that fails
+     * mid-turn would keep the session's permit and every later turn would
+     * queue behind it. {@code PetriAgent} aborts the failed turn: that turn
+     * errors, the next one streams normally, and the failed turn's chunk
+     * does not leak into it.
+     */
+    @Test
+    void a_stream_that_fails_mid_turn_fails_that_turn_and_the_next_turn_streams() {
+        var sse = RunConfig.builder().streamingMode(RunConfig.StreamingMode.SSE).build();
+        var calls = new AtomicInteger();
+        var llm = new BaseLlm("fails-mid-stream") {
+            @Override
+            public Flowable<LlmResponse> generateContent(LlmRequest request, boolean stream) {
+                if (calls.getAndIncrement() == 0) {
+                    return Flowable.concat(Flowable.just(chunkResponse("half ")),
+                            Flowable.error(new IllegalStateException("stream dropped")));
+                }
+                return Flowable.just(chunkResponse("echo: "),
+                        chunkResponse(request.contents().getLast().text()));
+            }
+
+            @Override
+            public BaseLlmConnection connect(LlmRequest request) {
+                throw new UnsupportedOperationException("connect()");
+            }
+        };
+        var registry = SessionExecutorRegistry.strongOwned();
+        try {
+            var runner = new InMemoryRunner(agentFor(llm, registry));
+            var session = newSession(runner, "user-1");
+
+            var failed = runner.runAsync(session.userId(), session.id(),
+                    userMessage("first"), sse).test();
+            failed.awaitDone(3, TimeUnit.SECONDS);
+            failed.assertError(Throwable.class);
+
+            var events = runTurn(runner, session, "second", sse);
+            assertThat(finalText(events)).isEqualTo("echo: second");
+            assertThat(events.stream().map(e -> e.content().get().text()).toList())
+                    .doesNotContain("half ");
+        } finally {
+            registry.closeAll();
+        }
+    }
+
     private static String finalText(List<Event> events) {
         return events.getLast().content().get().text();
     }

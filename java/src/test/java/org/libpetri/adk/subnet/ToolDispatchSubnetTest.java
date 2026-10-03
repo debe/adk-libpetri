@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.libpetri.core.PetriNet;
@@ -86,14 +87,29 @@ class ToolDispatchSubnetTest {
                 .containsExactly("temp", "cold");
     }
 
+    /**
+     * A batch with no calls fails the firing and produces nothing. It used to
+     * produce an empty results token carrying a model turn rebuilt from no
+     * calls, which has zero parts, and a re-ask would have sent that turn and
+     * an empty response turn to the model.
+     */
     @Test
-    void empty_call_list_produces_empty_results_token() {
+    void an_empty_call_batch_fails_the_firing_and_produces_no_results() {
         var fixture = run(Map.of(), callBatch(/* no calls */));
 
         assertThat(fixture.responses()).isEmpty();
-        // The transition still fires once — produces an empty results token.
-        assertThat(fixture.firedTransitionNames())
+        assertThat(fixture.events().stream()
+                .filter(NetEvent.TransitionFailed.class::isInstance)
+                .map(e -> ((NetEvent.TransitionFailed) e).transitionName())
+                .toList())
                 .containsExactly(ToolDispatchSubnet.Transitions.DISPATCH);
+    }
+
+    /** Results always carry the model turn: the re-ask cannot rebuild it from them. */
+    @Test
+    void tool_results_require_the_model_turn() {
+        Assertions.assertThrows(NullPointerException.class,
+                () -> new AdkColours.ToolResults(List.of(), null));
     }
 
     // ============================================================

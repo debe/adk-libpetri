@@ -26,8 +26,10 @@ import org.libpetri.runtime.PetriNetExecutor;
 
 /**
  * SSE counterpart of {@link LlmAgentSubnet}: the same stock LLM↔tool
- * feedback loop, but composed with {@link LlmStreamingStepSubnet} so LLM
- * chunks can surface as partial ADK {@link com.google.adk.events.Event}s.
+ * feedback loop and turn permit, but composed with
+ * {@link LlmStreamingStepSubnet} so LLM chunks can surface as partial ADK
+ * {@link com.google.adk.events.Event}s. An abort also resets the stream's
+ * queued chunks.
  *
  * <p>Wire it through {@link #runnerFactory}, which hands {@code PetriAgent}
  * one runner per session, each with its own executor reference, actions bound
@@ -168,7 +170,6 @@ public final class StreamingLlmAgentSubnet {
         var agentConfig = agentConfig(config);
         return SubnetActions.bind(DEF, SubnetActions.merge(
                 LlmStreamingStepSubnet.actionBindings(baseLlm, streamingCfg(config)),
-                RouterSubnet.actionBindings(LlmAgentSubnet.routerConfig(agentConfig)),
                 ToolDispatchSubnet.actionBindings(
                         config.tools(), config.toolContextSupplier(), config.dispatchExecutor()),
                 LlmAgentSubnet.ownActions(agentConfig)));
@@ -178,8 +179,9 @@ public final class StreamingLlmAgentSubnet {
      * A {@code PetriAgent} runner factory for this subnet. Each call, one per
      * session, creates a fresh executor reference, binds the actions to it,
      * declares {@link AdkColours#USER_IN} and
-     * {@link LlmStreamingStepSubnet.Places#CHUNK} as environment places,
-     * registers the reference via
+     * {@link LlmStreamingStepSubnet.Places#CHUNK} as environment places
+     * ({@code PetriRunner} adds {@link AdkColours#TURN_ABORT} and seeds the
+     * {@link AdkColours#TURN_PERMIT} itself), registers the reference via
      * {@link PetriRunner.Builder#deferredExecutorRef(AtomicReference)}, applies
      * {@code customize}, and starts the runner.
      *

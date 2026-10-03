@@ -43,24 +43,36 @@ function baseConfig(env: string[], direction: 'LR' | 'TB' = 'LR'): DotConfig {
 }
 
 // ============================================================
-// 1. LlmAgentSubnet: the canonical agent loop.
+// 1. LlmAgentSubnet: the canonical agent loop, one turn at a time under
+//    a turn permit. Every turn end returns the permit; TURN_ABORT clears
+//    a turn a failed transition left stranded.
 // ============================================================
 function llmAgentSubnet(): void {
   const USER_IN = place<unknown>('USER_IN');
+  const TURN_ABORT = place<unknown>('TURN_ABORT');
+  const TURN_PERMIT = place<unknown>('TURN_PERMIT');
+  const TURN_ACTIVE = place<unknown>('TURN_ACTIVE');
+  const TURN_INPUT = place<unknown>('TURN_INPUT');
   const EVENT_OUT = place<unknown>('EVENT_OUT');
+  const TRANSFER = place<unknown>('TRANSFER');
   const LLM_REQUEST = place<unknown>('LLM_REQUEST');
   const LLM_RESPONSE = place<unknown>('LLM_RESPONSE');
   const TOOL_CALLS = place<unknown>('TOOL_CALLS');
   const TOOL_RESULTS = place<unknown>('TOOL_RESULTS');
-  const TRANSFER = place<unknown>('TRANSFER');
+  const ANSWER = place<unknown>('ANSWER');
+  const HANDOFF = place<unknown>('HANDOFF');
   const REASK_BUDGET = place<unknown>('REASK_BUDGET');
   const CONVERSATION = place<unknown>('CONVERSATION');
 
+  // Takes the session's single permit: a second USER_IN waits here.
+  const startTurn = Transition.builder('StartTurn')
+    .inputs(one(USER_IN), one(TURN_PERMIT))
+    .outputs(and(outPlace(TURN_ACTIVE), outPlace(TURN_INPUT)))
+    .build();
+
   const buildPrompt = Transition.builder('BuildPrompt')
-    .inputs(one(USER_IN))
+    .inputs(one(TURN_INPUT))
     .outputs(and(outPlace(LLM_REQUEST), outPlace(REASK_BUDGET), outPlace(CONVERSATION)))
-    .reset(REASK_BUDGET)
-    .reset(CONVERSATION)
     .build();
 
   const llmCall = Transition.builder('LlmStep_Call')
@@ -70,7 +82,7 @@ function llmAgentSubnet(): void {
 
   const route = Transition.builder('Router_Route')
     .inputs(one(LLM_RESPONSE))
-    .outputs(xor(outPlace(TOOL_CALLS), outPlace(TRANSFER), outPlace(EVENT_OUT)))
+    .outputs(xor(outPlace(TOOL_CALLS), outPlace(HANDOFF), outPlace(ANSWER)))
     .build();
 
   const dispatchTools = Transition.builder('ToolDispatch')
@@ -87,21 +99,58 @@ function llmAgentSubnet(): void {
 
   const reAskExhausted = Transition.builder('ReAskExhausted')
     .inputs(one(TOOL_RESULTS))
-    .outputs(outPlace(EVENT_OUT))
+    .outputs(outPlace(ANSWER))
     .inhibitor(REASK_BUDGET)
     .priority(-10)
     .build();
 
+  // The two normal turn ends: emit, clear the turn, return the permit.
+  const emitAnswer = Transition.builder('EmitAnswer')
+    .inputs(one(ANSWER), one(TURN_ACTIVE), one(CONVERSATION))
+    .outputs(and(outPlace(EVENT_OUT), outPlace(TURN_PERMIT)))
+    .reset(REASK_BUDGET)
+    .build();
+
+  const emitTransfer = Transition.builder('EmitTransfer')
+    .inputs(one(HANDOFF), one(TURN_ACTIVE), one(CONVERSATION))
+    .outputs(and(outPlace(TRANSFER), outPlace(TURN_PERMIT)))
+    .reset(REASK_BUDGET)
+    .build();
+
+  // A failed transition strands its turn; the abort clears it. The Java
+  // transition resets every place a turn holds; the diagram shows two.
+  const abortTurn = Transition.builder('AbortTurn')
+    .inputs(one(TURN_ABORT), one(TURN_ACTIVE))
+    .outputs(outPlace(TURN_PERMIT))
+    .reset(CONVERSATION)
+    .reset(REASK_BUDGET)
+    .priority(30)
+    .build();
+
+  // Above StartTurn, so a stale abort is dropped before an input that
+  // lands in the same pass takes the permit.
+  const dropAbort = Transition.builder('DropAbort')
+    .inputs(one(TURN_ABORT))
+    .read(TURN_PERMIT)
+    .priority(30)
+    .build();
+
   const net = PetriNet.builder('LlmAgentSubnet')
+    .transition(startTurn)
     .transition(buildPrompt)
     .transition(llmCall)
     .transition(route)
     .transition(dispatchTools)
     .transition(reAsk)
     .transition(reAskExhausted)
+    .transition(emitAnswer)
+    .transition(emitTransfer)
+    .transition(abortTurn)
+    .transition(dropAbort)
     .build();
 
-  write('llm-agent-subnet', dotExport(net, baseConfig(['USER_IN', 'EVENT_OUT'], 'LR')));
+  write('llm-agent-subnet', dotExport(net,
+    baseConfig(['USER_IN', 'TURN_ABORT', 'EVENT_OUT', 'TRANSFER'], 'LR')));
 }
 
 // ============================================================

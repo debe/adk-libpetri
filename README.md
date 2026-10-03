@@ -495,25 +495,35 @@ composition primitives together with `SubnetDef.fromNet(...)`.
 | `ToolDispatchSubnet`    | `TOOL_CALLS`  | `TOOL_RESULTS`                 | Per-call task on a virtual-thread executor, AND-join of results. Per-call errors captured in the response payload |
 | `PromptBuilderSubnet`   | `USER_IN`     | `LLM_REQUEST`                  | Builds `LlmRequest` (model, system instruction, tools) |
 | `RouterSubnet`          | `LLM_RESPONSE`| `Out.xor(TOOL_CALLS, TRANSFER, EVENT_OUT)` | Routes by response shape. `transfer_to_agent` takes precedence |
-| `LlmAgentSubnet`        | `USER_IN`     | `EVENT_OUT`, `TRANSFER`        | Its own `BuildPrompt` plus `LlmStep`, `Router` and `ToolDispatch`, with a reask-budget feedback loop that structurally bounds the autonomous tool loop. Each re-ask replays the invocation's conversation from an in-net `CONVERSATION` place |
+| `LlmAgentSubnet`        | `USER_IN`, `TURN_ABORT` | `EVENT_OUT`, `TRANSFER` | Its own `StartTurn`/`BuildPrompt` plus `LlmStep`, `Router`'s route and `ToolDispatch`, with a reask-budget feedback loop that structurally bounds the autonomous tool loop. Each re-ask replays the invocation's conversation from an in-net `CONVERSATION` place. Runs one turn at a time under a `TURN_PERMIT`; a later input queues until the turn ends, and `TURN_ABORT` clears a turn a failure stranded |
 | `PersistStateSubnet`    | `LEGACY_SESSION_WRITE` | terminal | Single transition draining `StateDelta` to `BaseSessionService.appendEvent`, bounded by an action timeout (`persistTimeout`, default 5 s). Race-free by construction: one writer transition in the entire net |
 | `TransferRouterSubnet`  | `TRANSFER`    | `target/<name>*`, `target/_unknown`, `EVENT_OUT` | `Out.xor` over compile-time-known target places. A hallucinated name routes to a typed error Event, not an NPE |
 | `LlmStreamingStepSubnet` *(experimental)* | `LLM_REQUEST` | `LLM_RESPONSE`, `EVENT_OUT` | SSE counterpart of `LlmStep`: each model chunk becomes a partial `Event` through a `CHUNK` env place, emitted in arrival order; the merged response continues to `LLM_RESPONSE` |
-| `StreamingLlmAgentSubnet` *(experimental)* | `USER_IN` | `EVENT_OUT`, `TRANSFER` | `LlmAgentSubnet` over `LlmStreamingStep`. Wire it with `StreamingLlmAgentSubnet.runnerFactory(...)`, which gives each session its own executor handle |
+| `StreamingLlmAgentSubnet` *(experimental)* | `USER_IN`, `TURN_ABORT` | `EVENT_OUT`, `TRANSFER` | `LlmAgentSubnet` over `LlmStreamingStep`, turn permit included. Wire it with `StreamingLlmAgentSubnet.runnerFactory(...)`, which gives each session its own executor handle |
 
 The canonical composition is `LlmAgentSubnet`: prompt build, LLM call,
-route, tool dispatch and the reask-budget feedback loop. `BuildPrompt`
-resets `REASK_BUDGET` and `CONVERSATION`, seeds K budget tokens (the
-diagram shows one arc; K is per-session via
+route, tool dispatch and the reask-budget feedback loop, one turn at a
+time. `StartTurn` takes the session's single `TURN_PERMIT` with the
+`USER_IN`, so an input that arrives mid-turn (a client retry, say) waits
+until the turn has ended instead of trampling it. `BuildPrompt` seeds K
+budget tokens (the diagram shows one arc; K is per-session via
 `LlmAgentSubnet.Config.reaskBudget(int)`) and the conversation's user
 turn. Each `ReAsk` consumes a budget token and extends the conversation
 with the model's function-call turn and the tool responses, so the
-continuation request carries the whole invocation. Persisting to ADK's
+continuation request carries the whole invocation. The router's answer
+and transfer land on the agent's own places, and `EmitAnswer` /
+`EmitTransfer` emit them, clear the turn's conversation and budget, and
+return the permit. A transition that fails strands its turn;
+`PetriAgent` then signals `TURN_ABORT`, and `AbortTurn` clears the turn
+and returns the permit. `PetriRunner` seeds the permit and declares
+`TURN_ABORT`, so wiring is unchanged. Why the permit is a seeded token
+rather than an inhibitor is in
+[ADR 0005](docs/adr/0005-llm-agent-turn-permit.md). Persisting to ADK's
 `Session.state` is a separate `PersistStateSubnet` you compose alongside.
 
 <p align="center">
   <img src="docs/diagrams/svg/llm-agent-subnet.svg"
-       alt="LlmAgentSubnet topology: BuildPrompt, LlmStep, Router with Out.xor, ToolDispatch, and the reask-budget loop replaying the CONVERSATION place"
+       alt="LlmAgentSubnet topology: StartTurn taking the TURN_PERMIT, BuildPrompt, LlmStep, Router with Out.xor, ToolDispatch, the reask-budget loop replaying the CONVERSATION place, EmitAnswer and EmitTransfer returning the permit, and AbortTurn/DropAbort on TURN_ABORT"
        width="900">
 </p>
 
@@ -787,8 +797,10 @@ rather than quietly turning into `Unknown`.
 
 | What is proved | Net | Test |
 |---|---|---|
-| Each stock subnet is deadlock-free and turns k inputs into exactly k outcomes (`LlmStep`, `Router`, `ToolDispatch`, `TransferRouter`, and the composed `LlmAgent`: one answer, fallback or transfer per user input); `PersistState` takes every write | each subnet alone, via `SubnetDef.verify` with `arrivals(k, k)` | `StockSubnetProofsTest` |
-| The reask budget never stacks across user inputs (commitment 6) | `LlmAgentSubnet`, two arrivals | `StockSubnetProofsTest` |
+| Each stock subnet is deadlock-free and turns k inputs into exactly k outcomes (`LlmStep`, `Router`, `ToolDispatch`, `TransferRouter`); `PersistState` takes every write | each subnet alone, via `SubnetDef.verify` with `arrivals(k, k)` | `StockSubnetProofsTest` |
+| The composed `LlmAgent` is deadlock-free, comes to rest holding only its permit, and turns k user inputs into exactly k outcomes (one answer, fallback or transfer each) | `LlmAgentSubnet` composed, `arrivals(k, k)` | `StockSubnetProofsTest` |
+| One turn at a time: at most one turn in flight, one conversation, and a reask budget that never stacks across user inputs (commitment 6) | `LlmAgentSubnet`, two arrivals; `StreamingLlmAgentSubnet` with its chunk stream open | `StockSubnetProofsTest` |
+| A failure at any step of a turn is recovered: still deadlock-free, one turn, one conversation; aborts at any moment never mint a second permit | `LlmAgentSubnet` with a failure model, and with `TURN_ABORT` arrivals | `StockSubnetProofsTest` |
 | Deadlock-free with the chunk stream open: every request is taken and every chunk drains to an event or the merged response | `LlmStreamingStepSubnet`, two requests | `LlmStreamingStepSubnetTest` |
 | Deadlock-free; at most one egress event per turn (`eventOutBounded`) | multi-agent demo net | `MultiAgentDemoTest` |
 | Deadlock-free | voice demo net | `VoiceSessionDemoTest` |
@@ -800,17 +812,19 @@ the test helper `SmtProofs` or libpetri's `VerificationHarness`.
 `SmtVerifier.property(p)` replaces the property rather than adding one, so
 a chain of `.property(...)` calls checks only the last.
 
-Two proofs assume atomic firing: the reask budget and the race permit.
+One proof assumes atomic firing: the race permit.
 Every other proof runs with libpetri 8.0's in-flight split, which
 verifies a transition as a start step and a completion step whenever
 another transition tests its output with an inhibitor, reset or drain,
 because the executor fires other transitions in between. A synchronous
 action does not close that gap: its outputs land at the end of the
 firing pass, and an inhibitor or reset earlier in the pass does not see
-them. For the two exceptions the assumption is exact. Without it, the
+them. For the exception the assumption is exact. Without it, the
 only counterexample starts the seed transition again while an earlier
 firing of it is in flight, which the Java executor never does (libpetri
-CONC-002), and libpetri's report says so.
+CONC-002), and libpetri's report says so. The reask budget used to be the
+second exception; under the turn permit, which `StartTurn` consumes, no
+second seed can start, and its bound proves with the split.
 
 The pattern bounds are per turn. The demos do not tag branch results
 with the turn that started them, so a turn that starts while the
@@ -821,7 +835,7 @@ Budget bounds are stated in seeds. libpetri has no weighted output arc,
 so a seed transition that writes N permits is modelled as writing one,
 and a bound of N would hold trivially. The property that matters is
 that the place never holds more than one seed's worth, which fails
-without the seed's reset arc.
+when a second seed can land before the first one is cleared.
 
 Anything already expressible as a libpetri primitive stays one: mutual
 exclusion is `SmtProperty.mutualExclusion` rather than a wrapper that
