@@ -119,6 +119,63 @@ class LlmAgentSubnetTest {
                 .isEqualTo(2);
     }
 
+    /**
+     * Each re-ask must carry the whole invocation, not the tool responses
+     * alone: the user turn, then every model function-call turn verbatim
+     * (Gemini 3 rejects a call turn stripped of its thought signature) followed
+     * by its function-response turn. The re-ask used to send only the
+     * responses, which Gemini rejects because it pairs each response with the
+     * preceding call.
+     */
+    @Test
+    void reask_requests_carry_the_full_conversation_including_the_model_call_turn() {
+        var calc = fakeTool("calculate", args -> Map.of("answer", 42));
+        byte[] signature = {7, 7, 7};
+        var firstCall = LlmResponse.builder()
+                .content(Content.builder().role("model").parts(List.of(
+                        Part.builder().thoughtSignature(signature).functionCall(FunctionCall.builder()
+                                .name("calculate").args(Map.of("expr", "6*7")).id("c1").build())
+                                .build()))
+                        .build())
+                .build();
+        var secondCall = responseWithCalls(FunctionCall.builder()
+                .name("calculate").args(Map.of("expr", "42+0")).id("c2").build());
+        var requests = new ArrayList<LlmRequest>();
+        var llm = capturingLlm(requests, firstCall, secondCall, textResponse("42."));
+
+        var config = LlmAgentSubnet.Config.builder("calc-agent", "fake-model")
+                .tools(Map.of("calculate", calc))
+                .reaskBudget(3)
+                .dispatchExecutor(EXECUTOR)
+                .build();
+
+        var user = userMessage("calc 6*7");
+        var fixture = run(llm, config, user);
+
+        assertThat(fixture.events()).hasSize(1);
+        assertThat(requests).hasSize(3);
+        assertThat(requests.get(0).contents()).containsExactly(user);
+
+        var firstReAsk = requests.get(1).contents();
+        assertThat(firstReAsk).hasSize(3);
+        assertThat(firstReAsk.get(0)).isEqualTo(user);
+        // The model turn goes back verbatim, signature and all.
+        assertThat(firstReAsk.get(1)).isEqualTo(firstCall.content().get());
+        assertThat(firstReAsk.get(1).parts().get().get(0).thoughtSignature().get())
+                .isEqualTo(signature);
+        assertThat(firstReAsk.get(2).role()).hasValue("user");
+        assertThat(firstReAsk.get(2).parts().get().get(0).functionResponse().get().id())
+                .hasValue("c1");
+
+        // The second hop keeps accumulating rather than starting over.
+        var secondReAsk = requests.get(2).contents();
+        assertThat(secondReAsk).hasSize(5);
+        assertThat(secondReAsk.subList(0, 3)).isEqualTo(firstReAsk);
+        assertThat(secondReAsk.get(3)).isEqualTo(secondCall.content().get());
+        assertThat(secondReAsk.get(4).parts().get().get(0).functionResponse().get().id())
+                .hasValue("c2");
+    }
+
     // ============================================================
     //  Reask budget exhaustion → canned fallback
     // ============================================================
@@ -332,6 +389,25 @@ class LlmAgentSubnetTest {
                 if (next == null) {
                     return Flowable.error(new IllegalStateException(
                             "scriptedLlm exhausted — test invoked the LLM more times than scripted"));
+                }
+                return Flowable.just(next);
+            }
+            @Override public BaseLlmConnection connect(LlmRequest r) {
+                throw new UnsupportedOperationException();
+            }
+        };
+    }
+
+    /** Like {@link #scriptedLlm}, but records every request it is sent. */
+    private static BaseLlm capturingLlm(List<LlmRequest> sink, LlmResponse... responses) {
+        Deque<LlmResponse> queue = new ArrayDeque<>(List.of(responses));
+        return new BaseLlm("capturing") {
+            @Override public Flowable<LlmResponse> generateContent(LlmRequest r, boolean s) {
+                synchronized (sink) { sink.add(r); }
+                var next = queue.poll();
+                if (next == null) {
+                    return Flowable.error(new IllegalStateException(
+                            "capturingLlm exhausted — test invoked the LLM more times than scripted"));
                 }
                 return Flowable.just(next);
             }

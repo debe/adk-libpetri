@@ -21,10 +21,11 @@ import org.libpetri.adk.colours.AdkColours;
  * <p>This stays <b>stateless and single-turn</b>: the prepared
  * request contains exactly the user's incoming {@code Content} plus an
  * optional {@code systemInstruction} carried via
- * {@link GenerateContentConfig#systemInstruction()}. Multi-turn history
- * (reading prior {@link com.google.adk.events.Event}s from session
- * state) belongs to a future Session/State integration — the topology is
- * the same, with an added Read arc to a history place.
+ * {@link GenerateContentConfig#systemInstruction()}. For multi-turn
+ * history, keep the history in a typed in-net place and give your own
+ * prompt-building transition a Read arc on it (the in-net
+ * conversation-place pattern); {@link LlmAgentSubnet#CONVERSATION} is that
+ * pattern scoped to one invocation's tool loop.
  *
  * <p>Topology:
  * <pre>

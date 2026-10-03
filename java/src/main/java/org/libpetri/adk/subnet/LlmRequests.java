@@ -18,8 +18,9 @@ import java.util.Optional;
  * into one place. The four arguments are the contract — model,
  * optional system instruction, tool registry (omit if empty),
  * caller-shaped contents. Role assignment stays at the call site
- * (BuildPrompt forwards the user's content unchanged, ReAsk wraps tool
- * responses in a {@code "tool"}-role {@link Content}).
+ * (BuildPrompt forwards the user's content unchanged; ReAsk replays the
+ * invocation's conversation and wraps tool responses in a
+ * {@code "user"}-role {@link Content}, as ADK's own flow does).
  *
  * <p>Package-private on purpose: not a public API surface. Users who
  * want to compose their own subnets build {@link LlmRequest}s directly.

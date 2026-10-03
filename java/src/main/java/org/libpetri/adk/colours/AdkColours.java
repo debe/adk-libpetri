@@ -99,11 +99,35 @@ public final class AdkColours {
         // colour catalog — no instances
     }
 
-    /** Wrapper colour for {@code List<FunctionCall>} — see class-level note. */
-    public record ToolCalls(List<FunctionCall> calls) {}
+    /**
+     * Wrapper colour for {@code List<FunctionCall>} — see class-level note.
+     *
+     * <p>{@code modelTurn} is the model {@link Content} the calls came from,
+     * verbatim. A re-ask must send it back in front of the function responses:
+     * Gemini pairs each {@code functionResponse} with the preceding
+     * {@code functionCall} turn, and Gemini 3 additionally requires the turn's
+     * {@code thoughtSignature} parts, which a turn rebuilt from the calls alone
+     * would lose. {@code null} when the producer did not have it; consumers then
+     * synthesize a model turn from {@code calls}.
+     */
+    public record ToolCalls(List<FunctionCall> calls, Content modelTurn) {
+        public ToolCalls(List<FunctionCall> calls) {
+            this(calls, null);
+        }
+    }
 
-    /** Wrapper colour for {@code List<FunctionResponse>} — see class-level note. */
-    public record ToolResults(List<FunctionResponse> results) {}
+    /**
+     * Wrapper colour for {@code List<FunctionResponse>} — see class-level note.
+     *
+     * <p>{@code modelTurn} carries {@link ToolCalls#modelTurn()} across tool
+     * dispatch so the re-ask can rebuild the conversation; {@code null} when
+     * unknown.
+     */
+    public record ToolResults(List<FunctionResponse> results, Content modelTurn) {
+        public ToolResults(List<FunctionResponse> results) {
+            this(results, null);
+        }
+    }
 
     /**
      * Envelope colour for a write-only export to ADK's legacy
