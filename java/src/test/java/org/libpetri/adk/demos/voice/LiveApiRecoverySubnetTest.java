@@ -5,7 +5,6 @@ import static com.google.common.truth.Truth.assertThat;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -23,12 +22,12 @@ import org.libpetri.core.EnvironmentPlace;
 import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
 import org.libpetri.core.Token;
-import org.libpetri.core.TransitionAction;
 import org.libpetri.event.EventStore;
 import org.libpetri.analysis.MarkingState;
 import org.libpetri.analysis.StateClassGraph;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.subnet.LlmStreamingStepSubnet;
+import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.runtime.BitmapNetExecutor;
 import org.libpetri.runtime.Marking;
 import org.libpetri.runtime.PetriNetExecutor;
@@ -101,18 +100,15 @@ class LiveApiRecoverySubnetTest {
         var streamConfig = LlmStreamingStepSubnet.Config.builder("scg")
                 .executorRef(new AtomicReference<PetriNetExecutor>())
                 .build();
-        var scgBindings = new LinkedHashMap<String, TransitionAction>();
-        scgBindings.putAll(LlmStreamingStepSubnet.actionBindings(
-                scgStubLlm(), streamConfig));
-        scgBindings.putAll(BargeInSubnet.actionBindings());
-        scgBindings.putAll(LiveApiRecoverySubnet.actionBindings(FAST));
-
-        var net = PetriNet.builder("voice-scg-check")
-                .compose(LlmStreamingStepSubnet.DEF)
-                .compose(BargeInSubnet.DEF)
-                .compose(recoveryDef)
-                .build()
-                .bindActions(scgBindings);
+        var net = SubnetActions.bindComposed(
+                PetriNet.builder("voice-scg-check")
+                        .compose(LlmStreamingStepSubnet.DEF)
+                        .compose(BargeInSubnet.DEF)
+                        .compose(recoveryDef)
+                        .build(),
+                LlmStreamingStepSubnet.actionBindings(scgStubLlm(), streamConfig),
+                BargeInSubnet.actionBindings(),
+                LiveApiRecoverySubnet.actionBindings(FAST));
 
         var initial = MarkingState.builder()
                 .tokens(AdkColours.LLM_REQUEST, 1)

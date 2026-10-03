@@ -7,7 +7,6 @@ import com.google.adk.tools.ToolContext;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -257,16 +256,20 @@ public final class LlmAgentSubnet {
         Objects.requireNonNull(baseLlm, "baseLlm");
         Objects.requireNonNull(config, "config");
 
-        var all = new LinkedHashMap<String, TransitionAction>();
-        all.putAll(LlmStepSubnet.actionBindings(baseLlm, config.callbacks()));
-        all.putAll(RouterSubnet.actionBindings(routerConfig(config)));
-        all.putAll(ToolDispatchSubnet.actionBindings(
-                config.tools(), config.toolContextSupplier(), config.dispatchExecutor()));
-        all.put(Transitions.BUILD_PROMPT,              buildPromptAction(config));
-        all.put(Transitions.RE_ASK,                    reAskAction(config));
-        all.put(Transitions.RE_ASK_EXHAUSTED_FALLBACK, reAskExhaustedFallbackAction(config));
+        return SubnetActions.bind(DEF, SubnetActions.merge(
+                LlmStepSubnet.actionBindings(baseLlm, config.callbacks()),
+                RouterSubnet.actionBindings(routerConfig(config)),
+                ToolDispatchSubnet.actionBindings(
+                        config.tools(), config.toolContextSupplier(), config.dispatchExecutor()),
+                ownActions(config)));
+    }
 
-        return SubnetActions.bind(DEF, all);
+    /** The agent's own three transitions, shared with {@link StreamingLlmAgentSubnet}. */
+    static Map<String, TransitionAction> ownActions(Config config) {
+        return Map.of(
+                Transitions.BUILD_PROMPT,              buildPromptAction(config),
+                Transitions.RE_ASK,                    reAskAction(config),
+                Transitions.RE_ASK_EXHAUSTED_FALLBACK, reAskExhaustedFallbackAction(config));
     }
 
     static RouterSubnet.Config routerConfig(Config c) {

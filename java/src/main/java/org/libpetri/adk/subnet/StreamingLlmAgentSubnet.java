@@ -6,7 +6,6 @@ import com.google.adk.tools.BaseTool;
 import com.google.adk.tools.ToolContext;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -173,19 +172,12 @@ public final class StreamingLlmAgentSubnet {
                         + " which does");
 
         var agentConfig = agentConfig(config);
-        var all = new LinkedHashMap<String, TransitionAction>();
-        all.putAll(LlmStreamingStepSubnet.actionBindings(baseLlm, streamingCfg(config)));
-        all.putAll(RouterSubnet.actionBindings(LlmAgentSubnet.routerConfig(agentConfig)));
-        all.putAll(ToolDispatchSubnet.actionBindings(
-                config.tools(), config.toolContextSupplier(), config.dispatchExecutor()));
-        all.put(LlmAgentSubnet.Transitions.BUILD_PROMPT,
-                LlmAgentSubnet.buildPromptAction(agentConfig));
-        all.put(LlmAgentSubnet.Transitions.RE_ASK,
-                LlmAgentSubnet.reAskAction(agentConfig));
-        all.put(LlmAgentSubnet.Transitions.RE_ASK_EXHAUSTED_FALLBACK,
-                LlmAgentSubnet.reAskExhaustedFallbackAction(agentConfig));
-
-        return SubnetActions.bind(DEF, all);
+        return SubnetActions.bind(DEF, SubnetActions.merge(
+                LlmStreamingStepSubnet.actionBindings(baseLlm, streamingCfg(config)),
+                RouterSubnet.actionBindings(LlmAgentSubnet.routerConfig(agentConfig)),
+                ToolDispatchSubnet.actionBindings(
+                        config.tools(), config.toolContextSupplier(), config.dispatchExecutor()),
+                LlmAgentSubnet.ownActions(agentConfig)));
     }
 
     /**

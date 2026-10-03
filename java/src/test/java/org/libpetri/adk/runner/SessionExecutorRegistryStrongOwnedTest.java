@@ -118,6 +118,51 @@ class SessionExecutorRegistryStrongOwnedTest {
         return new WeakReference<>(owner);
     }
 
+    @Test
+    void ownerless_get_or_create_reuses_one_runner_per_key() {
+        try (var registry = SessionExecutorRegistry.strongOwned()) {
+            var first = registry.getOrCreate(K1, k -> testRunner());
+            var again = registry.getOrCreate(K1, k -> {
+                throw new AssertionError("must reuse, not create");
+            });
+            assertThat(again).isSameInstanceAs(first);
+            assertThat(registry.close(K1)).isTrue();
+            assertThat(registry.size()).isEqualTo(0);
+        }
+    }
+
+    @Test
+    void ownerless_and_explicit_owners_do_not_mix_for_one_key() {
+        try (var registry = SessionExecutorRegistry.strongOwned()) {
+            registry.getOrCreate(K1, k -> testRunner());
+            assertThrows(IllegalStateException.class,
+                    () -> registry.getOrCreate(K1, new Object(), k -> testRunner()));
+        }
+    }
+
+    /** In cleaner mode the owner is what tears the runner down, so it cannot be omitted. */
+    @Test
+    void ownerless_get_or_create_is_rejected_by_a_cleaner_owned_registry() {
+        try (var registry = SessionExecutorRegistry.cleanerOwned()) {
+            var e = assertThrows(IllegalStateException.class,
+                    () -> registry.getOrCreate(K1, k -> testRunner()));
+            assertThat(e).hasMessageThat().contains("lifetime owner");
+            assertThat(registry.size()).isEqualTo(0);
+        }
+    }
+
+    @Test
+    void builder_rejects_a_cleaner_owned_registry_without_an_owner_extractor() {
+        try (var registry = SessionExecutorRegistry.cleanerOwned()) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> PetriAgent.builder("agent", registry, k -> testRunner()).build());
+            // With an extractor it builds.
+            PetriAgent.builder("agent", registry, k -> testRunner())
+                    .ownerExtractor(ctx -> ctx.session().id())
+                    .build();
+        }
+    }
+
     /**
      * Runs GC repeatedly for a fixed window without asserting anything.
      *
