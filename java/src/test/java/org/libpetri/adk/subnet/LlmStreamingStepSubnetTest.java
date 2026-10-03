@@ -12,6 +12,7 @@ import com.google.genai.types.Part;
 import io.reactivex.rxjava3.core.Flowable;
 import io.reactivex.rxjava3.subscribers.TestSubscriber;
 import java.util.ArrayDeque;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -260,10 +261,10 @@ class LlmStreamingStepSubnetTest {
         CompletableFuture<Marking> task = CompletableFuture.supplyAsync(
                 executor::run, orchestratorExec);
 
-        // Heuristic wait: give the executor up to 2s to process all requests,
-        // then drain. With local in-memory mock LLM + virtual threads, this is
-        // far more than enough.
-        Thread.sleep(200);
+        // Drain only once the net has really finished. drain() refuses new
+        // injects, so draining while a stream is still injecting chunks would
+        // lose them; this used to be a fixed 200ms sleep that bet otherwise.
+        awaitSettled(executor, Duration.ofSeconds(5));
 
         executor.drain();
         Marking finalMarking = task.get(5, TimeUnit.SECONDS);
@@ -274,6 +275,28 @@ class LlmStreamingStepSubnetTest {
                 finalMarking.peekTokens(AdkColours.LLM_RESPONSE).stream().map(Token::value).toList(),
                 finalMarking,
                 captured.events());
+    }
+
+    /**
+     * Waits until no action is in flight, no inject is pending and no request
+     * or chunk is still waiting: the stream has fully played out. libpetri
+     * reports the first two through {@code snapshot().isRestorePoint()}.
+     */
+    @SuppressWarnings("BusyWait")
+    private static void awaitSettled(BitmapNetExecutor executor, Duration timeout)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            var snap = executor.snapshot();
+            if (snap.isRestorePoint()
+                    && !snap.marking().containsKey(AdkColours.LLM_REQUEST.name())
+                    && !snap.marking().containsKey(LlmStreamingStepSubnet.Places.LLM_REQUEST_INTERNAL.name())
+                    && !snap.marking().containsKey(LlmStreamingStepSubnet.Places.CHUNK.name())) {
+                return;
+            }
+            Thread.sleep(2);
+        }
+        throw new AssertionError("streaming net did not settle within " + timeout);
     }
 
     private static LlmRequest simpleRequest(String text) {
