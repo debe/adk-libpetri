@@ -96,14 +96,27 @@ existed.
   overloads remain. Demos use `strongOwned()`, the documented default.
 - **libpetri runtime options.** `PetriRunner.Builder` gains `restore`,
   `executionScope`, `executionEnvironment` and `deadlineTolerance`, and
-  `PetriRunner.snapshot()`. A terminal `END_INVOCATION` place ends a
+  `PetriRunner.snapshot()`; `snapshot`, `restore` and `executionScope` are
+  experimental, since the checkpoint format is the snapshot format. A terminal `END_INVOCATION` place ends a
   session's run without a drain. `OtelEventStore(tracer, delegate, net)`
   tags spans with `libpetri.transition` and `libpetri.subnet`.
-- **Session checkpoints** *(experimental)*: `SessionCheckpointStore`;
-  `SessionExecutorRegistry.strongOwned(store)`/`cleanerOwned(store)` save a
-  session's marking at teardown when no action is in flight, and
-  `PetriRunner.Builder.resumeFrom(store, key)` restores it. Exemplar:
-  `AgentStateCheckpointStore` keeps it in ADK's `EventActions.agentState`.
+- **Session checkpoints** *(experimental)*: `SessionCheckpointStore`
+  (`save`, `load`, `remove`); `SessionExecutorRegistry.strongOwned(store)`/
+  `cleanerOwned(store)` drain a session's runner at teardown (new injects
+  refused, actions in flight completed) and save the marking its run ends
+  in, and `PetriRunner.Builder.resumeFrom(store, key)` restores it, taking
+  precedence over `initialMarking` so one factory serves first start and
+  resume. Until the save lands the key stays taken: a concurrent
+  `getOrCreate` waits and then resumes from it, so a key never has two
+  serving runners. A run that does not drain to quiescence within the
+  checkpoint timeout (30 s by default, `strongOwned(store, timeout)`), or a
+  failed save, removes the key's checkpoint instead of leaving a stale one.
+  `EVENT_OUT` is never saved, so delivered events no longer pile up across
+  resumes; `Builder.excludeFromCheckpoint(places...)` leaves out further
+  egress places. `registry.discard(key)` ends a session without saving it
+  and drops its checkpoint. Exemplar: `AgentStateCheckpointStore` keeps it
+  in ADK's `EventActions.agentState`, with an append-only tombstone for
+  `remove`.
 - **Exemplars and tests.** `VadTapGemini` recovers the voice-activity edges
   ADK drops by wrapping ADK 1.9's `GeminiLiveTransport`, with no fork.
   `ManualClock` drives timed tests on a virtual clock; the silence-recovery

@@ -88,8 +88,8 @@ generated from [`docs/diagrams/`](docs/diagrams/).
   `PetriAgent` (ADK `BaseAgent` adapter, built with
   `PetriAgent.builder(...)`), `SessionExecutorRegistry` (lazy
   per-session executor map), `SessionCheckpointStore`
-  (`@Experimental` save-on-teardown / `resumeFrom` checkpoints) and
-  `SessionKey`.
+  (`@Experimental` drain-then-save on teardown / `resumeFrom`
+  checkpoints) and `SessionKey`.
 - **`verify/`**: `AdkNetInvariants`. 3 structural validators plus 2
   SMT property factories (`budgetPlaceBounded`, `eventOutBounded`).
   Which property is proved on which net is listed in the README's

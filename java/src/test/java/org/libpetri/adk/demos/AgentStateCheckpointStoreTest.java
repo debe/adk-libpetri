@@ -56,4 +56,45 @@ class AgentStateCheckpointStoreTest {
 
         assertThat(store.load(key).orElseThrow().get("notes").getFirst().value()).isEqualTo("new");
     }
+
+    @Test
+    void remove_appends_a_tombstone_that_hides_earlier_markings() {
+        var sessions = new InMemorySessionService();
+        var session = sessions.createSession("app", "user", (Map<String, Object>) null, "s1")
+                .blockingGet();
+        var key = SessionKey.from(session);
+        var store = new AgentStateCheckpointStore(sessions, "agent", CODEC);
+        var at = Instant.parse("2026-10-03T12:00:00Z");
+
+        store.remove(key);   // nothing saved yet: no event appended
+        assertThat(events(sessions)).isEqualTo(0);
+
+        store.save(key, Map.of("notes", List.of(new Token<>("old", at))));
+        store.remove(key);
+        assertThat(store.load(key)).isEmpty();
+        assertThat(events(sessions)).isEqualTo(2);
+        store.remove(key);   // already removed: no second tombstone
+        assertThat(events(sessions)).isEqualTo(2);
+
+        store.save(key, Map.of("notes", List.of(new Token<>("new", at))));
+        assertThat(store.load(key).orElseThrow().get("notes").getFirst().value()).isEqualTo("new");
+    }
+
+    @Test
+    void a_session_the_service_does_not_have_holds_no_checkpoint() {
+        var sessions = new InMemorySessionService();
+        var store = new AgentStateCheckpointStore(sessions, "agent", CODEC);
+        var key = new SessionKey("app", "user", "gone");
+        var at = Instant.parse("2026-10-03T12:00:00Z");
+
+        assertThat(store.load(key)).isEmpty();
+        store.save(key, Map.of("notes", List.of(new Token<>("lost", at))));
+        store.remove(key);
+        assertThat(store.load(key)).isEmpty();
+    }
+
+    private static int events(InMemorySessionService sessions) {
+        return sessions.getSession("app", "user", "s1", java.util.Optional.empty())
+                .blockingGet().events().size();
+    }
 }

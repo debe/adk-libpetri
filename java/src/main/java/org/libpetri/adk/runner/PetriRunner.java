@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -29,9 +31,11 @@ import org.libpetri.runtime.BitmapNetExecutor;
 import org.libpetri.runtime.ActionFailureHandler;
 import org.libpetri.runtime.ExecutionContextProvider;
 import org.libpetri.runtime.ExecutionEnvironment;
+import org.libpetri.runtime.Marking;
 import org.libpetri.runtime.PetriNetExecutor;
 import org.libpetri.runtime.PrecompiledNetExecutor;
 import org.libpetri.runtime.SnapshotResult;
+import org.libpetri.runtime.TerminationReason;
 
 /**
  * Per-session handle around a long-lived {@link PetriNetExecutor}.
@@ -110,19 +114,25 @@ import org.libpetri.runtime.SnapshotResult;
  */
 public final class PetriRunner implements AutoCloseable {
 
+    private final PetriNet net;
     private final PetriNetExecutor executor;
     private final Map<Place<?>, EnvironmentPlace<?>> envPlaces;
     private final EventStoreToFlowableBridge bridge;
     private final Future<?> orchestratorTask;
+    private final Set<String> checkpointExcludes;
 
-    private PetriRunner(PetriNetExecutor executor,
+    private PetriRunner(PetriNet net,
+                        PetriNetExecutor executor,
                         Map<Place<?>, EnvironmentPlace<?>> envPlaces,
                         EventStoreToFlowableBridge bridge,
-                        Future<?> orchestratorTask) {
+                        Future<?> orchestratorTask,
+                        Set<String> checkpointExcludes) {
+        this.net = net;
         this.executor = executor;
         this.envPlaces = envPlaces;
         this.bridge = bridge;
         this.orchestratorTask = orchestratorTask;
+        this.checkpointExcludes = checkpointExcludes;
     }
 
     /**
@@ -230,9 +240,10 @@ public final class PetriRunner implements AutoCloseable {
      * Returns {@code true} if the orchestrator finished within the
      * budget, {@code false} on timeout. Call after {@link #drainAsync()}
      * (or any other path that triggers drain) when you need to confirm
-     * teardown before proceeding. Clears the interrupt status if the
-     * wait is interrupted; the caller can re-check
-     * {@code Thread.currentThread().isInterrupted()} afterwards.
+     * teardown before proceeding. An interrupted wait returns
+     * {@code false} with the interrupt status set again, so the caller can
+     * tell it from a timeout with
+     * {@code Thread.currentThread().isInterrupted()}.
      */
     public boolean awaitTermination(Duration timeout) {
         Objects.requireNonNull(timeout, "timeout");
@@ -281,14 +292,40 @@ public final class PetriRunner implements AutoCloseable {
     }
 
     /**
-     * The current marking, keyed by place name, for checkpointing. Only a
-     * result whose {@link SnapshotResult#isRestorePoint()} holds is safe to
-     * {@link Builder#restore(Map) restore} from: while an action is in flight,
-     * the tokens it consumed are in no place. Call it before
-     * {@link #shutdown()}; a drained executor cannot be snapshotted.
+     * The current marking of a running net, keyed by place name: libpetri's
+     * {@code snapshot()}, the form {@link Builder#restore(Map)} takes back.
+     * Only a result whose {@link SnapshotResult#isRestorePoint()} holds is
+     * safe to restore from: while an action is in flight, the tokens it
+     * consumed are in no place. A drained executor cannot be snapshotted.
+     *
+     * <p>A registry's session checkpoint is not taken this way: it drains
+     * the runner first and saves the marking the run ended in (see
+     * {@link SessionCheckpointStore}).
      */
+    @Experimental
     public SnapshotResult snapshot() {
         return executor.snapshot();
+    }
+
+    /**
+     * The marking a checkpoint saves, or empty when the run did not end in
+     * one: the final marking of a run that drained to quiescence, minus the
+     * places excluded from checkpoints (see
+     * {@link Builder#excludeFromCheckpoint(Place...)}). Any other ending (a
+     * run still going, stopped, interrupted, or ended at a terminal place)
+     * has no marking to resume from.
+     *
+     * @throws IllegalArgumentException if the net declares two places with
+     *         one name, which the name-keyed form cannot tell apart
+     */
+    Optional<Map<String, List<Token<?>>>> checkpointMarking() {
+        if (executor.terminationReason() != TerminationReason.QUIESCENT) {
+            return Optional.empty();
+        }
+        Marking.resolveSnapshot(Map.of(), net.places());   // rejects shared names
+        var marking = new LinkedHashMap<>(executor.marking().snapshot());
+        marking.keySet().removeAll(checkpointExcludes);
+        return Optional.of(marking);
     }
 
     public static Builder builder(PetriNet net) {
@@ -455,6 +492,9 @@ public final class PetriRunner implements AutoCloseable {
         private ExecutionContextProvider contextProvider = ExecutionContextProvider.NOOP;
         private AtomicReference<PetriNetExecutor> deferredExecutorRef;
         private Map<String, List<Token<?>>> restore;
+        private boolean restoreIsCheckpoint;
+        private final Set<String> checkpointExcludes =
+                new TreeSet<>(Set.of(AdkColours.EVENT_OUT.name()));
         private String executionScope;
         private ExecutionEnvironment environment;
         private Duration deadlineTolerance;
@@ -641,19 +681,25 @@ public final class PetriRunner implements AutoCloseable {
          * (libpetri's {@code SnapshotResult.marking()}), instead of an
          * initial marking. Timers restart: a {@code delayed} transition waits
          * its full delay again. Pair it with a fresh
-         * {@link #executionScope(String)}.
+         * {@link #executionScope(String)}. Combined with a non-empty
+         * {@link #initialMarking(Map)}, {@link #start()} throws: an explicit
+         * restore and an explicit seed are two answers to one question.
          */
+        @Experimental
         public Builder restore(Map<String, List<Token<?>>> marking) {
             this.restore = Objects.requireNonNull(marking, "restore");
+            this.restoreIsCheckpoint = false;
             return this;
         }
 
         /**
          * Resume this session from its latest checkpoint in {@code store}, if
          * there is one: {@link #restore(Map)} with a fresh
-         * {@link #executionScope(String)}. Without a checkpoint this does
-         * nothing and the run starts from {@link #initialMarking(Map)}.
-         * The store is read once, here, before the executor exists.
+         * {@link #executionScope(String)}, and the checkpoint takes precedence
+         * over {@link #initialMarking(Map)}. Without a checkpoint this does
+         * nothing and the run starts from the initial marking, so one factory
+         * serves a session's first start and every resume. The store is read
+         * once, here, before the executor exists.
          */
         @Experimental
         public Builder resumeFrom(SessionCheckpointStore store, SessionKey key) {
@@ -661,8 +707,25 @@ public final class PetriRunner implements AutoCloseable {
             Objects.requireNonNull(key, "key");
             store.load(key).ifPresent(marking -> {
                 restore(marking);
+                this.restoreIsCheckpoint = true;
                 executionScope("resume-" + UUID.randomUUID());
             });
+            return this;
+        }
+
+        /**
+         * Leave {@code places} out of the marking a registry checkpoints
+         * for this runner (see {@link SessionCheckpointStore}). For egress
+         * places nothing in the net consumes, whose tokens are already
+         * delivered and would otherwise come back, and accumulate, on every
+         * resume. {@link AdkColours#EVENT_OUT} is always excluded.
+         */
+        @Experimental
+        public Builder excludeFromCheckpoint(Place<?>... places) {
+            Objects.requireNonNull(places, "places");
+            for (Place<?> p : places) {
+                checkpointExcludes.add(Objects.requireNonNull(p, "place").name());
+            }
             return this;
         }
 
@@ -671,6 +734,7 @@ public final class PetriRunner implements AutoCloseable {
          * must use a scope its earlier runs did not, or names minted after
          * the restore could collide with names in the restored marking.
          */
+        @Experimental
         public Builder executionScope(String scope) {
             this.executionScope = Objects.requireNonNull(scope, "executionScope");
             return this;
@@ -701,11 +765,14 @@ public final class PetriRunner implements AutoCloseable {
             if (orchestratorExecutor == null) {
                 throw new IllegalStateException("orchestratorExecutor must be set");
             }
-            if (restore != null && !initialMarking.isEmpty()) {
+            if (restore != null && !initialMarking.isEmpty() && !restoreIsCheckpoint) {
                 throw new IllegalStateException(
                         "restore(...) and initialMarking(...) are exclusive: a restored run "
                         + "resumes from the snapshot's marking");
             }
+            // A checkpoint found by resumeFrom supersedes the seed: the
+            // initial marking is for a session's first start only.
+            var seed = restore != null ? Map.<Place<?>, List<Token<?>>>of() : initialMarking;
             var bridge = new EventStoreToFlowableBridge(AdkColours.EVENT_OUT, primaryEventStore);
 
             // actionExecutor is optional and inert (see its setter). When a
@@ -715,7 +782,7 @@ public final class PetriRunner implements AutoCloseable {
             // does not accept null, stays satisfied.
             var executor = executorFactory.build(new ExecutorSpec(
                     net,
-                    initialMarking,
+                    seed,
                     Optional.ofNullable(restore),
                     envPlaces.values(),
                     bridge,
@@ -730,7 +797,8 @@ public final class PetriRunner implements AutoCloseable {
             }
 
             var task = orchestratorExecutor.submit((Runnable) executor::run);
-            return new PetriRunner(executor, Map.copyOf(envPlaces), bridge, task);
+            return new PetriRunner(net, executor, Map.copyOf(envPlaces), bridge, task,
+                    Set.copyOf(checkpointExcludes));
         }
     }
 }

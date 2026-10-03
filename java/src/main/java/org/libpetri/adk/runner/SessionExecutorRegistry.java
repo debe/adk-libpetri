@@ -4,14 +4,20 @@ import java.lang.ref.Cleaner;
 import java.lang.ref.Reference;
 import java.lang.ref.WeakReference;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.libpetri.adk.Experimental;
-import org.libpetri.runtime.SnapshotResult;
+import org.libpetri.core.Token;
+import org.libpetri.runtime.TerminationReason;
 
 /**
  * Lazy {@code Map<SessionKey, PetriRunner>} — preserves the
@@ -82,6 +88,20 @@ import org.libpetri.runtime.SnapshotResult;
  * </ul>
  * If none of these are available, use {@link #strongOwned()} and
  * call {@link #close(SessionKey)} from your session-end hook.
+ *
+ * <h2>Checkpointing registries (experimental)</h2>
+ * <p>A registry built with a {@link SessionCheckpointStore} saves a
+ * session's final marking when its runner is torn down. Teardown drains
+ * first: the runner refuses new injects, actions in flight complete, and
+ * only the marking the run ends in is saved, so nothing the session
+ * accepted is left out. Until that save is done the key stays taken:
+ * {@link #getOrCreate(SessionKey, Object, Function) getOrCreate} for it
+ * waits, so a replacement runner always resumes from what the old one
+ * left, and a key never has two serving runners. A run that does not
+ * drain to quiescence within the checkpoint timeout (or that ends any
+ * other way) has its checkpoint removed rather than left stale, and the
+ * next runner starts fresh. {@link #discard(SessionKey)} ends a session
+ * without saving it.
  */
 public final class SessionExecutorRegistry implements AutoCloseable {
 
@@ -108,21 +128,45 @@ public final class SessionExecutorRegistry implements AutoCloseable {
 
     private static final Logger LOG = Logger.getLogger(SessionExecutorRegistry.class.getName());
 
-    /** How long teardown waits for a session to reach a restore point. */
-    private static final Duration CHECKPOINT_WAIT = Duration.ofSeconds(2);
+    /**
+     * How long a checkpointing teardown waits, by default, for a session to
+     * drain before it gives up on saving it. Long enough for an in-flight
+     * model call to land; a replacement runner for the key waits as long.
+     */
+    @Experimental
+    public static final Duration DEFAULT_CHECKPOINT_TIMEOUT = Duration.ofSeconds(30);
 
-    private final ConcurrentMap<SessionKey, Entry> entries = new ConcurrentHashMap<>();
+    private final ConcurrentMap<SessionKey, Slot> slots = new ConcurrentHashMap<>();
     private final Mode mode;
     private final SessionCheckpointStore checkpoints;   // nullable
+    private final Duration checkpointTimeout;
 
     /**
-     * Slot per key. The owner reference is either weak (CLEANER mode,
-     * so the registry never pins the owner — pinning would defeat the
-     * leak-prevention mechanism) or strong (STRONG mode, so identity
-     * survives without an external strong-reference chain). Only ever
-     * dereferenced for {@code ==}-identity comparison.
+     * What the map holds for one key. {@link Live} is a serving runner.
+     * {@link Closing} takes its place, atomically, the moment teardown
+     * starts, and stays until the runner is drained and its final marking
+     * saved (or its checkpoint removed). A caller that finds one waits on
+     * it, so nothing can create a replacement that resumes from a store the
+     * old runner has yet to write.
      */
-    private record Entry(PetriRunner runner, OwnerRef ownerRef) {}
+    private sealed interface Slot {
+
+        /**
+         * The owner reference is either weak (CLEANER mode, so the registry
+         * never pins the owner — pinning would defeat the leak-prevention
+         * mechanism) or strong (STRONG mode, so identity survives without an
+         * external strong-reference chain). Only ever dereferenced for
+         * {@code ==}-identity comparison.
+         */
+        record Live(PetriRunner runner, OwnerRef ownerRef) implements Slot {}
+
+        /** Completes, normally and always, once the key is free again. */
+        record Closing(CompletableFuture<Void> done) implements Slot {
+            Closing() {
+                this(new CompletableFuture<>());
+            }
+        }
+    }
 
     /**
      * Sealed abstraction over weak/strong owner refs so the
@@ -140,9 +184,11 @@ public final class SessionExecutorRegistry implements AutoCloseable {
         }
     }
 
-    private SessionExecutorRegistry(Mode mode, SessionCheckpointStore checkpoints) {
+    private SessionExecutorRegistry(Mode mode, SessionCheckpointStore checkpoints,
+                                    Duration checkpointTimeout) {
         this.mode = mode;
         this.checkpoints = checkpoints;
+        this.checkpointTimeout = checkpointTimeout;
     }
 
     /**
@@ -151,18 +197,30 @@ public final class SessionExecutorRegistry implements AutoCloseable {
      * Use when you have a stable strong-referenced lifetime owner.
      */
     public static SessionExecutorRegistry cleanerOwned() {
-        return new SessionExecutorRegistry(Mode.CLEANER, null);
+        return new SessionExecutorRegistry(Mode.CLEANER, null, DEFAULT_CHECKPOINT_TIMEOUT);
     }
 
     /**
-     * {@link #cleanerOwned()} that also saves each session's marking to
-     * {@code checkpoints} when its runner is torn down. See
-     * {@link SessionCheckpointStore}.
+     * {@link #cleanerOwned()} that also saves each session's final marking
+     * to {@code checkpoints} when its runner is torn down. See
+     * {@link SessionCheckpointStore} and the class javadoc.
      */
     @Experimental
     public static SessionExecutorRegistry cleanerOwned(SessionCheckpointStore checkpoints) {
+        return cleanerOwned(checkpoints, DEFAULT_CHECKPOINT_TIMEOUT);
+    }
+
+    /**
+     * {@link #cleanerOwned(SessionCheckpointStore)} with a bound other than
+     * {@link #DEFAULT_CHECKPOINT_TIMEOUT} on how long teardown waits for a
+     * session to drain before it gives up on saving it.
+     */
+    @Experimental
+    public static SessionExecutorRegistry cleanerOwned(SessionCheckpointStore checkpoints,
+                                                       Duration checkpointTimeout) {
         return new SessionExecutorRegistry(Mode.CLEANER,
-                Objects.requireNonNull(checkpoints, "checkpoints"));
+                Objects.requireNonNull(checkpoints, "checkpoints"),
+                Objects.requireNonNull(checkpointTimeout, "checkpointTimeout"));
     }
 
     /**
@@ -171,18 +229,31 @@ public final class SessionExecutorRegistry implements AutoCloseable {
      * when your framework does not give you a clean strong owner.
      */
     public static SessionExecutorRegistry strongOwned() {
-        return new SessionExecutorRegistry(Mode.STRONG, null);
+        return new SessionExecutorRegistry(Mode.STRONG, null, DEFAULT_CHECKPOINT_TIMEOUT);
     }
 
     /**
-     * {@link #strongOwned()} that also saves each session's marking to
-     * {@code checkpoints} on {@link #close(SessionKey)} and
-     * {@link #closeAll()}. See {@link SessionCheckpointStore}.
+     * {@link #strongOwned()} that also saves each session's final marking
+     * to {@code checkpoints} on {@link #close(SessionKey)} and
+     * {@link #closeAll()}. See {@link SessionCheckpointStore} and the class
+     * javadoc.
      */
     @Experimental
     public static SessionExecutorRegistry strongOwned(SessionCheckpointStore checkpoints) {
+        return strongOwned(checkpoints, DEFAULT_CHECKPOINT_TIMEOUT);
+    }
+
+    /**
+     * {@link #strongOwned(SessionCheckpointStore)} with a bound other than
+     * {@link #DEFAULT_CHECKPOINT_TIMEOUT} on how long teardown waits for a
+     * session to drain before it gives up on saving it.
+     */
+    @Experimental
+    public static SessionExecutorRegistry strongOwned(SessionCheckpointStore checkpoints,
+                                                      Duration checkpointTimeout) {
         return new SessionExecutorRegistry(Mode.STRONG,
-                Objects.requireNonNull(checkpoints, "checkpoints"));
+                Objects.requireNonNull(checkpoints, "checkpoints"),
+                Objects.requireNonNull(checkpointTimeout, "checkpointTimeout"));
     }
 
     /**
@@ -203,6 +274,17 @@ public final class SessionExecutorRegistry implements AutoCloseable {
      * to the cleaner (cleaner mode); the loser is shut down.
      * Subsequent same-key callers with the same owner identity see
      * the surviving runner.
+     *
+     * <p>While the key's previous runner is being torn down, this waits
+     * for that teardown to finish (bounded by the checkpoint timeout plus
+     * the store's own latency) before calling {@code factory}, so a factory
+     * that resumes from a checkpoint store reads what the previous runner
+     * saved.
+     *
+     * @throws IllegalStateException for a different owner, or if the
+     *                               thread is interrupted while waiting for
+     *                               the key's previous runner to close (the
+     *                               interrupt status is set again)
      */
     public PetriRunner getOrCreate(SessionKey key,
                                    Object owner,
@@ -213,14 +295,18 @@ public final class SessionExecutorRegistry implements AutoCloseable {
 
         // CAS retry loop. Iterations terminate as soon as we either reuse
         // an entry (same owner) or install a fresh one; we only loop on
-        // a stale-entry eviction or a lost-CAS-with-stale-winner — both
-        // are rare and each iteration makes forward progress (entry
-        // removed or factory re-attempted).
+        // a stale-entry eviction, a closing slot, or a lost CAS whose winner
+        // is stale or closing. Each iteration makes forward progress (entry
+        // removed, teardown awaited, or factory re-attempted).
         while (true) {
-            // Fast path: existing entry. Verify owner identity matches.
-            Entry existing = entries.get(key);
-            if (existing != null) {
-                PetriRunner reused = reuseIfSameOwner(key, existing, owner);
+            Slot existing = slots.get(key);
+            if (existing instanceof Slot.Closing closing) {
+                awaitClosedOrThrow(key, closing);
+                continue;
+            }
+            if (existing instanceof Slot.Live live) {
+                // Fast path: existing entry. Verify owner identity matches.
+                PetriRunner reused = reuseIfSameOwner(key, live, owner);
                 if (reused != null) return reused;
                 // Original owner was GC'd (cleaner mode only);
                 // reuseIfSameOwner evicted the stale entry — retry to
@@ -229,17 +315,20 @@ public final class SessionExecutorRegistry implements AutoCloseable {
             }
 
             PetriRunner created = factory.apply(key);
-            Entry candidate = new Entry(created, makeOwnerRef(owner));
-            Entry winner = entries.putIfAbsent(key, candidate);
+            var candidate = new Slot.Live(created, makeOwnerRef(owner));
+            Slot winner = slots.putIfAbsent(key, candidate);
             if (winner == null) {
                 if (mode == Mode.CLEANER) {
                     // CRITICAL: this lambda must NOT capture `owner`. It
-                    // captures `this` (the registry) and `key` (a record
-                    // of three strings) — both unrelated to owner's
-                    // reachability. If we captured owner here, the cleaner
-                    // action would hold a strong ref through itself to
-                    // owner, preventing collection forever.
-                    CLEANER.register(owner, () -> drain(key));
+                    // captures `this` (the registry), `key` (a record of
+                    // three strings) and `candidate`, whose owner reference
+                    // is weak — none of them keeps owner reachable. If we
+                    // captured owner here, the cleaner action would hold a
+                    // strong ref through itself to owner, preventing
+                    // collection forever. `candidate` (not just `key`) is
+                    // what lets the action tell its own slot from a
+                    // successor's installed after a stale eviction.
+                    CLEANER.register(owner, () -> drain(key, candidate));
                     // Keep the lifetime owner strongly reachable until
                     // after the Cleaner registration is installed. Otherwise
                     // an aggressive GC/JIT is allowed to clear `owner`
@@ -250,13 +339,18 @@ public final class SessionExecutorRegistry implements AutoCloseable {
                 return created;
             }
 
-            // Lost a CAS race with a concurrent first-call. Shut down
-            // our loser and reuse-or-retry against the winner.
+            // Lost a CAS race: with a concurrent first-call, or with a
+            // teardown that began after our check (then `created` may have
+            // resumed from a checkpoint the closing runner is about to
+            // replace). Shut down our loser and reuse-or-retry.
             created.shutdown();
-            PetriRunner reused = reuseIfSameOwner(key, winner, owner);
-            if (reused != null) return reused;
-            // Winner's owner went stale between the race and our check;
-            // reuseIfSameOwner evicted it — loop and try again.
+            if (winner instanceof Slot.Live live) {
+                PetriRunner reused = reuseIfSameOwner(key, live, owner);
+                if (reused != null) return reused;
+            }
+            // Winner's owner went stale between the race and our check
+            // (reuseIfSameOwner evicted it), or the winner is closing —
+            // loop and try again.
         }
     }
 
@@ -281,7 +375,7 @@ public final class SessionExecutorRegistry implements AutoCloseable {
     }
 
     /** Whether this registry ties runner lifetime to an owner (see {@link #cleanerOwned()}). */
-    public boolean isCleanerOwned() {
+    boolean isCleanerOwned() {
         return mode == Mode.CLEANER;
     }
 
@@ -299,7 +393,7 @@ public final class SessionExecutorRegistry implements AutoCloseable {
      * replace it; cleaner mode only) and throws if a different owner
      * is presented.
      */
-    private PetriRunner reuseIfSameOwner(SessionKey key, Entry existing, Object candidate) {
+    private PetriRunner reuseIfSameOwner(SessionKey key, Slot.Live existing, Object candidate) {
         Object original = existing.ownerRef().get();
         if (original == candidate) {
             return existing.runner();
@@ -323,89 +417,69 @@ public final class SessionExecutorRegistry implements AutoCloseable {
                 + "InMemorySessionService, which returns defensive copies.");
     }
 
-    /** Returns the runner if present (no creation), or {@code null}. */
+    /**
+     * Returns the runner if present (no creation), or {@code null}. A
+     * runner being torn down is no longer present.
+     */
     public PetriRunner get(SessionKey key) {
-        Entry e = entries.get(key);
-        return e == null ? null : e.runner();
+        return slots.get(key) instanceof Slot.Live live ? live.runner() : null;
     }
 
-    /** Number of currently-registered sessions. */
+    /** Number of sessions with a serving runner; one being torn down no longer counts. */
     public int size() {
-        return entries.size();
+        return (int) slots.values().stream().filter(Slot.Live.class::isInstance).count();
     }
 
     /**
-     * Remove one session and start an asynchronous drain. Used only by
-     * Cleaner actions: blocking the single shared Cleaner daemon on an
-     * unbounded runner shutdown would delay cleanup for unrelated sessions.
+     * Tear down {@code live} for a Cleaner action. A checkpointing teardown
+     * waits for the session to drain, so it runs on its own virtual thread:
+     * blocking the single shared Cleaner daemon on it would delay cleanup
+     * for unrelated sessions. A plain one only starts the drain and is done.
      */
-    private void drain(SessionKey key) {
-        Entry removed = entries.remove(key);
-        if (removed == null) return;
+    private void drain(SessionKey key, Slot.Live live) {
+        var closing = new Slot.Closing();
+        if (!slots.replace(key, live, closing)) return;   // closed or evicted already
         if (checkpoints == null) {
-            removed.runner().drainAsync();
+            settle(key, live.runner(), closing, true);
             return;
         }
-        // Checkpointing may wait for a restore point; never on the Cleaner daemon.
-        Thread.ofVirtual().name("petri-checkpoint-" + key).start(() -> {
-            checkpoint(key, removed.runner());
-            removed.runner().drainAsync();
-        });
+        Thread.ofVirtual().name("petri-checkpoint-" + key)
+                .start(() -> settle(key, live.runner(), closing, true));
     }
 
     /**
-     * Saves {@code runner}'s marking if a checkpoint store is configured and
-     * the session reaches a restore point within {@link #CHECKPOINT_WAIT}.
-     * A snapshot taken while an action is in flight would miss the tokens
-     * that action consumed, so such a session is skipped, with a warning,
-     * rather than checkpointed wrong.
-     */
-    private void checkpoint(SessionKey key, PetriRunner runner) {
-        if (checkpoints == null) return;
-        long deadline = System.nanoTime() + CHECKPOINT_WAIT.toNanos();
-        try {
-            while (true) {
-                SnapshotResult snapshot = runner.snapshot();
-                if (snapshot.isRestorePoint()) {
-                    checkpoints.save(key, snapshot.marking());
-                    return;
-                }
-                if (System.nanoTime() >= deadline) {
-                    LOG.warning(() -> "Session " + key + " had an action in flight for "
-                            + CHECKPOINT_WAIT + "; not checkpointed.");
-                    return;
-                }
-                Thread.sleep(10);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        } catch (RuntimeException e) {
-            LOG.log(Level.WARNING, e, () -> "Checkpointing session " + key + " failed.");
-        }
-    }
-
-    /**
-     * Shut down and remove one session's runner. Idempotent. Returns
-     * {@code true} if a runner was removed. Explicit close keeps
-     * synchronous teardown semantics; the Cleaner path uses
-     * non-blocking drain instead.
+     * Shut down and remove one session's runner, saving its final marking
+     * first if this registry checkpoints. Idempotent. Returns {@code true}
+     * if this call tore a runner down; {@code false} if there was none, or
+     * if another teardown of the key was already under way (this call then
+     * waits for it to finish). Explicit close keeps synchronous teardown
+     * semantics: it returns once the runner has terminated, or the thread
+     * is interrupted. The Cleaner path uses a non-blocking drain instead.
      */
     public boolean close(SessionKey key) {
-        Entry removed = entries.remove(key);
-        if (removed == null) return false;
-        checkpoint(key, removed.runner());
-        removed.runner().shutdown();
-        return true;
+        return end(key, true);
+    }
+
+    /**
+     * End a session for good: like {@link #close(SessionKey)}, but the
+     * final marking is not saved and any checkpoint the store holds for
+     * {@code key} is removed, so the next runner for the key starts fresh.
+     * Removes the checkpoint even when no runner is registered. Returns
+     * {@code true} if this call tore a runner down.
+     */
+    @Experimental
+    public boolean discard(SessionKey key) {
+        return end(key, false);
     }
 
     /**
      * Shut down and remove every session's runner. Each per-key removal
      * goes through {@link #close(SessionKey)} so the atomic
-     * {@code remove(key)} guarantees at-most-one teardown request per
-     * runner — safe to call concurrently with Cleaner-driven evictions.
+     * {@code Live -> Closing} replacement guarantees at-most-one teardown
+     * per runner — safe to call concurrently with Cleaner-driven evictions.
      */
     public void closeAll() {
-        for (SessionKey k : entries.keySet()) {
+        for (SessionKey k : slots.keySet()) {
             close(k);
         }
     }
@@ -415,12 +489,147 @@ public final class SessionExecutorRegistry implements AutoCloseable {
         closeAll();
     }
 
-    private void evictAndShutdown(SessionKey key, Entry expected) {
-        if (entries.remove(key, expected)) {
+    private boolean end(SessionKey key, boolean save) {
+        Objects.requireNonNull(key, "key");
+        while (true) {
+            Slot slot = slots.get(key);
+            if (slot == null) {
+                if (!save) removeCheckpoint(key);
+                return false;
+            }
+            if (slot instanceof Slot.Closing closing) {
+                // Someone else's teardown. Wait for it, then look again: a
+                // discard still has the checkpoint it saved to remove.
+                if (!awaitClosed(closing)) return false;
+                continue;
+            }
+            var live = (Slot.Live) slot;
+            var closing = new Slot.Closing();
+            if (!slots.replace(key, live, closing)) continue;
+            try {
+                settle(key, live.runner(), closing, save);
+            } finally {
+                live.runner().shutdown();
+            }
+            return true;
+        }
+    }
+
+    private void evictAndShutdown(SessionKey key, Slot.Live stale) {
+        var closing = new Slot.Closing();
+        if (!slots.replace(key, stale, closing)) return;
+        try {
             // Saved before the caller creates the replacement runner, so a
             // factory that resumes from the store picks this marking up.
-            checkpoint(key, expected.runner());
-            expected.runner().shutdown();
+            settle(key, stale.runner(), closing, true);
+        } finally {
+            stale.runner().shutdown();
+        }
+    }
+
+    /**
+     * Drain {@code runner}, then save its final marking ({@code save}) or
+     * remove its checkpoint, then free the key, which {@code closing} holds
+     * until then. The key is freed whatever happens, an {@link Error} from
+     * the store included; teardown past this point is the caller's.
+     */
+    private void settle(SessionKey key, PetriRunner runner, Slot.Closing closing, boolean save) {
+        try {
+            // Refuse new injects first, so the marking saved below is final:
+            // nothing the session accepts afterwards can be left out of it.
+            runner.drainAsync();
+            if (checkpoints != null) {
+                if (save) {
+                    saveFinalMarking(key, runner);
+                } else {
+                    removeCheckpoint(key);
+                }
+            }
+        } finally {
+            slots.remove(key, closing);
+            closing.done().complete(null);
+        }
+    }
+
+    /**
+     * Waits up to the checkpoint timeout for the drained {@code runner} to
+     * terminate, then saves the marking its run ended in. A run that did
+     * not end at quiescence in time has no marking to resume from, and its
+     * previous checkpoint is removed rather than left for the next runner
+     * to restore.
+     */
+    private void saveFinalMarking(SessionKey key, PetriRunner runner) {
+        if (!runner.awaitTermination(checkpointTimeout)) {
+            if (Thread.currentThread().isInterrupted()) {
+                LOG.warning(() -> "Interrupted while session " + key + " drained; not "
+                        + "checkpointed, and its earlier checkpoint is removed.");
+            } else {
+                LOG.warning(() -> "Session " + key + " did not drain within "
+                        + checkpointTimeout + "; not checkpointed, and its earlier "
+                        + "checkpoint is removed.");
+            }
+            removeCheckpoint(key);
+            return;
+        }
+        Optional<Map<String, List<Token<?>>>> marking;
+        try {
+            marking = runner.checkpointMarking();
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, e, () -> "Session " + key + " cannot be checkpointed; "
+                    + "its earlier checkpoint is removed.");
+            removeCheckpoint(key);
+            return;
+        }
+        if (marking.isEmpty()) {
+            TerminationReason reason = runner.executor().terminationReason();
+            // A terminal place is a designed end: nothing to resume, nothing to warn about.
+            LOG.log(reason == TerminationReason.TERMINAL ? Level.FINE : Level.WARNING,
+                    () -> "Session " + key + " ended " + reason + ", not quiescent after "
+                            + "its drain, so there is no marking to resume from; its "
+                            + "earlier checkpoint is removed.");
+            removeCheckpoint(key);
+            return;
+        }
+        try {
+            checkpoints.save(key, marking.get());
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, e, () -> "Checkpointing session " + key + " failed; "
+                    + "its earlier checkpoint is removed.");
+            removeCheckpoint(key);
+        } catch (Error e) {
+            removeCheckpoint(key);
+            throw e;
+        }
+    }
+
+    /** Removes {@code key}'s checkpoint, if this registry has a store; never throws a RuntimeException. */
+    private void removeCheckpoint(SessionKey key) {
+        if (checkpoints == null) return;
+        try {
+            checkpoints.remove(key);
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, e, () -> "Removing the checkpoint of session " + key
+                    + " failed; a later resume may restore an older marking.");
+        }
+    }
+
+    /** Waits for a teardown to free its key. {@code false} if interrupted (status set again). */
+    private static boolean awaitClosed(Slot.Closing closing) {
+        try {
+            closing.done().get();
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (ExecutionException e) {
+            return true;   // unreachable: done only ever completes normally
+        }
+    }
+
+    private static void awaitClosedOrThrow(SessionKey key, Slot.Closing closing) {
+        if (!awaitClosed(closing)) {
+            throw new IllegalStateException(
+                    "Interrupted while waiting for session " + key + " to finish closing");
         }
     }
 }
