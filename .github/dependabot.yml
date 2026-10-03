@@ -1,0 +1,18 @@
+# libpetri, ADK and their transitive stack move fast; a weekly PR per
+# outdated dependency keeps upgrades small and visible. Version bumps still
+# go through CI, which runs the Z3 proofs, before they can merge.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /java
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      # The protobuf floor is deliberate (see the pom and README): it tracks
+      # what ADK's transitives were compiled against, not the latest release.
+      - dependency-name: com.google.protobuf:*
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

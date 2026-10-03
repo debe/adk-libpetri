@@ -16,12 +16,12 @@ import org.libpetri.adk.colours.AdkColours;
 
 /**
  * Stock subnet that turns a user {@link Content} into a fully-formed
- * {@link LlmRequest} ready for {@link LlmStepSubnet}.
+ * {@link com.google.adk.models.LlmRequest} ready for {@link LlmStepSubnet}.
  *
  * <p>This stays <b>stateless and single-turn</b>: the prepared
  * request contains exactly the user's incoming {@code Content} plus an
  * optional {@code systemInstruction} carried via
- * {@link GenerateContentConfig#systemInstruction()}. For multi-turn
+ * {@link com.google.genai.types.GenerateContentConfig#systemInstruction()}. For multi-turn
  * history, keep the history in a typed in-net place and give your own
  * prompt-building transition a Read arc on it (the in-net
  * conversation-place pattern); {@link LlmAgentSubnet#CONVERSATION} is that
