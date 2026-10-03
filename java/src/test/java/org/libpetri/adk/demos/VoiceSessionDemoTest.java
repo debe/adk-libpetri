@@ -27,8 +27,6 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -42,6 +40,7 @@ import org.libpetri.adk.demos.voice.BargeInSubnet;
 import org.libpetri.adk.demos.voice.LiveApiRecoverySubnet;
 import org.libpetri.adk.subnet.LlmStreamingStepSubnet;
 import org.libpetri.adk.subnet.RouterSubnet;
+import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
@@ -157,29 +156,25 @@ class VoiceSessionDemoTest {
                 .transition(startStream)
                 .build();
 
-        Map<String, TransitionAction> allBindings = new LinkedHashMap<>();
-        allBindings.putAll(LlmStreamingStepSubnet.actionBindings(llm, streamingConfig));
-        allBindings.putAll(RouterSubnet.actionBindings(RouterSubnet.Config.of("voice_agent")));
-        allBindings.putAll(BargeInSubnet.actionBindings());
-        allBindings.putAll(LiveApiRecoverySubnet.actionBindings(FAST_RECOVERY));
-        allBindings.put(T_START_STREAM, ctx -> {
+        TransitionAction startStreamAction = ctx -> {
             Content userContent = ctx.input(AdkColours.USER_IN);
             ctx.output(AdkColours.LLM_REQUEST, requestFor(userContent));
             return java.util.concurrent.CompletableFuture.completedFuture(null);
-        });
-        var bound = net.bindActions(allBindings);
+        };
+        var bound = SubnetActions.bindComposed(net,
+                LlmStreamingStepSubnet.actionBindings(llm, streamingConfig),
+                RouterSubnet.actionBindings(RouterSubnet.Config.of("voice_agent")),
+                BargeInSubnet.actionBindings(),
+                LiveApiRecoverySubnet.actionBindings(FAST_RECOVERY),
+                Map.of(T_START_STREAM, startStreamAction));
 
         // ============================================================
         //  2. Wire the ADK-integrated runner with SIX typed env places —
         //     one for the ADK utterance, five for voice signals.
         // ============================================================
-        var registry = SessionExecutorRegistry.cleanerOwned();
-        ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
+        var registry = SessionExecutorRegistry.strongOwned();
 
-        var agent = PetriAgent.of(
-                "voice_agent",
-                "BIDI voice agent — streaming, barge-in, silence recovery",
-                registry,
+        var agent = PetriAgent.builder("voice_agent", registry,
                 key -> PetriRunner.builder(bound)
                         .environmentPlace(AdkColours.USER_IN)
                         .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
@@ -189,9 +184,9 @@ class VoiceSessionDemoTest {
                         .environmentPlace(LiveApiRecoverySubnet.Places.MODEL_ACTIVE)
                         .deferredExecutorRef(execRef)
                         .orchestratorExecutor(EXECUTOR)
-                        .start(),
-                ctx -> sessionOwners.computeIfAbsent(
-                        SessionKey.from(ctx.session()), k -> new Object()));
+                        .start())
+                .description("BIDI voice agent — streaming, barge-in, silence recovery")
+                .build();
 
         var adkRunner = new InMemoryRunner(agent);
         var session = adkRunner.sessionService()
@@ -206,8 +201,7 @@ class VoiceSessionDemoTest {
         //     chunk from inside its T_LlmCallStream action.
         // ============================================================
         var sessionKey = SessionKey.from(session);
-        Object owner = sessionOwners.computeIfAbsent(sessionKey, k -> new Object());
-        var runner = registry.getOrCreate(sessionKey, owner,
+        var runner = registry.getOrCreate(sessionKey,
                 key -> PetriRunner.builder(bound)
                         .environmentPlace(AdkColours.USER_IN)
                         .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
@@ -403,7 +397,6 @@ class VoiceSessionDemoTest {
                 .build();
 
         Map<String, TransitionAction> bindings = new LinkedHashMap<>();
-        bindings.putAll(BargeInSubnet.actionBindings());
         bindings.put("Bidi_SendToConnection", ctx -> {
             LlmRequest request = ctx.input(AdkColours.LLM_REQUEST);
             Content userContent = request.contents().get(0);
@@ -432,7 +425,7 @@ class VoiceSessionDemoTest {
                     .build());
             return java.util.concurrent.CompletableFuture.completedFuture(null);
         });
-        var bound = net.bindActions(bindings);
+        var bound = SubnetActions.bindComposed(net, BargeInSubnet.actionBindings(), bindings);
 
         // ============================================================
         //  3. Runner + agent. The connection lives outside the net; the
@@ -441,12 +434,8 @@ class VoiceSessionDemoTest {
         //     deployment the WebSocket handler does this wiring once per
         //     session — same pattern.
         // ============================================================
-        var registry = SessionExecutorRegistry.cleanerOwned();
-        ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
-        var agent = PetriAgent.of(
-                "bidi_agent",
-                "BIDI bridge demo via custom BaseLlmConnection",
-                registry,
+        var registry = SessionExecutorRegistry.strongOwned();
+        var agent = PetriAgent.builder("bidi_agent", registry,
                 key -> PetriRunner.builder(bound)
                         .environmentPlace(AdkColours.USER_IN)
                         .environmentPlace(AdkColours.LLM_REQUEST)
@@ -456,17 +445,16 @@ class VoiceSessionDemoTest {
                         .environmentPlace(BIDI_TURN_COMPLETE)
                         .eventStore(otelEventStore)
                         .orchestratorExecutor(EXECUTOR)
-                        .start(),
-                ctx -> sessionOwners.computeIfAbsent(
-                        SessionKey.from(ctx.session()), k -> new Object()));
+                        .start())
+                .description("BIDI bridge demo via custom BaseLlmConnection")
+                .build();
 
         var adkRunner = new InMemoryRunner(agent);
         var session = adkRunner.sessionService()
                 .createSession(adkRunner.appName(), "u", (Map<String, Object>) null, "s").blockingGet();
 
         var sessionKey = SessionKey.from(session);
-        Object owner = sessionOwners.computeIfAbsent(sessionKey, k -> new Object());
-        var runner = registry.getOrCreate(sessionKey, owner,
+        var runner = registry.getOrCreate(sessionKey,
                 key -> PetriRunner.builder(bound)
                         .environmentPlace(AdkColours.USER_IN)
                         .environmentPlace(AdkColours.LLM_REQUEST)
@@ -617,7 +605,7 @@ class VoiceSessionDemoTest {
                 .transition(dropQueuedTurn)
                 .build();
 
-        Map<String, TransitionAction> bindings = new LinkedHashMap<>(BargeInSubnet.actionBindings());
+        Map<String, TransitionAction> bindings = new LinkedHashMap<>();
         bindings.put("Bidi_EmitChunk", ctx -> {
             LlmResponse resp = ctx.input(AdkColours.LLM_RESPONSE);
             // Emission costs something real (a socket write), which is exactly why a
@@ -641,7 +629,8 @@ class VoiceSessionDemoTest {
             return java.util.concurrent.CompletableFuture.completedFuture(null);
         });
 
-        var runner = PetriRunner.builder(net.bindActions(bindings))
+        var runner = PetriRunner.builder(
+                        SubnetActions.bindComposed(net, BargeInSubnet.actionBindings(), bindings))
                 .environmentPlace(AdkColours.LLM_RESPONSE)
                 .environmentPlace(BargeInSubnet.Places.INTERRUPTED)
                 .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
@@ -739,28 +728,23 @@ class VoiceSessionDemoTest {
         // ============================================================
         //  ADK wiring — two typed env places, one ADK runner.
         // ============================================================
-        var registry = SessionExecutorRegistry.cleanerOwned();
-        ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
+        var registry = SessionExecutorRegistry.strongOwned();
 
-        var agent = PetriAgent.of(
-                "reset_arc_agent",
-                "Demonstrates reset-arc wipe of in-net intent state per utterance",
-                registry,
+        var agent = PetriAgent.builder("reset_arc_agent", registry,
                 key -> PetriRunner.builder(net)
                         .environmentPlace(AdkColours.USER_IN)
                         .environmentPlace(UTTERANCE_IN)
                         .orchestratorExecutor(EXECUTOR)
-                        .start(),
-                ctx -> sessionOwners.computeIfAbsent(
-                        SessionKey.from(ctx.session()), k -> new Object()));
+                        .start())
+                .description("Demonstrates reset-arc wipe of in-net intent state per utterance")
+                .build();
 
         var adkRunner = new InMemoryRunner(agent);
         var session = adkRunner.sessionService()
                 .createSession(adkRunner.appName(), "u", (Map<String, Object>) null, "s").blockingGet();
 
         var sessionKey = SessionKey.from(session);
-        Object owner = sessionOwners.computeIfAbsent(sessionKey, k -> new Object());
-        var runner = registry.getOrCreate(sessionKey, owner,
+        var runner = registry.getOrCreate(sessionKey,
                 key -> PetriRunner.builder(net)
                         .environmentPlace(AdkColours.USER_IN)
                         .environmentPlace(UTTERANCE_IN)
@@ -843,20 +827,17 @@ class VoiceSessionDemoTest {
                 .chunkBudget(4)
                 .executorRef(new AtomicReference<PetriNetExecutor>())
                 .build();
-        var verifyBindings = new LinkedHashMap<String, TransitionAction>();
-        verifyBindings.putAll(LlmStreamingStepSubnet.actionBindings(
-                streamingLlm(List.of()), verifyStreamConfig));
-        verifyBindings.putAll(BargeInSubnet.actionBindings());
-        verifyBindings.putAll(LiveApiRecoverySubnet.actionBindings(FAST_RECOVERY));
-        verifyBindings.put(T_START_STREAM, TransitionAction.fork());
-
-        var net = PetriNet.builder("voice-dlf-check")
-                .compose(LlmStreamingStepSubnet.DEF)
-                .compose(BargeInSubnet.DEF)
-                .compose(recoveryDef)
-                .transition(startStream)
-                .build()
-                .bindActions(verifyBindings);
+        var net = SubnetActions.bindComposed(
+                PetriNet.builder("voice-dlf-check")
+                        .compose(LlmStreamingStepSubnet.DEF)
+                        .compose(BargeInSubnet.DEF)
+                        .compose(recoveryDef)
+                        .transition(startStream)
+                        .build(),
+                LlmStreamingStepSubnet.actionBindings(streamingLlm(List.of()), verifyStreamConfig),
+                BargeInSubnet.actionBindings(),
+                LiveApiRecoverySubnet.actionBindings(FAST_RECOVERY),
+                Map.of(T_START_STREAM, TransitionAction.fork()));
 
         var userInEnv         = EnvironmentPlace.of(AdkColours.USER_IN);
         var chunkEnv          = EnvironmentPlace.of(LlmStreamingStepSubnet.Places.CHUNK);

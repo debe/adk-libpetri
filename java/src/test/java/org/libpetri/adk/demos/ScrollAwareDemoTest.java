@@ -8,8 +8,6 @@ import com.google.genai.types.Content;
 import com.google.genai.types.Part;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -125,22 +123,18 @@ class ScrollAwareDemoTest {
         // ============================================================
         // 2. Wire the ADK-integrated runner with TWO env places.
         // ============================================================
-        var registry = SessionExecutorRegistry.cleanerOwned();
-        ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
+        var registry = SessionExecutorRegistry.strongOwned();
 
-        var agent = PetriAgent.of(
-                "scroll_aware_agent",
-                "Echoes user message + recorded scroll count",
-                registry,
+        var agent = PetriAgent.builder("scroll_aware_agent", registry,
                 key -> PetriRunner.builder(net)
                         .environmentPlace(AdkColours.USER_IN)
                         .environmentPlace(SCROLL_IN)
                         .initialMarking(Map.of(
                                 SCROLL_COUNT, List.of(Token.of(0L))))
                         .orchestratorExecutor(EXECUTOR)
-                        .start(),
-                ctx -> sessionOwners.computeIfAbsent(
-                        SessionKey.from(ctx.session()), k -> new Object()));
+                        .start())
+                .description("Echoes user message + recorded scroll count")
+                .build();
 
         var adkRunner = new InMemoryRunner(agent);
         var session = adkRunner.sessionService()
@@ -160,8 +154,7 @@ class ScrollAwareDemoTest {
         //    is what an HTTP handler would also do.
         // ============================================================
         var sessionKey = SessionKey.from(session);
-        Object owner = sessionOwners.computeIfAbsent(sessionKey, k -> new Object());
-        registry.getOrCreate(sessionKey, owner,
+        registry.getOrCreate(sessionKey,
                 key -> PetriRunner.builder(net)
                         .environmentPlace(AdkColours.USER_IN)
                         .environmentPlace(SCROLL_IN)
@@ -216,9 +209,8 @@ class ScrollAwareDemoTest {
         assertThat(lastFromAgent.content().get().text())
                 .isEqualTo("you scrolled 5 times; you said: hello");
 
-        // Explicit teardown, which is the documented default for strongOwned()
-        // and works for either mode. (The comment here used to claim this was
-        // the owner-GC path; it is the opposite of that.)
+        // Explicit teardown: with strongOwned(), the documented default, this
+        // is how a session's runner ends (from a session-end hook in an app).
         registry.closeAll();
     }
 

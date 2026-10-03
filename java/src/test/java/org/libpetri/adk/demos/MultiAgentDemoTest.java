@@ -9,26 +9,19 @@ import com.google.adk.models.BaseLlmConnection;
 import com.google.adk.models.LlmRequest;
 import com.google.adk.models.LlmResponse;
 import com.google.adk.runner.InMemoryRunner;
-import com.google.adk.tools.BaseTool;
-import com.google.adk.tools.ToolContext;
 import com.google.genai.types.Content;
 import com.google.genai.types.FunctionCall;
 import com.google.genai.types.Part;
-import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.reactivex.rxjava3.core.Flowable;
-import io.reactivex.rxjava3.core.Single;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -37,17 +30,15 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.libpetri.core.PetriNet;
-import org.libpetri.core.TransitionAction;
 import org.libpetri.adk.bridge.OtelEventStore;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
-import org.libpetri.analysis.MarkingState;
-import org.libpetri.analysis.StateClassGraph;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
 import org.libpetri.adk.subnet.LlmAgentSubnet;
 import org.libpetri.adk.subnet.LlmStepSubnet;
 import org.libpetri.adk.subnet.RouterSubnet;
+import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.adk.subnet.TransferRouterSubnet;
 import org.libpetri.adk.verify.AdkNetInvariants;
 import org.libpetri.event.EventStore;
@@ -164,14 +155,13 @@ class MultiAgentDemoTest {
         // ============================================================
         //  3. Bind actions and wrap with OT observability.
         // ============================================================
-        // Merge ALL subnet bindings before a single bindActions call.
-        // Chained .bindActions() doesn't work because the Map overload
-        // defaults unbound names to passthrough() — the second call
-        // would wipe the first call's bindings.
-        var allBindings = new LinkedHashMap<String, TransitionAction>();
-        allBindings.putAll(LlmAgentSubnet.actionBindings(plannerLlm, plannerConfig));
-        allBindings.putAll(TransferRouterSubnet.actionBindings(knownSpecialists, routerConfig));
-        var bound = net.bindActions(allBindings);
+        // One bindComposed call for all subnets. Chained .bindActions()
+        // doesn't work because the Map overload defaults unbound names to
+        // passthrough(), so the second call would wipe the first's bindings;
+        // bindComposed also rejects overlapping maps and uncovered transitions.
+        var bound = SubnetActions.bindComposed(net,
+                LlmAgentSubnet.actionBindings(plannerLlm, plannerConfig),
+                TransferRouterSubnet.actionBindings(knownSpecialists, routerConfig));
 
         var exporter = InMemorySpanExporter.create();
         var tracerProvider = SdkTracerProvider.builder()
@@ -187,21 +177,16 @@ class MultiAgentDemoTest {
         //  4. Wire to stock ADK Runner via PetriAgent adapter.
         //     No source changes to ADK; just a BaseAgent subclass.
         // ============================================================
-        var registry = SessionExecutorRegistry.cleanerOwned();
-        ConcurrentMap<org.libpetri.adk.runner.SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
-        var agent = PetriAgent.of(
-                "multi_agent",
-                "Planner that routes to specialists",
-                registry,
+        var registry = SessionExecutorRegistry.strongOwned();
+        var agent = PetriAgent.builder("multi_agent", registry,
                 key -> PetriRunner.builder(bound)
                         .environmentPlace(AdkColours.USER_IN)
                         .eventStore(observabilityChain)
                         .orchestratorExecutor(EXECUTOR)
-                        .start(),
-                ctx -> sessionOwners.computeIfAbsent(
-                        org.libpetri.adk.runner.SessionKey.from(ctx.session()), k -> new Object()),
-                tracer,
-                observabilityChain);
+                        .start())
+                .description("Planner that routes to specialists")
+                .tracing(tracer, observabilityChain)
+                .build();
 
         var runner = new InMemoryRunner(agent);
         var session = runner.sessionService()
@@ -303,28 +288,22 @@ class MultiAgentDemoTest {
         var routerConfig = new TransferRouterSubnet.Config("planner",
                 () -> "inv-fixed");
 
-        var allBindings = new LinkedHashMap<String, TransitionAction>();
-        allBindings.putAll(LlmAgentSubnet.actionBindings(plannerLlm, plannerConfig));
-        allBindings.putAll(TransferRouterSubnet.actionBindings(knownSpecialists, routerConfig));
+        var net = SubnetActions.bindComposed(
+                PetriNet.builder("hallucination-app")
+                        .compose(plannerSubnet)
+                        .compose(routerDef)
+                        .build(),
+                LlmAgentSubnet.actionBindings(plannerLlm, plannerConfig),
+                TransferRouterSubnet.actionBindings(knownSpecialists, routerConfig));
 
-        var net = PetriNet.builder("hallucination-app")
-                .compose(plannerSubnet)
-                .compose(routerDef)
-                .build()
-                .bindActions(allBindings);
-
-        var registry = SessionExecutorRegistry.cleanerOwned();
-        ConcurrentMap<org.libpetri.adk.runner.SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
-        var agent = PetriAgent.of(
-                "halluc_agent",
-                "Demonstrates structural elimination of hallucinated-transfer NPE",
-                registry,
+        var registry = SessionExecutorRegistry.strongOwned();
+        var agent = PetriAgent.builder("halluc_agent", registry,
                 key -> PetriRunner.builder(net)
                         .environmentPlace(AdkColours.USER_IN)
                         .orchestratorExecutor(EXECUTOR)
-                        .start(),
-                ctx -> sessionOwners.computeIfAbsent(
-                        org.libpetri.adk.runner.SessionKey.from(ctx.session()), k -> new Object()));
+                        .start())
+                .description("Demonstrates structural elimination of hallucinated-transfer NPE")
+                .build();
 
         var runner = new InMemoryRunner(agent);
         var session = runner.sessionService()
@@ -377,17 +356,14 @@ class MultiAgentDemoTest {
                 .build();
         var dlfRouterConfig = new TransferRouterSubnet.Config("planner",
                 () -> "inv-dlf");
-        var dlfBindings = new LinkedHashMap<String, TransitionAction>();
-        dlfBindings.putAll(LlmAgentSubnet.actionBindings(
-                scriptedLlm(textResponse("verification stub")), dlfConfig));
-        dlfBindings.putAll(TransferRouterSubnet.actionBindings(
-                knownSpecialists, dlfRouterConfig));
-
-        var net = PetriNet.builder("dlf-check")
-                .compose(LlmAgentSubnet.DEF)
-                .compose(TransferRouterSubnet.def(knownSpecialists))
-                .build()
-                .bindActions(dlfBindings);
+        var net = SubnetActions.bindComposed(
+                PetriNet.builder("dlf-check")
+                        .compose(LlmAgentSubnet.DEF)
+                        .compose(TransferRouterSubnet.def(knownSpecialists))
+                        .build(),
+                LlmAgentSubnet.actionBindings(
+                        scriptedLlm(textResponse("verification stub")), dlfConfig),
+                TransferRouterSubnet.actionBindings(knownSpecialists, dlfRouterConfig));
 
         var result = SmtVerifier.forNet(net)
                 .initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))

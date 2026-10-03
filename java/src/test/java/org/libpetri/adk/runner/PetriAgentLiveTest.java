@@ -17,8 +17,6 @@ import io.reactivex.rxjava3.processors.PublishProcessor;
 import io.reactivex.rxjava3.subscribers.TestSubscriber;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -68,17 +66,13 @@ class PetriAgentLiveTest {
         var connection = new FakeLiveConnection();
         var callbackFrames = new AtomicInteger();
         var registry = SessionExecutorRegistry.strongOwned();
-        var sessionOwners = sessionOwnerMap();
         TestSubscriber<Event> events = null;
 
         try {
-            var agent = PetriAgent.ofLive(
-                    AGENT_NAME,
-                    "BIDI live bridge test",
-                    registry,
-                    key -> callbackSignalRunner(),
-                    ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()),
-                    new PetriAgent.LiveConfig(
+            var agent = PetriAgent.builder(AGENT_NAME, registry,
+                    key -> callbackSignalRunner())
+                    .description("BIDI live bridge test")
+                    .live(new PetriAgent.LiveConfig(
                             ctx -> connection,
                             (msg, runner) -> {
                                 callbackFrames.incrementAndGet();
@@ -89,7 +83,8 @@ class PetriAgentLiveTest {
                                 msg.serverContent()
                                         .flatMap(LiveServerContent::modelTurn)
                                         .ifPresent(c -> runner.inject(MODEL_CHUNK, c));
-                            }));
+                            }))
+                    .build();
 
             var adkRunner = new InMemoryRunner(agent);
             var session = adkRunner.sessionService()
@@ -145,9 +140,6 @@ class PetriAgentLiveTest {
         }
     }
 
-    private static ConcurrentMap<SessionKey, Object> sessionOwnerMap() {
-        return new ConcurrentHashMap<>();
-    }
 
     private static void await(BooleanSupplier cond, long timeoutMillis) throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMillis;

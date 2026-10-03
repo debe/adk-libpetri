@@ -15,8 +15,6 @@ import io.reactivex.rxjava3.core.Flowable;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -181,17 +179,13 @@ class PetriAgentSseTest {
 
     private static PetriAgent agentFor(BaseLlm llm, SessionExecutorRegistry registry,
                                        StreamingLlmAgentSubnet.Config config) {
-        var sessionOwners = sessionOwnerMap();
-        return PetriAgent.of(AGENT_NAME, "Streaming SSE test agent", registry,
+        return PetriAgent.builder(AGENT_NAME, registry,
                 StreamingLlmAgentSubnet.runnerFactory(llm, config,
-                        b -> b.orchestratorExecutor(EXECUTOR)),
-                ctx -> sessionOwners.computeIfAbsent(
-                        SessionKey.from(ctx.session()), ignored -> new Object()));
+                        b -> b.orchestratorExecutor(EXECUTOR)))
+                .description("Streaming SSE test agent")
+                .build();
     }
 
-    private static ConcurrentMap<SessionKey, Object> sessionOwnerMap() {
-        return new ConcurrentHashMap<>();
-    }
 
     private static Content userMessage(String text) {
         return Content.builder().role("user")

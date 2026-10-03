@@ -126,7 +126,7 @@ public final class PetriAgent extends BaseAgent {
 
     private final SessionExecutorRegistry registry;
     private final Function<SessionKey, PetriRunner> runnerFactory;
-    private final Function<InvocationContext, Object> ownerExtractor;
+    private final Function<InvocationContext, Object> ownerExtractor;   // nullable: strongOwned() only
     private final Tracer tracer;                       // nullable
     private final OtelEventStore otelEventStore;       // nullable
     private final LiveConfig liveConfig;               // nullable
@@ -177,7 +177,12 @@ public final class PetriAgent extends BaseAgent {
         super(name, description, ImmutableList.of(), /*beforeAgentCallback*/ null, /*afterAgentCallback*/ null);
         this.registry = Objects.requireNonNull(registry, "registry");
         this.runnerFactory = Objects.requireNonNull(runnerFactory, "runnerFactory");
-        this.ownerExtractor = Objects.requireNonNull(ownerExtractor, "ownerExtractor");
+        if (ownerExtractor == null && registry.isCleanerOwned()) {
+            throw new IllegalArgumentException(
+                    "A cleanerOwned() registry needs an ownerExtractor: the owner is what "
+                    + "tears each session's runner down. Supply one, or use strongOwned().");
+        }
+        this.ownerExtractor = ownerExtractor;
         // Either both tracer + otelEventStore are provided (full OT root-span wiring),
         // or both are null (no-op observability). Mixing them would leak orphan spans
         // (tracer without store) or orphan child spans (store without parent set), so
@@ -204,19 +209,116 @@ public final class PetriAgent extends BaseAgent {
      *                       can build a per-session-customised
      *                       {@link PetriRunner} (e.g., per-user OT
      *                       baggage, per-session initial marking)
-     * @param ownerExtractor returns the <b>lifetime owner</b> object for
-     *                       an invocation. Must return the same object
-     *                       identity for every invocation in the same
-     *                       session; the runner is torn down when this
-     *                       object becomes unreachable. See the class
-     *                       javadoc for the lifetime contract.
+     * @param ownerExtractor returns the owner object for an invocation.
+     *                       Must return the same object identity for every
+     *                       invocation in the same session (a different
+     *                       owner for a known session throws). Under
+     *                       {@link SessionExecutorRegistry#cleanerOwned()}
+     *                       it is also the <b>lifetime owner</b>: the
+     *                       runner is torn down when it becomes
+     *                       unreachable. Under
+     *                       {@link SessionExecutorRegistry#strongOwned()}
+     *                       it is only an identity, teardown is
+     *                       {@code close(SessionKey)}, and
+     *                       {@link #builder} lets you omit it. See the
+     *                       class javadoc for the lifetime contract.
      */
     public static PetriAgent of(String name,
                                 String description,
                                 SessionExecutorRegistry registry,
                                 Function<SessionKey, PetriRunner> runnerFactory,
                                 Function<InvocationContext, Object> ownerExtractor) {
-        return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor, null, null, null);
+        return builder(name, registry, runnerFactory)
+                .description(description)
+                .ownerExtractor(Objects.requireNonNull(ownerExtractor, "ownerExtractor"))
+                .build();
+    }
+
+    /**
+     * Starts a {@code PetriAgent}. The minimal form, for the default
+     * {@link SessionExecutorRegistry#strongOwned()} registry, needs nothing
+     * more:
+     *
+     * <pre>{@code
+     * var registry = SessionExecutorRegistry.strongOwned();
+     * var agent = PetriAgent.builder("assistant", registry, key -> startRunner(key)).build();
+     * // ... and from the session-end hook: registry.close(key)
+     * }</pre>
+     *
+     * <p>A {@link SessionExecutorRegistry#cleanerOwned()} registry also needs
+     * {@link Builder#ownerExtractor}; {@link Builder#build()} rejects it
+     * otherwise.
+     */
+    public static Builder builder(String name,
+                                  SessionExecutorRegistry registry,
+                                  Function<SessionKey, PetriRunner> runnerFactory) {
+        return new Builder(name, registry, runnerFactory);
+    }
+
+    /** Builder for {@link PetriAgent}; start with {@link PetriAgent#builder}. */
+    public static final class Builder {
+        private final String name;
+        private final SessionExecutorRegistry registry;
+        private final Function<SessionKey, PetriRunner> runnerFactory;
+        private String description = "";
+        private Function<InvocationContext, Object> ownerExtractor;
+        private Tracer tracer;
+        private OtelEventStore otelEventStore;
+        private LiveConfig liveConfig;
+
+        private Builder(String name,
+                        SessionExecutorRegistry registry,
+                        Function<SessionKey, PetriRunner> runnerFactory) {
+            this.name = Objects.requireNonNull(name, "name");
+            this.registry = Objects.requireNonNull(registry, "registry");
+            this.runnerFactory = Objects.requireNonNull(runnerFactory, "runnerFactory");
+        }
+
+        /** Human-readable description; defaults to empty. */
+        public Builder description(String description) {
+            this.description = Objects.requireNonNull(description, "description");
+            return this;
+        }
+
+        /**
+         * The per-invocation owner. Required for a cleaner-owned registry,
+         * optional for a strong-owned one. See {@link PetriAgent#of} for the
+         * contract.
+         */
+        public Builder ownerExtractor(Function<InvocationContext, Object> ownerExtractor) {
+            this.ownerExtractor = Objects.requireNonNull(ownerExtractor, "ownerExtractor");
+            return this;
+        }
+
+        /**
+         * OpenTelemetry root-span observability. Pass the same
+         * {@code OtelEventStore} that is chained into the runner's
+         * {@code eventStore(...)}; see {@link PetriAgent#of(String, String,
+         * SessionExecutorRegistry, Function, Function, Tracer, OtelEventStore)}.
+         * Both or neither: passing both {@code null} switches tracing off,
+         * and {@link #build()} rejects exactly one.
+         */
+        public Builder tracing(Tracer tracer, OtelEventStore otelEventStore) {
+            this.tracer = tracer;
+            this.otelEventStore = otelEventStore;
+            return this;
+        }
+
+        /** Use the shipped BIDI/live bridge for {@code runLive}. */
+        @Experimental
+        public Builder live(LiveConfig liveConfig) {
+            this.liveConfig = Objects.requireNonNull(liveConfig, "liveConfig");
+            return this;
+        }
+
+        /**
+         * @throws IllegalArgumentException if the registry is cleaner-owned
+         *                                  and no owner extractor was set
+         */
+        public PetriAgent build() {
+            return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor,
+                    tracer, otelEventStore, liveConfig);
+        }
     }
 
     /**
@@ -236,8 +338,11 @@ public final class PetriAgent extends BaseAgent {
                                 Function<InvocationContext, Object> ownerExtractor,
                                 Tracer tracer,
                                 OtelEventStore otelEventStore) {
-        return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor,
-                tracer, otelEventStore, null);
+        return builder(name, registry, runnerFactory)
+                .description(description)
+                .ownerExtractor(Objects.requireNonNull(ownerExtractor, "ownerExtractor"))
+                .tracing(tracer, otelEventStore)
+                .build();
     }
 
 
@@ -251,8 +356,11 @@ public final class PetriAgent extends BaseAgent {
                                     Function<SessionKey, PetriRunner> runnerFactory,
                                     Function<InvocationContext, Object> ownerExtractor,
                                     LiveConfig liveConfig) {
-        return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor,
-                null, null, Objects.requireNonNull(liveConfig, "liveConfig"));
+        return builder(name, registry, runnerFactory)
+                .description(description)
+                .ownerExtractor(Objects.requireNonNull(ownerExtractor, "ownerExtractor"))
+                .live(liveConfig)
+                .build();
     }
 
     /**
@@ -267,16 +375,27 @@ public final class PetriAgent extends BaseAgent {
                                     LiveConfig liveConfig,
                                     Tracer tracer,
                                     OtelEventStore otelEventStore) {
-        return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor,
-                tracer, otelEventStore, Objects.requireNonNull(liveConfig, "liveConfig"));
+        return builder(name, registry, runnerFactory)
+                .description(description)
+                .ownerExtractor(Objects.requireNonNull(ownerExtractor, "ownerExtractor"))
+                .live(liveConfig)
+                .tracing(tracer, otelEventStore)
+                .build();
+    }
+
+    private PetriRunner runnerFor(InvocationContext ctx, SessionKey key) {
+        if (ownerExtractor == null) {
+            return registry.getOrCreate(key, runnerFactory);
+        }
+        Object owner = Objects.requireNonNull(ownerExtractor.apply(ctx),
+                "ownerExtractor returned null — every invocation must yield an owner");
+        return registry.getOrCreate(key, owner, runnerFactory);
     }
 
     @Override
     protected Flowable<Event> runAsyncImpl(InvocationContext ctx) {
         SessionKey key = SessionKey.from(ctx.session());
-        Object owner = Objects.requireNonNull(ownerExtractor.apply(ctx),
-                "ownerExtractor returned null — every invocation must yield a lifetime owner");
-        PetriRunner runner = registry.getOrCreate(key, owner, runnerFactory);
+        PetriRunner runner = runnerFor(ctx, key);
 
         Content userContent = ctx.userContent().orElse(null);
         if (userContent == null) {
@@ -386,9 +505,7 @@ public final class PetriAgent extends BaseAgent {
     @Override
     protected Flowable<Event> runLiveImpl(InvocationContext ctx) {
         SessionKey key = SessionKey.from(ctx.session());
-        Object owner = Objects.requireNonNull(ownerExtractor.apply(ctx),
-                "ownerExtractor returned null — every invocation must yield a lifetime owner");
-        PetriRunner runner = registry.getOrCreate(key, owner, runnerFactory);
+        PetriRunner runner = runnerFor(ctx, key);
         if (liveConfig == null) {
             return runner.adkEvents();
         }

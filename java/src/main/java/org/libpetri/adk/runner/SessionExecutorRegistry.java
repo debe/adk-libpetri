@@ -91,6 +91,16 @@ public final class SessionExecutorRegistry implements AutoCloseable {
     /** Ownership semantics. See class javadoc. */
     private enum Mode { CLEANER, STRONG }
 
+    /**
+     * The owner {@link #getOrCreate(SessionKey, Function)} records in
+     * strong-owned mode, where an owner is only an identity and never
+     * controls lifetime. One shared instance, so every ownerless call for a
+     * key agrees with every other.
+     */
+    private static final Object NO_OWNER = new Object() {
+        @Override public String toString() { return "<no owner>"; }
+    };
+
     private final ConcurrentMap<SessionKey, Entry> entries = new ConcurrentHashMap<>();
     private final Mode mode;
 
@@ -214,6 +224,31 @@ public final class SessionExecutorRegistry implements AutoCloseable {
             // Winner's owner went stale between the race and our check;
             // reuseIfSameOwner evicted it — loop and try again.
         }
+    }
+
+    /**
+     * Strong-owned shorthand for {@link #getOrCreate(SessionKey, Object, Function)}
+     * without a lifetime owner. In strong-owned mode the owner is only an
+     * identity check (teardown is {@link #close(SessionKey)}), so a caller
+     * with nothing meaningful to pass can omit it.
+     *
+     * @throws IllegalStateException in cleaner-owned mode, where the owner
+     *                               is what tears the runner down and must
+     *                               be supplied
+     */
+    public PetriRunner getOrCreate(SessionKey key, Function<SessionKey, PetriRunner> factory) {
+        if (mode == Mode.CLEANER) {
+            throw new IllegalStateException(
+                    "A cleanerOwned() registry needs a lifetime owner: its runner is torn "
+                    + "down when the owner becomes unreachable. Pass one, or use "
+                    + "strongOwned() and close(SessionKey) from your session-end hook.");
+        }
+        return getOrCreate(key, NO_OWNER, factory);
+    }
+
+    /** Whether this registry ties runner lifetime to an owner (see {@link #cleanerOwned()}). */
+    public boolean isCleanerOwned() {
+        return mode == Mode.CLEANER;
     }
 
     private OwnerRef makeOwnerRef(Object owner) {

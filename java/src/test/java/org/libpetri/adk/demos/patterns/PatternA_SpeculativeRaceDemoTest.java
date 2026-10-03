@@ -12,8 +12,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.junit.jupiter.api.AfterAll;
@@ -29,7 +27,6 @@ import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
-import org.libpetri.adk.runner.SessionKey;
 import org.libpetri.smt.SmtProperty;
 import org.libpetri.smt.SmtVerifier;
 
@@ -136,18 +133,14 @@ class PatternA_SpeculativeRaceDemoTest {
                 Duration.ofMillis(120),  // medium
                 Duration.ofMillis(300)));// slow
 
-        var registry = SessionExecutorRegistry.cleanerOwned();
-        ConcurrentMap<SessionKey, Object> sessionOwners = new ConcurrentHashMap<>();
-        var agent = PetriAgent.of(
-                "race_agent",
-                "Speculative race across three branches",
-                registry,
+        var registry = SessionExecutorRegistry.strongOwned();
+        var agent = PetriAgent.builder("race_agent", registry,
                 key -> PetriRunner.builder(bound)
                         .environmentPlace(AdkColours.USER_IN)
                         .orchestratorExecutor(EXECUTOR)
-                        .start(),
-                ctx -> sessionOwners.computeIfAbsent(
-                        SessionKey.from(ctx.session()), k -> new Object()));
+                        .start())
+                .description("Speculative race across three branches")
+                .build();
 
         var runner = new InMemoryRunner(agent);
         var session = runner.sessionService()
