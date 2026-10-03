@@ -89,22 +89,25 @@ import org.libpetri.runtime.PetriNetExecutor;
  * <p>{@code T_LlmCallStream}'s action needs an executor handle (to
  * call {@code executor.inject}). The {@link Config} holds a
  * {@link AtomicReference} typed against the
- * {@link PetriNetExecutor} interface. When wiring through the ADK
- * adapter, pass the same reference to both this subnet's config and
- * {@code PetriRunner.Builder.deferredExecutorRef(...)} so the runner
- * populates it before the orchestrator starts:
+ * {@link PetriNetExecutor} interface. The reference, and so the bound
+ * actions, must be per session: pass the same reference to this subnet's
+ * config and to {@code PetriRunner.Builder.deferredExecutorRef(...)} inside
+ * the runner factory, so the runner populates it before the orchestrator
+ * starts. {@link StreamingLlmAgentSubnet#runnerFactory} does this for the
+ * composed agent.
  *
  * <pre>{@code
- * var execRef = new AtomicReference<PetriNetExecutor>();
- * var config = LlmStreamingStepSubnet.Config.builder("agent").chunkBudget(8)
- *     .executorRef(execRef).build();
- *
- * var agent = PetriAgent.of(name, desc, registry,
- *     key -> PetriRunner.builder(net)
+ * var structure = PetriNet.builder("stream").compose(LlmStreamingStepSubnet.DEF).build();
+ * Function<SessionKey, PetriRunner> factory = key -> {
+ *     var execRef = new AtomicReference<PetriNetExecutor>();
+ *     var config = LlmStreamingStepSubnet.Config.builder("agent").chunkBudget(8)
+ *         .executorRef(execRef).build();
+ *     return PetriRunner.builder(structure.bindActions(
+ *                 LlmStreamingStepSubnet.actionBindings(llm, config)))
  *         .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
  *         .deferredExecutorRef(execRef)
- *         .actionExecutor(EXEC).orchestratorExecutor(EXEC).start(),
- *     ownerProvider);
+ *         .orchestratorExecutor(EXEC).start();
+ * };
  * }</pre>
  */
 @Experimental
@@ -244,9 +247,10 @@ public final class LlmStreamingStepSubnet {
             var executor = config.executorRef().get();
             if (executor == null) {
                 return CompletableFuture.failedFuture(new IllegalStateException(
-                        "Config.executorRef has not been populated. Set the"
-                                + " AtomicReference after BitmapNetExecutor.build()"
-                                + " and before runAsync()."));
+                        "Config.executorRef has not been populated. Register the"
+                                + " same AtomicReference with"
+                                + " PetriRunner.Builder.deferredExecutorRef(...), or set it"
+                                + " after building the executor and before it runs."));
             }
             return streamChunks(baseLlm, ctx.input(Places.LLM_REQUEST_INTERNAL), executor);
         };

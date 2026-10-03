@@ -21,15 +21,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.libpetri.adk.colours.AdkColours;
-import org.libpetri.adk.subnet.LlmStreamingStepSubnet;
 import org.libpetri.adk.subnet.StreamingLlmAgentSubnet;
-import org.libpetri.core.PetriNet;
-import org.libpetri.runtime.PetriNetExecutor;
 
 class PetriAgentSseTest {
 
@@ -95,54 +90,103 @@ class PetriAgentSseTest {
         assertThat(only.content().get().text()).isEqualTo("Sure, the answer is 42.");
     }
 
+    /**
+     * Two live sessions must each get their own chunks. The streaming step
+     * injects chunks through an executor reference; when one bound net and one
+     * reference were shared by every session's runner, each new session
+     * overwrote the reference, and an earlier session's chunks were injected
+     * into the newest session's executor, so that turn never completed.
+     */
+    @Test
+    void concurrent_sse_sessions_each_receive_only_their_own_chunks() {
+        var sse = RunConfig.builder().streamingMode(RunConfig.StreamingMode.SSE).build();
+        var registry = SessionExecutorRegistry.strongOwned();
+        try {
+            var runner = new InMemoryRunner(agentFor(echoingLlm(), registry));
+            var alice = newSession(runner, "alice");
+            var bob = newSession(runner, "bob");
+
+            // Start both sessions' runners before either sends again, so the
+            // second runner exists when the first session's turn streams.
+            assertThat(finalText(runTurn(runner, alice, "hello from alice", sse)))
+                    .isEqualTo("echo: hello from alice");
+            assertThat(finalText(runTurn(runner, bob, "hello from bob", sse)))
+                    .isEqualTo("echo: hello from bob");
+            assertThat(finalText(runTurn(runner, alice, "alice again", sse)))
+                    .isEqualTo("echo: alice again");
+        } finally {
+            registry.closeAll();
+        }
+    }
+
+    private static String finalText(List<Event> events) {
+        return events.getLast().content().get().text();
+    }
+
+    private static com.google.adk.sessions.Session newSession(InMemoryRunner runner, String user) {
+        return runner.sessionService()
+                .createSession(runner.appName(), user, (Map<String, Object>) null,
+                        "session-" + UUID.randomUUID())
+                .blockingGet();
+    }
+
+    private static List<Event> runTurn(InMemoryRunner runner,
+                                       com.google.adk.sessions.Session session,
+                                       String text, RunConfig runConfig) {
+        var sub = runner.runAsync(session.userId(), session.id(), userMessage(text), runConfig)
+                .test();
+        sub.awaitDone(3, TimeUnit.SECONDS);
+        sub.assertComplete();
+        sub.assertNoErrors();
+        return List.copyOf(sub.values());
+    }
+
+    /** Streams "echo: " plus the request's last user text, in two chunks. */
+    private static BaseLlm echoingLlm() {
+        return new BaseLlm("echoing") {
+            @Override
+            public Flowable<LlmResponse> generateContent(LlmRequest request, boolean stream) {
+                String text = request.contents().getLast().text();
+                return Flowable.just(chunkResponse("echo: "), chunkResponse(text));
+            }
+
+            @Override
+            public BaseLlmConnection connect(LlmRequest request) {
+                throw new UnsupportedOperationException("echoingLlm.connect()");
+            }
+        };
+    }
+
     private static List<Event> runStreamingTurn(BaseLlm llm, RunConfig runConfig) {
         var registry = SessionExecutorRegistry.strongOwned();
         try {
-            var sessionOwners = sessionOwnerMap();
-            var execRef = new AtomicReference<PetriNetExecutor>();
             var suppliedInvocationIds = new AtomicInteger();
             var config = StreamingLlmAgentSubnet.Config.builder(AGENT_NAME, "fake-model")
                     .dispatchExecutor(EXECUTOR)
                     .chunkBudget(4)
                     .invocationIdSupplier(() -> "net-generated-" + suppliedInvocationIds.incrementAndGet())
-                    .executorRef(execRef)
                     .build();
-            var net = PetriNet.builder("streaming-agent-test-net")
-                    .compose(StreamingLlmAgentSubnet.DEF)
-                    .build()
-                    .bindActions(StreamingLlmAgentSubnet.actionBindings(llm, config));
-            var agent = PetriAgent.of(
-                    AGENT_NAME,
-                    "Streaming SSE test agent",
-                    registry,
-                    key -> PetriRunner.builder(net)
-                            .environmentPlace(AdkColours.USER_IN)
-                            .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
-                            .deferredExecutorRef(execRef)
-                            .orchestratorExecutor(EXECUTOR)
-                            .start(),
-                    ctx -> sessionOwners.computeIfAbsent(
-                            SessionKey.from(ctx.session()), ignored -> new Object()));
-
-            var runner = new InMemoryRunner(agent);
-            var session = runner.sessionService()
-                    .createSession(runner.appName(), "user-1", (Map<String, Object>) null,
-                            "session-" + UUID.randomUUID())
-                    .blockingGet();
-
-            var sub = runner.runAsync(
-                            session.userId(),
-                            session.id(),
-                            userMessage("what's 6*7"),
-                            runConfig)
-                    .test();
-            sub.awaitDone(3, TimeUnit.SECONDS);
-            sub.assertComplete();
-            sub.assertNoErrors();
-            return List.copyOf(sub.values());
+            var runner = new InMemoryRunner(agentFor(llm, registry, config));
+            return runTurn(runner, newSession(runner, "user-1"), "what's 6*7", runConfig);
         } finally {
             registry.closeAll();
         }
+    }
+
+    private static PetriAgent agentFor(BaseLlm llm, SessionExecutorRegistry registry) {
+        return agentFor(llm, registry, StreamingLlmAgentSubnet.Config.builder(AGENT_NAME, "fake-model")
+                .dispatchExecutor(EXECUTOR)
+                .build());
+    }
+
+    private static PetriAgent agentFor(BaseLlm llm, SessionExecutorRegistry registry,
+                                       StreamingLlmAgentSubnet.Config config) {
+        var sessionOwners = sessionOwnerMap();
+        return PetriAgent.of(AGENT_NAME, "Streaming SSE test agent", registry,
+                StreamingLlmAgentSubnet.runnerFactory(llm, config,
+                        b -> b.orchestratorExecutor(EXECUTOR)),
+                ctx -> sessionOwners.computeIfAbsent(
+                        SessionKey.from(ctx.session()), ignored -> new Object()));
     }
 
     private static ConcurrentMap<SessionKey, Object> sessionOwnerMap() {
