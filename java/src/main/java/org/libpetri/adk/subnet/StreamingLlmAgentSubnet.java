@@ -13,9 +13,14 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import org.libpetri.adk.Experimental;
+import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.runner.PetriRunner;
+import org.libpetri.adk.runner.SessionKey;
+import org.libpetri.core.PetriNet;
 import org.libpetri.core.SubnetDef;
 import org.libpetri.core.TransitionAction;
 import org.libpetri.runtime.PetriNetExecutor;
@@ -25,10 +30,26 @@ import org.libpetri.runtime.PetriNetExecutor;
  * feedback loop, but composed with {@link LlmStreamingStepSubnet} so LLM
  * chunks can surface as partial ADK {@link com.google.adk.events.Event}s.
  *
- * <p>Callers must declare {@link LlmStreamingStepSubnet.Places#CHUNK} as an
- * environment place and pass the same executor reference to both
- * {@link Config#executorRef()} and {@link PetriRunner.Builder#deferredExecutorRef(AtomicReference)}.
- * Run this subnet under {@link RunConfig.StreamingMode#SSE}; normal mode keeps
+ * <p>Wire it through {@link #runnerFactory}, which hands {@code PetriAgent}
+ * one runner per session, each with its own executor reference, actions bound
+ * to that reference, and {@link LlmStreamingStepSubnet.Places#CHUNK} declared
+ * as an environment place:
+ *
+ * <pre>{@code
+ * var config = StreamingLlmAgentSubnet.Config.builder("agent", "gemini-2.5-flash")
+ *     .dispatchExecutor(EXEC).build();
+ * var agent = PetriAgent.builder("agent", SessionExecutorRegistry.strongOwned(),
+ *         StreamingLlmAgentSubnet.runnerFactory(llm, config,
+ *             b -> b.orchestratorExecutor(EXEC)))
+ *     .build();
+ * }</pre>
+ *
+ * <p>Binding by hand with {@link #actionBindings} is still possible, but the
+ * executor reference must then be per session: a net bound once and shared by
+ * several runners routes every session's chunks into whichever executor
+ * started last.
+ *
+ * <p>Run this subnet under {@link RunConfig.StreamingMode#SSE}; normal mode keeps
  * the legacy one-event completion policy and will consume only the first egress
  * event for a turn.
  */
@@ -43,8 +64,10 @@ public final class StreamingLlmAgentSubnet {
      * <p>{@code dispatchExecutor} is required: it is the executor passed
      * through to {@link ToolDispatchSubnet#actionBindings} for running the
      * agent's {@link BaseTool}s concurrently. Callers own its lifecycle.
-     * {@code executorRef} is required for {@link LlmStreamingStepSubnet}'s
-     * per-chunk env-place injection and must also be registered through
+     * {@code executorRef} is the handle {@link LlmStreamingStepSubnet} injects
+     * chunks through. Leave it unset when using {@link #runnerFactory}, which
+     * supplies a fresh one per session. {@link #actionBindings} requires it,
+     * and it must then also be registered through
      * {@link PetriRunner.Builder#deferredExecutorRef(AtomicReference)}.
      */
     public record Config(
@@ -76,13 +99,19 @@ public final class StreamingLlmAgentSubnet {
             if (chunkBudget < 1) {
                 throw new IllegalArgumentException("chunkBudget must be >= 1, got: " + chunkBudget);
             }
-            Objects.requireNonNull(executorRef, "executorRef");
             callbacks = callbacks == null ? LlmStepSubnet.Callbacks.none() : callbacks;
             toolContextSupplier = toolContextSupplier == null ? () -> null : toolContextSupplier;
         }
 
         public static Builder builder(String name, String model) {
             return new Builder(name, model);
+        }
+
+        /** This config bound to {@code ref}; how {@link #runnerFactory} gives each session its own. */
+        public Config withExecutorRef(AtomicReference<PetriNetExecutor> ref) {
+            return new Config(name, model, systemInstruction, tools, reaskBudget,
+                    fallbackContent, invocationIdSupplier, dispatchExecutor, chunkBudget,
+                    Objects.requireNonNull(ref, "ref"), callbacks, toolContextSupplier);
         }
 
         public static final class Builder {
@@ -123,8 +152,7 @@ public final class StreamingLlmAgentSubnet {
             public Config build() {
                 return new Config(name, model, Optional.ofNullable(systemInstruction),
                         tools, reaskBudget, fallbackContent, invocationIdSupplier,
-                        dispatchExecutor, chunkBudget,
-                        Objects.requireNonNull(executorRef, "executorRef must be set before build"),
+                        dispatchExecutor, chunkBudget, executorRef,
                         callbacks, toolContextSupplier);
             }
         }
@@ -140,6 +168,9 @@ public final class StreamingLlmAgentSubnet {
     public static Map<String, TransitionAction> actionBindings(BaseLlm baseLlm, Config config) {
         Objects.requireNonNull(baseLlm, "baseLlm");
         Objects.requireNonNull(config, "config");
+        Objects.requireNonNull(config.executorRef(),
+                "config.executorRef: set one per session, or use runnerFactory(...),"
+                        + " which does");
 
         var agentConfig = agentConfig(config);
         var all = new LinkedHashMap<String, TransitionAction>();
@@ -155,6 +186,39 @@ public final class StreamingLlmAgentSubnet {
                 LlmAgentSubnet.reAskExhaustedFallbackAction(agentConfig));
 
         return SubnetActions.bind(DEF, all);
+    }
+
+    /**
+     * A {@code PetriAgent} runner factory for this subnet. Each call, one per
+     * session, creates a fresh executor reference, binds the actions to it,
+     * declares {@link AdkColours#USER_IN} and
+     * {@link LlmStreamingStepSubnet.Places#CHUNK} as environment places,
+     * registers the reference via
+     * {@link PetriRunner.Builder#deferredExecutorRef(AtomicReference)}, applies
+     * {@code customize}, and starts the runner.
+     *
+     * <p>{@code customize} must at least set
+     * {@link PetriRunner.Builder#orchestratorExecutor}; it is also where an
+     * event store or extra environment places go. Any {@code executorRef} on
+     * {@code config} is ignored, since sharing one across sessions is the bug
+     * this factory exists to prevent.
+     */
+    public static Function<SessionKey, PetriRunner> runnerFactory(
+            BaseLlm baseLlm, Config config, Consumer<PetriRunner.Builder> customize) {
+        Objects.requireNonNull(baseLlm, "baseLlm");
+        Objects.requireNonNull(config, "config");
+        Objects.requireNonNull(customize, "customize");
+        var net = PetriNet.builder(NAME + "-" + config.name()).compose(DEF).build();
+        return key -> {
+            var ref = new AtomicReference<PetriNetExecutor>();
+            var builder = PetriRunner.builder(
+                            net.bindActions(actionBindings(baseLlm, config.withExecutorRef(ref))))
+                    .environmentPlace(AdkColours.USER_IN)
+                    .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
+                    .deferredExecutorRef(ref);
+            customize.accept(builder);
+            return builder.start();
+        };
     }
 
     private static LlmStreamingStepSubnet.Config streamingCfg(Config config) {
