@@ -2,8 +2,10 @@ package org.libpetri.adk.subnet;
 
 import com.google.adk.tools.BaseTool;
 import com.google.adk.tools.ToolContext;
+import com.google.genai.types.Content;
 import com.google.genai.types.FunctionCall;
 import com.google.genai.types.FunctionResponse;
+import com.google.genai.types.Part;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -110,10 +112,13 @@ public final class ToolDispatchSubnet {
         return ctx -> {
             var batch = ctx.input(AdkColours.TOOL_CALLS);
             var calls = batch.calls();
+            Content modelTurn = batch.modelTurn() != null
+                    ? batch.modelTurn()
+                    : modelTurnOf(calls);
 
             if (calls.isEmpty()) {
                 ctx.output(AdkColours.TOOL_RESULTS,
-                        new AdkColours.ToolResults(List.of()));
+                        new AdkColours.ToolResults(List.of(), modelTurn));
                 return CompletableFuture.completedFuture(null);
             }
 
@@ -135,9 +140,20 @@ public final class ToolDispatchSubnet {
                         List<FunctionResponse> responses = new ArrayList<>(futures.size());
                         for (var f : futures) responses.add(f.join());
                         ctx.output(AdkColours.TOOL_RESULTS,
-                                new AdkColours.ToolResults(responses));
+                                new AdkColours.ToolResults(responses, modelTurn));
                     });
         };
+    }
+
+    /**
+     * Fallback model turn for a {@link AdkColours.ToolCalls} whose producer did
+     * not carry the original. It pairs the responses with their calls, but any
+     * {@code thoughtSignature} the model attached is gone.
+     */
+    private static Content modelTurnOf(List<FunctionCall> calls) {
+        var parts = new ArrayList<Part>(calls.size());
+        for (var call : calls) parts.add(Part.builder().functionCall(call).build());
+        return Content.builder().role("model").parts(parts).build();
     }
 
     /**

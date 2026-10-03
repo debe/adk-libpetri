@@ -400,17 +400,19 @@ class MultiAgentDemoTest {
                         TransferRouterSubnet.targetPlace("billing"),
                         TransferRouterSubnet.targetPlace("tech_support"))
                 // Strict deadlock-freedom (libpetri 5.0+) reads a resting
-                // token on a non-sink place as a stranding. A turn with no
-                // tool calls leaves its unspent reask budget behind; the next
-                // BuildPrompt resets it. Excuse it only once the turn has
-                // ended, by emitting or by transferring, so a budget stuck
-                // mid-turn is still a deadlock.
-                .sinkPlacesWhen(AdkColours.EVENT_OUT, LlmAgentSubnet.REASK_BUDGET)
-                .sinkPlacesWhen(TransferRouterSubnet.UNKNOWN_TARGET, LlmAgentSubnet.REASK_BUDGET)
+                // token on a non-sink place as a stranding. Every turn leaves
+                // its conversation and any unspent reask budget behind; the
+                // next BuildPrompt resets both. Excuse them only once the turn
+                // has ended, by emitting or by transferring, so either one
+                // stuck mid-turn is still a deadlock.
+                .sinkPlacesWhen(AdkColours.EVENT_OUT, LlmAgentSubnet.REASK_BUDGET,
+                        LlmAgentSubnet.CONVERSATION)
+                .sinkPlacesWhen(TransferRouterSubnet.UNKNOWN_TARGET, LlmAgentSubnet.REASK_BUDGET,
+                        LlmAgentSubnet.CONVERSATION)
                 .sinkPlacesWhen(TransferRouterSubnet.targetPlace("billing"),
-                        LlmAgentSubnet.REASK_BUDGET)
+                        LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION)
                 .sinkPlacesWhen(TransferRouterSubnet.targetPlace("tech_support"),
-                        LlmAgentSubnet.REASK_BUDGET)
+                        LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION)
                 .property(SmtProperty.deadlockFree())
                 .verify();
 

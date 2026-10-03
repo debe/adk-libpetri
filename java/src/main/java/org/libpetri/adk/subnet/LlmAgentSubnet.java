@@ -40,13 +40,15 @@ import org.libpetri.adk.colours.AdkColours;
  *
  * <h2>Topology</h2>
  * <pre>
- *   [USER_IN] --T_BuildPrompt--> Out.and([LLM_REQUEST], [REASK_BUDGET]*N), reset(REASK_BUDGET)
+ *   [USER_IN] --T_BuildPrompt--> Out.and([LLM_REQUEST], [REASK_BUDGET]*N, [CONVERSATION]),
+ *                                reset(REASK_BUDGET), reset(CONVERSATION)
  *
  *   [LLM_REQUEST]  --LlmStepSubnet--> [LLM_RESPONSE]
  *   [LLM_RESPONSE] --RouterSubnet---> Out.xor([TOOL_CALLS], [TRANSFER], [EVENT_OUT])
  *   [TOOL_CALLS]   --ToolDispatchSubnet--> [TOOL_RESULTS]
  *
- *   [TOOL_RESULTS] + [REASK_BUDGET]  --T_ReAsk (prio 10)--> [LLM_REQUEST]
+ *   [TOOL_RESULTS] + [REASK_BUDGET] + [CONVERSATION]
+ *                  --T_ReAsk (prio 10)--> Out.and([LLM_REQUEST], [CONVERSATION])
  *   [TOOL_RESULTS] + inhibitor(REASK_BUDGET)
  *                  --T_ReAskExhaustedFallback (prio -10)--> [EVENT_OUT] (canned)
  * </pre>
@@ -93,6 +95,33 @@ public final class LlmAgentSubnet {
 
     /** Internal place — reask-budget counter (cardinality = remaining attempts). */
     public static final Place<Void> REASK_BUDGET = Place.of(NAME + "_reaskBudget", Void.class);
+
+    /**
+     * The turns of the current invocation, oldest first: the user turn, then
+     * each model function-call turn followed by its function-response turn.
+     * {@code BuildPrompt} resets and seeds it; {@code ReAsk} consumes it and
+     * writes it back extended, so every continuation request carries the whole
+     * exchange rather than the tool responses alone. Like the reask budget it
+     * rests between turns and is reset by the next {@code BuildPrompt}.
+     *
+     * <p>Scope is one invocation. History across invocations is the caller's
+     * own typed place, read by their prompt-building transition.
+     */
+    public static final Place<Conversation> CONVERSATION =
+            Place.of(NAME + "_conversation", Conversation.class);
+
+    /** Colour of {@link #CONVERSATION}: the invocation's turns, oldest first. */
+    public record Conversation(List<Content> turns) {
+        public Conversation {
+            turns = List.copyOf(turns);
+        }
+
+        Conversation append(Content... more) {
+            var next = new ArrayList<>(turns);
+            next.addAll(List.of(more));
+            return new Conversation(next);
+        }
+    }
 
     /**
      * Configuration for one LLM-agent instance — bound at action-binding time.
@@ -188,14 +217,17 @@ public final class LlmAgentSubnet {
     static SubnetDef<Void> buildComposedDef(String netName, SubnetDef<Void> stepDef) {
         var body = PetriNet.builder(netName)
                 .place(REASK_BUDGET)
+                .place(CONVERSATION)
                 .transition(Transition.builder(Transitions.BUILD_PROMPT)
                         .inputs(Arc.In.one(AdkColours.USER_IN))
                         .reset(REASK_BUDGET)
-                        .outputs(Arc.Out.and(AdkColours.LLM_REQUEST, REASK_BUDGET))
+                        .reset(CONVERSATION)
+                        .outputs(Arc.Out.and(AdkColours.LLM_REQUEST, REASK_BUDGET, CONVERSATION))
                         .build())
                 .transition(Transition.builder(Transitions.RE_ASK)
-                        .inputs(Arc.In.one(AdkColours.TOOL_RESULTS), Arc.In.one(REASK_BUDGET))
-                        .outputs(Arc.Out.place(AdkColours.LLM_REQUEST))
+                        .inputs(Arc.In.one(AdkColours.TOOL_RESULTS), Arc.In.one(REASK_BUDGET),
+                                Arc.In.one(CONVERSATION))
+                        .outputs(Arc.Out.and(AdkColours.LLM_REQUEST, CONVERSATION))
                         .priority(10)
                         .build())
                 .transition(Transition.builder(Transitions.RE_ASK_EXHAUSTED_FALLBACK)
@@ -251,6 +283,7 @@ public final class LlmAgentSubnet {
                     config.systemInstruction(),
                     config.tools(),
                     List.of(userContent)));
+            ctx.output(CONVERSATION, new Conversation(List.of(userContent)));
 
             // Seed N reask-budget unit tokens. The Reset arc on this transition
             // wiped any survivors from a previous turn before this action runs.
@@ -266,21 +299,26 @@ public final class LlmAgentSubnet {
             // Consume the budget token (validated by transition input arc).
             ctx.input(REASK_BUDGET);
             AdkColours.ToolResults results = ctx.input(AdkColours.TOOL_RESULTS);
+            Conversation conversation = ctx.input(CONVERSATION);
 
-            // Build a continuation LlmRequest carrying the function responses as
-            // a "tool"-role Content. This is a single-turn continuation; threading the
-            // original request and prior LLM response through a session-state Read arc
-            // is a future extension.
+            // The continuation carries the whole invocation so far: the model's
+            // function-call turn goes back verbatim (thought signatures included)
+            // ahead of the responses, which Gemini pairs call-by-call. Function
+            // responses travel in a "user"-role turn, as ADK's own flow sends them.
             var responseParts = new ArrayList<Part>();
             for (var fr : results.results()) {
                 responseParts.add(Part.builder().functionResponse(fr).build());
             }
-            Content toolTurn = Content.builder().role("tool").parts(responseParts).build();
+            Content responseTurn = Content.builder().role("user").parts(responseParts).build();
+            Conversation next = results.modelTurn() != null
+                    ? conversation.append(results.modelTurn(), responseTurn)
+                    : conversation.append(responseTurn);
             ctx.output(AdkColours.LLM_REQUEST, LlmRequests.build(
                     config.model(),
                     config.systemInstruction(),
                     config.tools(),
-                    List.of(toolTurn)));
+                    next.turns()));
+            ctx.output(CONVERSATION, next);
             return CompletableFuture.completedFuture(null);
         };
     }

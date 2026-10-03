@@ -113,7 +113,8 @@ public final class RouterSubnet {
                 String agentName = transferAgentName(transfer.get());
                 ctx.output(AdkColours.TRANSFER, new AdkColours.TransferTarget(agentName));
             } else if (!functionCalls.isEmpty()) {
-                ctx.output(AdkColours.TOOL_CALLS, new AdkColours.ToolCalls(functionCalls));
+                ctx.output(AdkColours.TOOL_CALLS, new AdkColours.ToolCalls(functionCalls,
+                        response.content().orElse(null)));
             } else {
                 Event event = Event.builder()
                         .invocationId(config.invocationIdSupplier().get())
