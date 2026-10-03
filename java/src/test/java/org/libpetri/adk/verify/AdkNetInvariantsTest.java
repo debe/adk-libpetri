@@ -242,15 +242,6 @@ class AdkNetInvariantsTest {
     }
 
     @Test
-    void no_fire_after_end_invocation_factory_produces_mutex() {
-        var prop = AdkNetInvariants.noFireAfterEndInvocation(AdkColours.LLM_REQUEST);
-        assertThat(prop).isInstanceOf(SmtProperty.MutualExclusion.class);
-        var mx = (SmtProperty.MutualExclusion) prop;
-        assertThat(mx.p1()).isEqualTo(AdkColours.END_INVOCATION);
-        assertThat(mx.p2()).isEqualTo(AdkColours.LLM_REQUEST);
-    }
-
-    @Test
     void factory_rejects_invalid_bounds() {
         var budget = Place.of("budget", Void.class);
         Assertions.assertThrows(

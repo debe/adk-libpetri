@@ -23,10 +23,11 @@ import org.libpetri.adk.subnet.TransferRouterSubnet;
  *       invariant holds. These run on every {@code mvn verify} and catch
  *       wiring bugs at net-build time.</li>
  *   <li><b>{@link SmtProperty} factories</b> wrap libpetri's verification
- *       primitives ({@link SmtProperty.PlaceBound},
- *       {@link SmtProperty.MutualExclusion}) for use with
- *       {@code org.libpetri.smt.SmtVerifier}. These need Z3 native libs at
- *       runtime — gate Z3-using tests with {@code @EnabledIf}.</li>
+ *       primitive {@link SmtProperty.PlaceBound} for use with
+ *       {@code org.libpetri.smt.SmtVerifier}. These need a {@code z3}
+ *       binary at runtime — gate Z3-using tests with {@code @EnabledIf}.
+ *       Anything already a libpetri primitive stays one: for mutual
+ *       exclusion use {@link SmtProperty#mutualExclusion} directly.</li>
  * </ul>
  *
  * <p>The three invariant families correspond to the three bug classes
@@ -45,8 +46,9 @@ import org.libpetri.adk.subnet.TransferRouterSubnet;
  *       Validated by {@link #endInvocationInhibitsAll}.</li>
  * </ol>
  *
- * <p>The SMT side adds bounded-resource properties: reask budget bound,
- * event-out queue bound, and termination-vs-end-invocation mutex.
+ * <p>The SMT side adds bounded-resource properties: a budget-place bound
+ * (the reask and chunk budgets) and an event-out queue bound. Where each is
+ * proved, and on which net, is listed in the README's verification section.
  */
 public final class AdkNetInvariants {
 
@@ -181,22 +183,6 @@ public final class AdkNetInvariants {
             throw new IllegalArgumentException("maxBuffered must be >= 1, got: " + maxBuffered);
         }
         return SmtProperty.placeBound(AdkColours.EVENT_OUT, maxBuffered);
-    }
-
-    /**
-     * Property: {@link AdkColours#END_INVOCATION} and the given
-     * {@code restrictedPlace} are never marked simultaneously — once
-     * end-invocation is signalled, the restricted place stays empty.
-     *
-     * <p>This is the structural-bug-class invariant for "no fire after
-     * end_invocation": pick {@code restrictedPlace} to be a place that
-     * an advancing transition produces to (e.g.
-     * {@link AdkColours#LLM_REQUEST} for the LLM-loop case), and the
-     * property holds iff no transition writes to it after the end signal.
-     */
-    public static SmtProperty noFireAfterEndInvocation(Place<?> restrictedPlace) {
-        Objects.requireNonNull(restrictedPlace, "restrictedPlace");
-        return SmtProperty.mutualExclusion(AdkColours.END_INVOCATION, restrictedPlace);
     }
 
 
