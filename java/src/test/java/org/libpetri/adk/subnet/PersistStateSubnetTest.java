@@ -21,6 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.libpetri.core.Arc;
@@ -203,6 +204,17 @@ class PersistStateSubnetTest {
         assertThat(failed).hasSize(1);
         assertThat(((NetEvent.TransitionFailed) failed.getFirst()).exceptionType())
                 .contains("TimeoutException");
+    }
+
+    /** The timeout also cancels the hung {@code appendEvent}, so the session write is not left subscribed. */
+    @Test
+    void a_timed_out_append_has_its_subscription_disposed() {
+        var disposed = new AtomicBoolean();
+        var failed = persistOnceWith(
+                serviceAppending(Single.<Event>never().doOnDispose(() -> disposed.set(true))),
+                Duration.ofMillis(50));
+        assertThat(failed).hasSize(1);
+        assertThat(disposed.get()).isTrue();
     }
 
     private static List<NetEvent> persistOnceWith(BaseSessionService service, Duration timeout) {

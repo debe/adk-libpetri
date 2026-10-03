@@ -102,7 +102,7 @@ import java.util.function.BiConsumer;
  * protected Flowable<Event> runLiveImpl(InvocationContext ctx) {
  *     PetriRunner runner = registry.getOrCreate(SessionKey.from(ctx.session()), owner, factory);
  *     LiveConnection conn = connectionFactory.apply(ctx);   // your SyncGeminiLiveConnection
- *     return BidiPetriAgent.bridge(ctx.liveRequestQueue(), conn, runner,
+ *     return BidiPetriAgent.bridge(ctx.liveRequestQueue().orElseThrow(), conn, runner,
  *         (msg, r) -> {
  *             msg.serverContent().flatMap(LiveServerContent::modelTurn)
  *                .ifPresent(c -> r.inject(MODEL_CHUNK, c));   // net authors the Event
@@ -128,7 +128,7 @@ public final class BidiPetriAgent {
      * every {@link Event}. Server frames reach the net through {@code onServerMessage},
      * which injects model content and signals; the bridge itself maps nothing.
      *
-     * @param inbound         the ADK live-request queue (from {@code ctx.liveRequestQueue()})
+     * @param inbound         the ADK live-request queue (from {@code ctx.liveRequestQueue().orElseThrow()})
      * @param connection      the consumer's live connection
      * @param runner          the per-session Petri runner
      * @param onServerMessage consumer hook: inject model content + signals, route tool calls

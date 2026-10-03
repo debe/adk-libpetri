@@ -107,7 +107,7 @@ import org.libpetri.adk.colours.AdkColours;
  * per transport. Sketch:
  *
  * <pre>{@code
- * return BidiPetriAgent.bridge(ctx.liveRequestQueue(), connection, runner,
+ * return BidiPetriAgent.bridge(ctx.liveRequestQueue().orElseThrow(), connection, runner,
  *     (serverMessage, r) -> {
  *         modelContentOf(serverMessage).ifPresent(c -> r.inject(MODEL_CHUNK, c));
  *         decodeSignals(serverMessage).forEach(s -> r.signal(placeFor(s)));

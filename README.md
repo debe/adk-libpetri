@@ -40,8 +40,9 @@ move as that scope is found. Releases are working snapshots of that
 exploration, not a frozen API.
 
 Versioning says the same thing: this is **0.x**, and a minor version may
-break API. Within that, the turn-based path (`PetriAgent.of`, the stock
-non-streaming subnets, `SessionExecutorRegistry`) is the settled part.
+break API. Within that, the turn-based path (`PetriAgent.builder` and the
+`PetriAgent.of` shorthands, the stock non-streaming subnets,
+`SessionExecutorRegistry`) is the settled part.
 The SSE-streaming and BIDI/live surfaces are marked `@Experimental` in
 source and move faster than the rest.
 
@@ -292,9 +293,10 @@ imperative checks inside node bodies.
 The decisive difference is when correctness is established. A graph
 runtime tracks graph state at run time and reports it after the fact;
 the marking lets the same properties be proved before execution.
-`AdkNetInvariants` runs three structural validators on every build, and
-Z3 proves the assembled demo nets deadlock-free with the state-class
-graph bounded to a finite reachable space. The trade is modelling
+`AdkNetInvariants` runs three structural validators on every build, Z3
+proves the assembled demo nets and the stock subnets deadlock-free, and
+bounded state-class-graph exploration confirms the BIDI demo net's
+reachable space is finite. The trade is modelling
 discipline: a plain graph is simpler to author for linear or fan-out
 flows, and a managed runtime supplies retries, telemetry, and hosted
 execution out of the box. Where the ordering, exclusion, and
@@ -324,7 +326,8 @@ carry the design:
    race, and NPE patterns above become structurally absent or are caught
    at net-build time. `AdkNetInvariants` ships three structural
    validators that run on every `mvn verify`, plus SMT property
-   factories that Z3 Spacer proves on the assembled demo nets.
+   factories. Z3 proves properties on the assembled demo nets and on the
+   stock subnets, several of them alone (see [Verification](#verification)).
 
 ### Runtime model
 
@@ -384,7 +387,7 @@ takes a `dispatchExecutor`.
 Client client = Client.builder().apiKey(apiKey).build();
 BaseLlm llm  = new SyncGeminiLlm("gemini-2.0-flash", client); // ~25-line adapter; see demos/
 
-var bound = net.bindActions(LlmStepSubnet.actionBindings(llm));
+var bound = SubnetActions.bindComposed(net, LlmStepSubnet.actionBindings(llm));
 runner = PetriRunner.builder(bound)
     .environmentPlace(AdkColours.USER_IN)
     // actions run inline on this pool, so blocking the call is cheap here
@@ -395,14 +398,18 @@ runner = PetriRunner.builder(bound)
 `SyncGeminiLlm` is an exemplar under `demos/`, not library code. It
 reuses ADK's public `GeminiUtil` / `LlmResponse.create` mappers, and
 server-streaming drains genai's sync `ResponseStream` per chunk on the
-same virtual thread. BIDI/Live is a separate path: read genai's Live
-session directly (`client.async.live.connect` plus
-`AsyncSession.receive`) and inject each server event into its env place.
-The VAD and barge-in signals (`LiveServerContent.interrupted()`,
-`LiveServerMessage.voiceActivity()`) are already public on genai, so
-voice needs no fork either. ADK's `Gemini.generateContent` and
-`GeminiLlmConnection` wrappers, which add the `commonPool` hops and drop
-the VAD signals, are bypassed in thin user code rather than patched.
+same virtual thread. BIDI/Live is a separate path. The VAD and barge-in
+signals (`LiveServerContent.interrupted()`,
+`LiveServerMessage.voiceActivity()`) are already public on genai, and
+ADK's `GeminiLlmConnection` drops the voice-activity edges, so voice
+needs no fork either. The preferred route is the `VadTapGemini` exemplar:
+it keeps ADK's own `GeminiLlmConnection` and wraps the live transport
+under it through the `connectLiveTransport` seam ADK 1.9 added, so each
+voice-activity edge reaches your callback before ADK sees the message.
+For full control, `SyncGeminiLiveConnection` reads genai's Live session
+directly (`client.async.live.connect` plus `AsyncSession.receive`).
+Either way ADK's wrappers are wrapped or bypassed in thin user code
+rather than patched.
 
 The BIDI plumbing splits into a shipped half and a consumer half. The
 shipped half is `BidiPetriAgent.bridge(liveRequestQueue, connection,
@@ -507,7 +514,7 @@ time. `StartTurn` takes the session's single `TURN_PERMIT` with the
 `USER_IN`, so an input that arrives mid-turn (a client retry, say) waits
 until the turn has ended instead of trampling it. `BuildPrompt` seeds K
 budget tokens (the diagram shows one arc; K is per-session via
-`LlmAgentSubnet.Config.reaskBudget(int)`) and the conversation's user
+`LlmAgentSubnet.Config.Builder.reaskBudget(int)`) and the conversation's user
 turn. Each `ReAsk` consumes a budget token and extends the conversation
 with the model's function-call turn and the tool responses, so the
 continuation request carries the whole invocation. The router's answer
@@ -639,9 +646,10 @@ orchestration: the net is the brain for the whole request/response.
 net's ADK event stream to `Runner`. An agent built with a `LiveConfig`
 (`PetriAgent.builder(...).live(liveConfig)`) runs full Live/BIDI through
 `BidiPetriAgent.bridge(...)` with a provider-specific `LiveConnection`:
-the helper forwards `LiveRequestQueue` frames to the connection, maps
-model-content server frames to ADK `Event`s, and invokes the consumer
-callback to inject raw VAD/barge-in/tool signals into the `PetriRunner`.
+the helper forwards `LiveRequestQueue` frames to the connection and hands
+each raw server message to the consumer callback, which injects model
+content and VAD/barge-in/tool signals into the `PetriRunner`. The helper
+maps nothing itself: a net transition authors every `Event`.
 Provider-specific frame decoding stays caller-side because signal names,
 tool routing, and reconnect policy vary per transport.
 
@@ -788,7 +796,10 @@ rather than quietly turning into `Unknown`.
 
 - `singleLegacySessionWriter` catches parallel writes to
   `Session.state`, and `transferDemuxHasUnknownFallback` catches
-  dead-letter accumulation. Both run on the multi-agent demo net.
+  dead-letter accumulation. Both run on the multi-agent demo net, where
+  the writer check passes vacuously: that net has no `PersistStateSubnet`
+  and so no writer at all. Its tests run it on a net with one writer and
+  on one with two.
 - `endInvocationInhibitsAll` catches advancing transitions that ignore
   the end signal. The stock subnets do not use `END_INVOCATION`, so this
   is a check for your own nets; its test runs it on synthetic ones.
@@ -797,7 +808,7 @@ rather than quietly turning into `Unknown`.
 
 | What is proved | Net | Test |
 |---|---|---|
-| Each stock subnet is deadlock-free and turns k inputs into exactly k outcomes (`LlmStep`, `Router`, `ToolDispatch`, `TransferRouter`); `PersistState` takes every write | each subnet alone, via `SubnetDef.verify` with `arrivals(k, k)` | `StockSubnetProofsTest` |
+| `LlmStep`, `Router`, `ToolDispatch` and `TransferRouter` are each deadlock-free and turn k inputs into exactly k outcomes; `PersistState` is deadlock-free, so it takes every write. `PromptBuilder` has no proof of its own, and the streaming pair is proved in the rows below | each of those five subnets alone, via `SubnetDef.verify` with `arrivals(k, k)` | `StockSubnetProofsTest` |
 | The composed `LlmAgent` is deadlock-free, comes to rest holding only its permit, and turns k user inputs into exactly k outcomes (one answer, fallback or transfer each) | `LlmAgentSubnet` composed, `arrivals(k, k)` | `StockSubnetProofsTest` |
 | One turn at a time: at most one turn in flight, one conversation, and a reask budget that never stacks across user inputs (commitment 6) | `LlmAgentSubnet`, two arrivals; `StreamingLlmAgentSubnet` with its chunk stream open | `StockSubnetProofsTest` |
 | A failure at any step of a turn is recovered: still deadlock-free, one turn, one conversation; aborts at any moment never mint a second permit | `LlmAgentSubnet` with a failure model, and with `TURN_ABORT` arrivals | `StockSubnetProofsTest` |

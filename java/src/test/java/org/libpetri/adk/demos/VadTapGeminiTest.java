@@ -33,6 +33,40 @@ class VadTapGeminiTest {
 
     @Test
     void voice_activity_edges_reach_the_tap_while_adk_still_streams_the_model_turn() {
+        var signals = new CopyOnWriteArrayList<VoiceSignal>();
+
+        var texts = streamTexts(signals::add);
+
+        assertThat(signals).containsExactly(
+                VoiceSignal.SPEECH_STARTED, VoiceSignal.SPEECH_STOPPED, VoiceSignal.TURN_COMPLETE)
+                .inOrder();
+        // ADK's own mapping is untouched: the model turn still arrives as text.
+        assertThat(texts).contains("hello");
+    }
+
+    /**
+     * {@code onSignal} runs inside ADK's receive callback. A throw from it is
+     * contained: later signals still arrive and ADK still streams the turn.
+     */
+    @Test
+    void a_throwing_signal_handler_does_not_end_the_live_stream() {
+        var signals = new CopyOnWriteArrayList<VoiceSignal>();
+
+        var texts = streamTexts(signal -> {
+            signals.add(signal);
+            if (signal == VoiceSignal.SPEECH_STARTED) {
+                throw new IllegalStateException("handler bug");
+            }
+        });
+
+        assertThat(signals).containsExactly(
+                VoiceSignal.SPEECH_STARTED, VoiceSignal.SPEECH_STOPPED, VoiceSignal.TURN_COMPLETE)
+                .inOrder();
+        assertThat(texts).contains("hello");
+    }
+
+    /** Runs the scripted frames through ADK's real connection, returning the texts it streamed. */
+    private static List<String> streamTexts(Consumer<VoiceSignal> onSignal) {
         var frames = List.of(
                 vadEdge(VoiceActivityType.Known.ACTIVITY_START),
                 LiveServerMessage.builder().serverContent(LiveServerContent.builder()
@@ -42,29 +76,27 @@ class VadTapGeminiTest {
                 vadEdge(VoiceActivityType.Known.ACTIVITY_END),
                 LiveServerMessage.builder().serverContent(
                         LiveServerContent.builder().turnComplete(true).build()).build());
-        var signals = new CopyOnWriteArrayList<VoiceSignal>();
-        var llm = new VadTapGemini("gemini-live-test",
-                Client.builder().apiKey("offline-test-key").build(),
-                (model, config) -> CompletableFuture.completedFuture(new ScriptedTransport(frames)),
-                signals::add);
-
-        var connection = llm.connect(LlmRequest.builder()
-                .model("gemini-live-test")
-                .liveConnectConfig(LiveConnectConfig.builder().build())
-                .build());
-        var responses = connection.receive().test();
-        responses.awaitDone(2, TimeUnit.SECONDS);
-
-        assertThat(signals).containsExactly(
-                VoiceSignal.SPEECH_STARTED, VoiceSignal.SPEECH_STOPPED, VoiceSignal.TURN_COMPLETE)
-                .inOrder();
-        // ADK's own mapping is untouched: the model turn still arrives as text.
-        assertThat(responses.values().stream()
-                .map(LlmResponse::content)
-                .flatMap(java.util.Optional::stream)
-                .map(Content::text)
-                .toList())
-                .contains("hello");
+        try (var client = Client.builder().apiKey("offline-test-key").build()) {
+            var llm = new VadTapGemini("gemini-live-test", client,
+                    (model, config) -> CompletableFuture.completedFuture(new ScriptedTransport(frames)),
+                    onSignal);
+            var connection = llm.connect(LlmRequest.builder()
+                    .model("gemini-live-test")
+                    .liveConnectConfig(LiveConnectConfig.builder().build())
+                    .build());
+            try {
+                var responses = connection.receive().test();
+                responses.awaitDone(2, TimeUnit.SECONDS);
+                responses.assertNoErrors();
+                return responses.values().stream()
+                        .map(LlmResponse::content)
+                        .flatMap(java.util.Optional::stream)
+                        .map(Content::text)
+                        .toList();
+            } finally {
+                connection.close();
+            }
+        }
     }
 
     private static LiveServerMessage vadEdge(VoiceActivityType.Known type) {

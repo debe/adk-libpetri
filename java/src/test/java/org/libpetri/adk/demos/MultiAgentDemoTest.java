@@ -72,7 +72,8 @@ import org.libpetri.smt.SmtVerifier;
  *       net and confirm:
  *       <ul>
  *         <li>at most one legacy-session-write consumer
- *             ({@code singleLegacySessionWriter});</li>
+ *             ({@code singleLegacySessionWriter}), which holds vacuously
+ *             here: this net composes no {@code PersistStateSubnet};</li>
  *         <li>the transfer demux has an unknown fallback
  *             ({@code transferDemuxHasUnknownFallback}).</li>
  *       </ul></li>
@@ -189,41 +190,44 @@ class MultiAgentDemoTest {
                 .tracing(tracer, observabilityChain)
                 .build();
 
-        var runner = new InMemoryRunner(agent);
-        var session = runner.sessionService()
-                .createSession(runner.appName(), "user-1", (Map<String, Object>) null, "sess-1")
-                .blockingGet();
+        try {
+            var runner = new InMemoryRunner(agent);
+            var session = runner.sessionService()
+                    .createSession(runner.appName(), "user-1", (Map<String, Object>) null, "sess-1")
+                    .blockingGet();
 
-        // ============================================================
-        //  5. Drive an invocation. The planner LLM returns text; the
-        //     LlmAgent's Router routes to EVENT_OUT; PetriAgent's
-        //     take(1) emits the response back through Runner.
-        // ============================================================
-        var events = runner.runAsync(
-                        session.userId(),
-                        session.id(),
-                        userMessage("Help me with billing"),
-                        RunConfig.builder().build())
-                .toList()
-                .blockingGet();
+            // ============================================================
+            //  5. Drive an invocation. The planner LLM returns text; the
+            //     LlmAgent's Router routes to EVENT_OUT; PetriAgent's
+            //     take(1) emits the response back through Runner.
+            // ============================================================
+            var events = runner.runAsync(
+                            session.userId(),
+                            session.id(),
+                            userMessage("Help me with billing"),
+                            RunConfig.builder().build())
+                    .toList()
+                    .blockingGet();
 
-        // Assert the agent's actual reply, not just that events exist.
-        // InMemoryRunner emits the user-message event unconditionally, so
-        // isNotEmpty() stayed green even if the net produced nothing at all,
-        // which is the whole thing this demo is here to show.
-        var agentText = events.stream()
-                .filter(e -> "planner".equals(e.author()))
-                .map(e -> e.content().map(Content::text).orElse(""))
-                .filter(t -> t != null && !t.isBlank())
-                .reduce((a, b) -> b)
-                .orElse(null);
-        assertThat(agentText).isEqualTo("Here's the answer to your question.");
+            // Assert the agent's actual reply, not just that events exist.
+            // InMemoryRunner emits the user-message event unconditionally, so
+            // isNotEmpty() stayed green even if the net produced nothing at all,
+            // which is the whole thing this demo is here to show.
+            var agentText = events.stream()
+                    .filter(e -> "planner".equals(e.author()))
+                    .map(e -> e.content().map(Content::text).orElse(""))
+                    .filter(t -> t != null && !t.isBlank())
+                    .reduce((a, b) -> b)
+                    .orElse(null);
+            assertThat(agentText).isEqualTo("Here's the answer to your question.");
+        } finally {
+            registry.closeAll();
+        }
 
         // ============================================================
         //  6. Observability assertion — OT spans were emitted for the
         //     LlmAgent pipeline transitions that fired.
         // ============================================================
-        registry.closeAll();
         // End any still-open per-session invocation spans — they're held open
         // past doFinally so late TransitionCompleted emits from the orchestrator
         // (which fire AFTER the take(1)-triggering TokenAdded(EVENT_OUT))
@@ -306,29 +310,31 @@ class MultiAgentDemoTest {
                 .description("Demonstrates structural elimination of hallucinated-transfer NPE")
                 .build();
 
-        var runner = new InMemoryRunner(agent);
-        var session = runner.sessionService()
-                .createSession(runner.appName(), "u", (Map<String, Object>) null, "s").blockingGet();
+        try {
+            var runner = new InMemoryRunner(agent);
+            var session = runner.sessionService()
+                    .createSession(runner.appName(), "u", (Map<String, Object>) null, "s").blockingGet();
 
-        var events = runner.runAsync(
-                        session.userId(), session.id(),
-                        userMessage("help"),
-                        RunConfig.builder().build())
-                .toList()
-                .blockingGet();
+            var events = runner.runAsync(
+                            session.userId(), session.id(),
+                            userMessage("help"),
+                            RunConfig.builder().build())
+                    .toList()
+                    .blockingGet();
 
-        // No exception, no NPE. But "the runner returned events" is not the
-        // claim this test's name makes: assert the hallucinated name actually
-        // surfaced as a typed error event. The previous comment widened the
-        // claim until nothing could falsify it, and isNotEmpty() passes on the
-        // user-message event alone.
-        var errorText = events.stream()
-                .map(e -> e.content().map(Content::text).orElse(""))
-                .filter(t -> t != null && t.contains("hallucinated_typo"))
-                .findFirst();
-        assertThat(errorText).isPresent();
-
-        registry.closeAll();
+            // No exception, no NPE. But "the runner returned events" is not the
+            // claim this test's name makes: assert the hallucinated name actually
+            // surfaced as a typed error event. The previous comment widened the
+            // claim until nothing could falsify it, and isNotEmpty() passes on the
+            // user-message event alone.
+            var errorText = events.stream()
+                    .map(e -> e.content().map(Content::text).orElse(""))
+                    .filter(t -> t != null && t.contains("hallucinated_typo"))
+                    .findFirst();
+            assertThat(errorText).isPresent();
+        } finally {
+            registry.closeAll();
+        }
     }
 
     // ============================================================

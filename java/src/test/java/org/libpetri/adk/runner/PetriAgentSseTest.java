@@ -1,6 +1,7 @@
 package org.libpetri.adk.runner;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.google.adk.agents.RunConfig;
 import com.google.adk.events.Event;
@@ -14,15 +15,20 @@ import com.google.genai.types.Part;
 import io.reactivex.rxjava3.core.Flowable;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.subnet.StreamingLlmAgentSubnet;
+import org.libpetri.core.Token;
 
 class PetriAgentSseTest {
 
@@ -163,6 +169,60 @@ class PetriAgentSseTest {
         }
     }
 
+    /**
+     * {@code customize} runs before the factory's own settings: a stray
+     * {@code deferredExecutorRef} set there cannot displace the per-session
+     * one (it used to, and every chunk injection then failed), and the
+     * session key it receives is what a checkpoint resume needs.
+     */
+    @Test
+    void customize_gets_the_session_key_and_cannot_displace_the_executor_ref() {
+        var sse = RunConfig.builder().streamingMode(RunConfig.StreamingMode.SSE).build();
+        var loaded = new CopyOnWriteArrayList<SessionKey>();
+        var inner = SessionCheckpointStore.inMemory();
+        var store = new SessionCheckpointStore() {
+            @Override public void save(SessionKey key, Map<String, List<Token<?>>> marking) {
+                inner.save(key, marking);
+            }
+            @Override public Optional<Map<String, List<Token<?>>>> load(SessionKey key) {
+                loaded.add(key);
+                return inner.load(key);
+            }
+            @Override public void remove(SessionKey key) {
+                inner.remove(key);
+            }
+        };
+        var config = StreamingLlmAgentSubnet.Config.builder(AGENT_NAME, "fake-model")
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        try (var registry = SessionExecutorRegistry.strongOwned()) {
+            var agent = PetriAgent.builder(AGENT_NAME, registry,
+                            StreamingLlmAgentSubnet.runnerFactory(echoingLlm(), config,
+                                    (key, b) -> b.orchestratorExecutor(EXECUTOR)
+                                            .deferredExecutorRef(new AtomicReference<>())
+                                            .resumeFrom(store, key)))
+                    .build();
+            var runner = new InMemoryRunner(agent);
+            var session = newSession(runner, "user-1");
+
+            assertThat(finalText(runTurn(runner, session, "hi", sse))).isEqualTo("echo: hi");
+            assertThat(loaded).containsExactly(SessionKey.from(session));
+        }
+    }
+
+    @Test
+    void customize_that_declares_a_factory_owned_env_place_fails_the_start() {
+        var config = StreamingLlmAgentSubnet.Config.builder(AGENT_NAME, "fake-model")
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        var factory = StreamingLlmAgentSubnet.runnerFactory(echoingLlm(), config,
+                (key, b) -> b.orchestratorExecutor(EXECUTOR).environmentPlace(AdkColours.USER_IN));
+
+        var thrown = assertThrows(IllegalStateException.class,
+                () -> factory.apply(new SessionKey("app", "user", "session")));
+        assertThat(thrown).hasMessageThat().contains("already declared");
+    }
+
     private static String finalText(List<Event> events) {
         return events.getLast().content().get().text();
     }
@@ -226,7 +286,7 @@ class PetriAgentSseTest {
                                        StreamingLlmAgentSubnet.Config config) {
         return PetriAgent.builder(AGENT_NAME, registry,
                 StreamingLlmAgentSubnet.runnerFactory(llm, config,
-                        b -> b.orchestratorExecutor(EXECUTOR)))
+                        (key, b) -> b.orchestratorExecutor(EXECUTOR)))
                 .description("Streaming SSE test agent")
                 .build();
     }

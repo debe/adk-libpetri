@@ -83,6 +83,28 @@ class SessionExecutorRegistryTest {
         }
     }
 
+    /**
+     * Mixing the ownerless call with an explicit owner for one key is an
+     * owner mismatch too, but the message says which forms were mixed rather
+     * than blaming an unstable {@code ctx.session()}.
+     */
+    @Test
+    void mixing_ownerless_and_owned_calls_for_one_key_names_the_mix() {
+        Object owner = new Object();
+        try (var registry = SessionExecutorRegistry.strongOwned()) {
+            registry.getOrCreate(K1, k -> testRunner());
+            var ownedAfterOwnerless = assertThrows(IllegalStateException.class,
+                    () -> registry.getOrCreate(K1, owner, k -> testRunner()));
+            assertThat(ownedAfterOwnerless).hasMessageThat().contains("first requested without an owner");
+            assertThat(ownedAfterOwnerless).hasMessageThat().doesNotContain("ctx.session()");
+
+            registry.getOrCreate(K2, owner, k -> testRunner());
+            var ownerlessAfterOwned = assertThrows(IllegalStateException.class,
+                    () -> registry.getOrCreate(K2, k -> testRunner()));
+            assertThat(ownerlessAfterOwned).hasMessageThat().contains("first requested with an owner");
+        }
+    }
+
     @Test
     void close_removes_one_runner_and_returns_true() {
         Object owner = new Object();
@@ -162,66 +184,66 @@ class SessionExecutorRegistryTest {
 
     @Test
     void explicit_close_then_owner_gc_is_safe() throws Exception {
-        var registry = SessionExecutorRegistry.cleanerOwned();
-        var ownerRef = createAndForget(registry);
-        // Explicitly close before GC.
-        assertThat(registry.close(K1)).isTrue();
-        assertThat(registry.size()).isEqualTo(0);
-        // Now let the Cleaner fire — it should find no entry, do nothing.
-        awaitGc(() -> ownerRef.refersTo(null), 5_000);
-        // Give the Cleaner thread a moment to invoke close(K1) — which is
-        // a safe no-op. Just verify the registry is still healthy.
-        Thread.sleep(100);
-        assertThat(registry.size()).isEqualTo(0);
-        registry.closeAll();
+        try (var registry = SessionExecutorRegistry.cleanerOwned()) {
+            var ownerRef = createAndForget(registry);
+            // Explicitly close before GC.
+            assertThat(registry.close(K1)).isTrue();
+            assertThat(registry.size()).isEqualTo(0);
+            // Now let the Cleaner fire — it should find no entry, do nothing.
+            awaitGc(() -> ownerRef.refersTo(null), 5_000);
+            // Give the Cleaner thread a moment to invoke close(K1) — which is
+            // a safe no-op. Just verify the registry is still healthy.
+            Thread.sleep(100);
+            assertThat(registry.size()).isEqualTo(0);
+        }
     }
 
     @Test
     void concurrent_first_call_installs_exactly_one_runner_and_closes_loser() throws Exception {
         Object owner = new Object();
-        var registry = SessionExecutorRegistry.cleanerOwned();
-        var calls = new AtomicInteger();
-        var factoriesEntered = new CountDownLatch(2);
-        var releaseFactories = new CountDownLatch(1);
-        var created = new CopyOnWriteArrayList<PetriRunner>();
+        try (var registry = SessionExecutorRegistry.cleanerOwned()) {
+            var calls = new AtomicInteger();
+            var factoriesEntered = new CountDownLatch(2);
+            var releaseFactories = new CountDownLatch(1);
+            var created = new CopyOnWriteArrayList<PetriRunner>();
 
-        PetriRunner[] runners;
-        try (var pool = Executors.newFixedThreadPool(2)) {
-            var f1 = pool.submit(() -> registry.getOrCreate(K1, owner, key -> {
-                calls.incrementAndGet();
-                factoriesEntered.countDown();
-                awaitGate(releaseFactories);
-                var runner = testRunner();
-                created.add(runner);
-                return runner;
-            }));
-            var f2 = pool.submit(() -> registry.getOrCreate(K1, owner, key -> {
-                calls.incrementAndGet();
-                factoriesEntered.countDown();
-                awaitGate(releaseFactories);
-                var runner = testRunner();
-                created.add(runner);
-                return runner;
-            }));
+            PetriRunner[] runners;
+            try (var pool = Executors.newFixedThreadPool(2)) {
+                var f1 = pool.submit(() -> registry.getOrCreate(K1, owner, key -> {
+                    calls.incrementAndGet();
+                    factoriesEntered.countDown();
+                    awaitGate(releaseFactories);
+                    var runner = testRunner();
+                    created.add(runner);
+                    return runner;
+                }));
+                var f2 = pool.submit(() -> registry.getOrCreate(K1, owner, key -> {
+                    calls.incrementAndGet();
+                    factoriesEntered.countDown();
+                    awaitGate(releaseFactories);
+                    var runner = testRunner();
+                    created.add(runner);
+                    return runner;
+                }));
 
-            try {
-                assertThat(factoriesEntered.await(2, TimeUnit.SECONDS)).isTrue();
-                assertThat(calls.get()).isEqualTo(2);
-            } finally {
-                releaseFactories.countDown();
+                try {
+                    assertThat(factoriesEntered.await(2, TimeUnit.SECONDS)).isTrue();
+                    assertThat(calls.get()).isEqualTo(2);
+                } finally {
+                    releaseFactories.countDown();
+                }
+                runners = new PetriRunner[] {
+                        f1.get(5, TimeUnit.SECONDS),
+                        f2.get(5, TimeUnit.SECONDS)
+                };
             }
-            runners = new PetriRunner[] {
-                    f1.get(5, TimeUnit.SECONDS),
-                    f2.get(5, TimeUnit.SECONDS)
-            };
-        }
 
-        assertThat(runners[0]).isSameInstanceAs(runners[1]);
-        assertThat(created).hasSize(2);
-        PetriRunner loser = created.get(0) == runners[0] ? created.get(1) : created.get(0);
-        assertThat(loser.awaitTermination(Duration.ofSeconds(2))).isTrue();
-        assertThat(registry.size()).isEqualTo(1);
-        registry.closeAll();
+            assertThat(runners[0]).isSameInstanceAs(runners[1]);
+            assertThat(created).hasSize(2);
+            PetriRunner loser = created.get(0) == runners[0] ? created.get(1) : created.get(0);
+            assertThat(loser.awaitTermination(Duration.ofSeconds(2))).isTrue();
+            assertThat(registry.size()).isEqualTo(1);
+        }
     }
 
     private static void awaitGate(CountDownLatch gate) {

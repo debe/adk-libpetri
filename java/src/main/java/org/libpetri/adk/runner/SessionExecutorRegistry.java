@@ -61,6 +61,12 @@ import org.libpetri.runtime.TerminationReason;
  * different owner for the same key throws) applies in both modes —
  * it's how concurrent first-calls converge on a single runner.
  *
+ * <p>In strong-owned mode the owner is only that identity check, so it can
+ * be left out: {@link #getOrCreate(SessionKey, Function)} takes no owner,
+ * and is what a {@code PetriAgent} built without an owner extractor calls.
+ * Pick one form per key. Mixing the ownerless call with an explicit owner
+ * for the same key throws, like any other owner mismatch.
+ *
  * <h2>Owner identity is load-bearing (both modes)</h2>
  * <p>The {@code owner} object's <b>reference identity</b> controls
  * lifetime in cleaner-owned mode and is the de-duplication key in both
@@ -405,6 +411,16 @@ public final class SessionExecutorRegistry implements AutoCloseable {
             // reachable in CLEANER mode (STRONG never returns null).
             evictAndShutdown(key, existing);
             return null;
+        }
+        if (original == NO_OWNER || candidate == NO_OWNER) {
+            throw new IllegalStateException(
+                    "SessionKey " + key + " was first requested "
+                    + (original == NO_OWNER ? "without an owner" : "with an owner")
+                    + " and is now requested "
+                    + (candidate == NO_OWNER ? "without one" : "with one")
+                    + ". Use one form per key: the ownerless getOrCreate(key, factory) "
+                    + "everywhere, or the same owner everywhere. A PetriAgent built "
+                    + "without an owner extractor uses the ownerless form.");
         }
         throw new IllegalStateException(
                 "SessionKey " + key + " is already bound to a different "

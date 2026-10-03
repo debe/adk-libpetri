@@ -31,7 +31,7 @@ import org.libpetri.adk.subnet.TransferRouterSubnet;
  * </ul>
  *
  * <p>The three invariant families correspond to the three bug classes
- * the plan calls out as structurally absent in adk-libpetri:
+ * the README names as structurally absent in adk-libpetri:
  * <ol>
  *   <li><b>Legacy-session-write race</b> — only one transition
  *       consumes from {@link AdkColours#LEGACY_SESSION_WRITE} (typically
@@ -86,12 +86,18 @@ public final class AdkNetInvariants {
      * transitions stop firing, so the net winds down without leaking
      * additional output past the end signal.
      *
-     * <p>Since libpetri 7.0 there is a blunter alternative: declare
-     * {@code END_INVOCATION} a terminal place on the top-level net
-     * ({@code .terminal(AdkColours.END_INVOCATION)}). Its first token ends the
-     * run outright, which makes these inhibitors redundant, but it also
-     * discards any in-flight action's result. Use the inhibitors when work in
-     * flight must be allowed to finish.
+     * <p>These inhibitors end one invocation and leave the session's runner
+     * serving the next. libpetri 7.0's terminal places
+     * ({@code .terminal(AdkColours.END_INVOCATION)} on the top-level net) are
+     * not a substitute: a terminal token ends the whole run, and with it the
+     * per-session runner, abandoning any action in flight. ADK's
+     * {@code endInvocation} ends a single invocation; a terminal
+     * {@code END_INVOCATION} ends the session. A
+     * {@code SessionExecutorRegistry} also keeps handing out the stopped
+     * runner for that key until the key is closed, so later turns on it get
+     * no answer. Use a terminal place only as a deliberate session end, closed
+     * from the registry afterwards; it does not make these inhibitors
+     * redundant.
      *
      * @param net              the net to inspect
      * @param advancingNames   the set of transition names that count as

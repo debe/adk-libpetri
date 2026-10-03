@@ -93,8 +93,10 @@ generated from [`docs/diagrams/`](docs/diagrams/).
 - **`verify/`**: `AdkNetInvariants`. 3 structural validators plus 2
   SMT property factories (`budgetPlaceBounded`, `eventOutBounded`).
   Which property is proved on which net is listed in the README's
-  Verification section; `StockSubnetProofsTest` proves each stock
-  subnet alone via `SubnetDef.verify` with `arrivals(k, k)`. Budget
+  Verification section; `StockSubnetProofsTest` proves `LlmStep`,
+  `Router`, `ToolDispatch`, `TransferRouter` and `PersistState` each
+  alone via `SubnetDef.verify` with `arrivals(k, k)`, and the composed
+  `LlmAgent` and `StreamingLlmAgent` as whole nets. Budget
   bounds are stated in seeds (libpetri models an N-permit seed as one
   token).
 - **Test support**: `ManualClock` (`src/test/.../adk/`) is a
@@ -111,9 +113,8 @@ generated from [`docs/diagrams/`](docs/diagrams/).
   most one event.
 - **`VoiceSessionDemoTest`**. Streaming plus barge-in plus silence
   recovery composed into one long-lived per-session net with
-  multi-direction env places. Z3 proves it deadlock-free and proves the
-  chunk budget bounded, with the env places modelled via
-  `environmentMode(bounded(1))`. Without that the verifier returns
+  multi-direction env places. Z3 proves it deadlock-free, with the env
+  places modelled via `environmentMode(bounded(1))`. Without that the verifier returns
   `Unknown`, because a proof that ignores env places would be vacuous.
   Its silence-recovery timers run on `ManualClock`.
   SCG bounded exploration lives next door in `LiveApiRecoverySubnetTest`
@@ -147,10 +148,13 @@ bug classes the design is meant to eliminate.
    is replaced, never forked. Where a defect lives in *ADK's wrapper
    over genai* — the `commonPool` hops in `Gemini.generateContent`,
    the VAD/barge-in signals dropped by `GeminiLlmConnection` — the
-   wrapper is bypassed in thin user code that calls genai directly
-   (the `SyncGeminiLlm` exemplar for the LLM path; a direct
-   `client.async.live` read for voice), never patched in a fork of
-   genai or ADK.
+   wrapper is wrapped or bypassed in thin user code, never patched in a
+   fork of genai or ADK. The `SyncGeminiLlm` exemplar calls genai
+   directly for the LLM path. For voice the preferred route is the
+   `VadTapGemini` exemplar, which keeps ADK's `GeminiLlmConnection` and
+   wraps its live transport through ADK 1.9's `connectLiveTransport`
+   seam; `SyncGeminiLiveConnection`, a direct `client.async.live` read,
+   is the fallback for full control.
 5. **Observability via `EventStore` decorator chain.**
    `OtelEventStore`, `EventStore.logging()` (libpetri-provided),
    and any future structured-logging or debug-recording stores
@@ -189,12 +193,20 @@ bug classes the design is meant to eliminate.
 - Java 25, `record`s for immutable types, `sealed` interfaces for
   discriminated unions.
 - Subnet definitions are stateless `SubnetDef<Void>` instances.
-  Per-session action closures bind via `PetriNet.bindActions(Map)`.
+  Per-session action closures bind via `SubnetActions.bindComposed(net,
+  maps...)` for a composed net, or a stock subnet's `actionBindings`
+  (validated by `SubnetActions.bind`). Never a bare
+  `PetriNet.bindActions(Map)` with an unchecked map: it binds a silent
+  `passthrough()` for every transition the map misses.
 - All subnet transition names are `<NAME>_<Verb>` (for example
   `LlmAgent_BuildPrompt`) so `SubnetActions.bind` validates keys
   reliably.
-- All `Place<T>` constants live in either `AdkColours` (boundary)
-  or on the owning subnet's `Places` holder class (internal).
+- Boundary `Place<T>` constants live in `AdkColours`. A subnet's
+  internal places are public constants on the owning subnet class:
+  in a nested `Places` holder (`LlmStepSubnet.Places`,
+  `LlmStreamingStepSubnet.Places`) or directly on the class
+  (`LlmAgentSubnet.REASK_BUDGET`, `TransferRouterSubnet.UNKNOWN_TARGET`
+  and its `targetPlace(name)` factory).
 - Tests use `BitmapNetExecutor.builder(net, initial).run()` for
   synchronous test patterns. Long-lived BIDI tests use `runAsync`
   plus drain.

@@ -136,39 +136,41 @@ class PatternB_QuorumDemoTest {
                 .description("K-of-N quorum across five branches")
                 .build();
 
-        var runner = new InMemoryRunner(agent);
-        var session = runner.sessionService()
-                .createSession(runner.appName(), "u", (Map<String, Object>) null, "s")
-                .blockingGet();
+        try {
+            var runner = new InMemoryRunner(agent);
+            var session = runner.sessionService()
+                    .createSession(runner.appName(), "u", (Map<String, Object>) null, "s")
+                    .blockingGet();
 
-        long start = System.nanoTime();
-        var events = runner.runAsync(
-                        session.userId(), session.id(),
-                        userMessage("synthesize a consensus answer"),
-                        RunConfig.builder().build())
-                .toList().blockingGet();
-        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            long start = System.nanoTime();
+            var events = runner.runAsync(
+                            session.userId(), session.id(),
+                            userMessage("synthesize a consensus answer"),
+                            RunConfig.builder().build())
+                    .toList().blockingGet();
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
 
-        // Exactly one synthesised event from the agent — the quorum fires
-        // once and the late arrivals drain.
-        var agentEvents = events.stream()
-                .filter(e -> "quorum_agent".equals(e.author())).toList();
-        assertThat(agentEvents).hasSize(1);
+            // Exactly one synthesised event from the agent — the quorum fires
+            // once and the late arrivals drain.
+            var agentEvents = events.stream()
+                    .filter(e -> "quorum_agent".equals(e.author())).toList();
+            assertThat(agentEvents).hasSize(1);
 
-        // The synthesis content references the three winning branches.
-        String text = agentEvents.get(0).content().get().text();
-        // The quorum is the three FASTEST branches, in completion order.
-        // contains("synth(") only proved synthesizeAction ran at all, which it
-        // always does; it said nothing about which branches formed the quorum.
-        assertThat(text).isEqualTo("synth(b1,b2,b3)");
+            // The synthesis content references the three winning branches.
+            String text = agentEvents.get(0).content().get().text();
+            // The quorum is the three FASTEST branches, in completion order.
+            // contains("synth(") only proved synthesizeAction ran at all, which it
+            // always does; it said nothing about which branches formed the quorum.
+            assertThat(text).isEqualTo("synth(b1,b2,b3)");
 
-        // The load-bearing assertion: the agent completed well before the
-        // slowest branch's delay (400ms). With a barrier-join (e.g.
-        // ParallelAgent in the foil test), this elapsed would be >= 800ms.
-        // We leave a generous margin to keep CI stable.
-        assertThat(elapsedMs).isLessThan(400L);
-
-        registry.closeAll();
+            // The load-bearing assertion: the agent completed well before the
+            // slowest branch's delay (400ms). With a barrier-join (e.g.
+            // ParallelAgent in the foil test), this elapsed would be >= 800ms.
+            // We leave a generous margin to keep CI stable.
+            assertThat(elapsedMs).isLessThan(400L);
+        } finally {
+            registry.closeAll();
+        }
     }
 
     @Test

@@ -191,112 +191,114 @@ class VoiceSessionDemoTest {
                 .description("BIDI voice agent — streaming, barge-in, silence recovery")
                 .build();
 
-        var adkRunner = new InMemoryRunner(agent);
-        var session = adkRunner.sessionService()
-                .createSession(adkRunner.appName(), "user-1", (Map<String, Object>) null, "session-1")
-                .blockingGet();
+        try {
+            var adkRunner = new InMemoryRunner(agent);
+            var session = adkRunner.sessionService()
+                    .createSession(adkRunner.appName(), "user-1", (Map<String, Object>) null, "session-1")
+                    .blockingGet();
 
-        // ============================================================
-        //  3. Force per-session runner creation BEFORE side-channel
-        //     injects — the realistic application pattern (websocket
-        //     open creates the runner before any signal injects).
-        //     Populates execRef so the streaming subnet can inject per
-        //     chunk from inside its T_LlmCallStream action.
-        // ============================================================
-        var sessionKey = SessionKey.from(session);
-        var runner = registry.getOrCreate(sessionKey,
-                key -> PetriRunner.builder(bound)
-                        .environmentPlace(AdkColours.USER_IN)
-                        .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
-                        .environmentPlace(BargeInSubnet.Places.INTERRUPTED)
-                        .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
-                        .environmentPlace(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED)
-                        .environmentPlace(LiveApiRecoverySubnet.Places.MODEL_ACTIVE)
-                        .deferredExecutorRef(execRef)
-                        .executionEnvironment(clock)
-                        .deadlineTolerance(Duration.ZERO)
-                        .orchestratorExecutor(EXECUTOR)
-                        .start());
+            // ============================================================
+            //  3. Force per-session runner creation BEFORE side-channel
+            //     injects — the realistic application pattern (websocket
+            //     open creates the runner before any signal injects).
+            //     Populates execRef so the streaming subnet can inject per
+            //     chunk from inside its T_LlmCallStream action.
+            // ============================================================
+            var sessionKey = SessionKey.from(session);
+            var runner = registry.getOrCreate(sessionKey,
+                    key -> PetriRunner.builder(bound)
+                            .environmentPlace(AdkColours.USER_IN)
+                            .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
+                            .environmentPlace(BargeInSubnet.Places.INTERRUPTED)
+                            .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
+                            .environmentPlace(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED)
+                            .environmentPlace(LiveApiRecoverySubnet.Places.MODEL_ACTIVE)
+                            .deferredExecutorRef(execRef)
+                            .executionEnvironment(clock)
+                            .deadlineTolerance(Duration.ZERO)
+                            .orchestratorExecutor(EXECUTOR)
+                            .start());
 
-        // ============================================================
-        //  4. Subscribe to ALL partials on the runner's egress Flowable
-        //     BEFORE driving the ADK turn (the Runner's take(1) only
-        //     surfaces the first event back through runAsync — the rest
-        //     still land on EVENT_OUT and are visible via adkEvents()).
-        // ============================================================
-        TestSubscriber<Event> egress = runner.adkEvents().test();
+            // ============================================================
+            //  4. Subscribe to ALL partials on the runner's egress Flowable
+            //     BEFORE driving the ADK turn (the Runner's take(1) only
+            //     surfaces the first event back through runAsync — the rest
+            //     still land on EVENT_OUT and are visible via adkEvents()).
+            // ============================================================
+            TestSubscriber<Event> egress = runner.adkEvents().test();
 
-        // ============================================================
-        //  5. Side-channel: the user's voice window opens *before* the
-        //     utterance arrives. This is what an audio frontend would
-        //     signal when it detects voice activity. A Void-typed env
-        //     place is signalled with runner.signal(place); there is no
-        //     reason to drop to runner.executor() for it.
-        // ============================================================
-        signal(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
+            // ============================================================
+            //  5. Side-channel: the user's voice window opens *before* the
+            //     utterance arrives. This is what an audio frontend would
+            //     signal when it detects voice activity. A Void-typed env
+            //     place is signalled with runner.signal(place); there is no
+            //     reason to drop to runner.executor() for it.
+            // ============================================================
+            signal(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
 
-        // ============================================================
-        //  6. Drive an ADK turn. PetriAgent injects USER_IN; T_StartStream
-        //     converts it to LLM_REQUEST; LlmStreamingStepSubnet kicks
-        //     off streaming. RouterSubnet turns the merged LLM_RESPONSE into
-        //     the terminal Event that completes the non-SSE runAsync call;
-        //     partials continue to flow to EVENT_OUT and are observed through
-        //     the direct runner subscription below.
-        // ============================================================
-        var firstTurnEvents = adkRunner.runAsync(
-                        session.userId(),
-                        session.id(),
-                        userMessage("what's 6*7"),
-                        RunConfig.builder().build())
-                .toList().blockingGet();
+            // ============================================================
+            //  6. Drive an ADK turn. PetriAgent injects USER_IN; T_StartStream
+            //     converts it to LLM_REQUEST; LlmStreamingStepSubnet kicks
+            //     off streaming. RouterSubnet turns the merged LLM_RESPONSE into
+            //     the terminal Event that completes the non-SSE runAsync call;
+            //     partials continue to flow to EVENT_OUT and are observed through
+            //     the direct runner subscription below.
+            // ============================================================
+            var firstTurnEvents = adkRunner.runAsync(
+                            session.userId(),
+                            session.id(),
+                            userMessage("what's 6*7"),
+                            RunConfig.builder().build())
+                    .toList().blockingGet();
 
-        var terminalAgentEvent = firstTurnEvents.stream()
-                .filter(e -> "voice_agent".equals(e.author()))
-                .findFirst()
-                .orElseThrow();
-        assertThat(terminalAgentEvent.partial().orElse(false)).isFalse();
-        assertThat(terminalAgentEvent.content().get().text())
-                .isEqualTo("Sure, the answer is 42.");
+            var terminalAgentEvent = firstTurnEvents.stream()
+                    .filter(e -> "voice_agent".equals(e.author()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(terminalAgentEvent.partial().orElse(false)).isFalse();
+            assertThat(terminalAgentEvent.content().get().text())
+                    .isEqualTo("Sure, the answer is 42.");
 
-        // ============================================================
-        //  7. Mid/post-stream side-channel signals: a barge-in interrupt
-        //     while the voice window is still open, and a response-
-        //     awaited signal that the silence-recovery subnet times out
-        //     into Nudge → Reconnect.
-        // ============================================================
-        clock.settle(() -> signalNow(runner, BargeInSubnet.Places.INTERRUPTED));
-        clock.settle(() -> signalNow(runner, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
+            // ============================================================
+            //  7. Mid/post-stream side-channel signals: a barge-in interrupt
+            //     while the voice window is still open, and a response-
+            //     awaited signal that the silence-recovery subnet times out
+            //     into Nudge → Reconnect.
+            // ============================================================
+            clock.settle(() -> signalNow(runner, BargeInSubnet.Places.INTERRUPTED));
+            clock.settle(() -> signalNow(runner, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
 
-        // Each step settles before time moves, so the timers start where the
-        // scenario says: Nudge exactly 80ms after the signal, Reconnect 80ms
-        // after Nudge. No poll, no bet on how long a real deadline takes.
-        clock.advanceAndSettle(FAST_RECOVERY.nudgeAfter());
-        clock.advanceAndSettle(FAST_RECOVERY.reconnectAfter());
+            // Each step settles before time moves, so the timers start where the
+            // scenario says: Nudge exactly 80ms after the signal, Reconnect 80ms
+            // after Nudge. No poll, no bet on how long a real deadline takes.
+            clock.advanceAndSettle(FAST_RECOVERY.nudgeAfter());
+            clock.advanceAndSettle(FAST_RECOVERY.reconnectAfter());
 
-        // ============================================================
-        //  8. Verify the structural outcomes — partials seen on the ADK
-        //     egress, marking-level facts on the runner's executor.
-        // ============================================================
-        var partialCount = egress.values().stream()
-                .filter(e -> e.partial().orElse(false))
-                .count();
-        assertThat(partialCount).isEqualTo(3L);
+            // ============================================================
+            //  8. Verify the structural outcomes — partials seen on the ADK
+            //     egress, marking-level facts on the runner's executor.
+            // ============================================================
+            var partialCount = egress.values().stream()
+                    .filter(e -> e.partial().orElse(false))
+                    .count();
+            assertThat(partialCount).isEqualTo(3L);
 
-        var finalMarking = runner.executor().marking();
+            var finalMarking = runner.executor().marking();
 
-        // Barge-in routed to BARGE_IN_SENT (voice window was open).
-        assertThat(finalMarking.peekTokens(BargeInSubnet.Places.BARGE_IN_SENT))
-                .hasSize(1);
-        assertThat(finalMarking.peekTokens(BargeInSubnet.Places.INTERRUPT_DISCARDED))
-                .isEmpty();
+            // Barge-in routed to BARGE_IN_SENT (voice window was open).
+            assertThat(finalMarking.peekTokens(BargeInSubnet.Places.BARGE_IN_SENT))
+                    .hasSize(1);
+            assertThat(finalMarking.peekTokens(BargeInSubnet.Places.INTERRUPT_DISCARDED))
+                    .isEmpty();
 
-        // Silence recovery fired both stages.
-        assertThat(finalMarking.peekTokens(LiveApiRecoverySubnet.Places.NUDGE_NEEDED))
-                .isNotEmpty();
-        assertThat(finalMarking.peekTokens(LiveApiRecoverySubnet.Places.RECONNECT_NEEDED))
-                .isNotEmpty();
-
-        registry.closeAll();
+            // Silence recovery fired both stages.
+            assertThat(finalMarking.peekTokens(LiveApiRecoverySubnet.Places.NUDGE_NEEDED))
+                    .isNotEmpty();
+            assertThat(finalMarking.peekTokens(LiveApiRecoverySubnet.Places.RECONNECT_NEEDED))
+                    .isNotEmpty();
+        } finally {
+            registry.closeAll();
+        }
     }
 
     // ============================================================
@@ -447,88 +449,100 @@ class VoiceSessionDemoTest {
                 .description("BIDI bridge demo via custom BaseLlmConnection")
                 .build();
 
-        var adkRunner = new InMemoryRunner(agent);
-        var session = adkRunner.sessionService()
-                .createSession(adkRunner.appName(), "u", (Map<String, Object>) null, "s").blockingGet();
+        try {
+            var adkRunner = new InMemoryRunner(agent);
+            var session = adkRunner.sessionService()
+                    .createSession(adkRunner.appName(), "u", (Map<String, Object>) null, "s").blockingGet();
 
-        var sessionKey = SessionKey.from(session);
-        var runner = registry.getOrCreate(sessionKey,
-                key -> PetriRunner.builder(bound)
-                        .environmentPlace(AdkColours.USER_IN)
-                        .environmentPlace(AdkColours.LLM_REQUEST)
-                        .environmentPlace(AdkColours.LLM_RESPONSE)
-                        .environmentPlace(BargeInSubnet.Places.INTERRUPTED)
-                        .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
-                        .environmentPlace(BIDI_TURN_COMPLETE)
-                        .eventStore(otelEventStore)
-                        .orchestratorExecutor(EXECUTOR)
-                        .start());
+            var sessionKey = SessionKey.from(session);
+            var runner = registry.getOrCreate(sessionKey,
+                    key -> PetriRunner.builder(bound)
+                            .environmentPlace(AdkColours.USER_IN)
+                            .environmentPlace(AdkColours.LLM_REQUEST)
+                            .environmentPlace(AdkColours.LLM_RESPONSE)
+                            .environmentPlace(BargeInSubnet.Places.INTERRUPTED)
+                            .environmentPlace(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN)
+                            .environmentPlace(BIDI_TURN_COMPLETE)
+                            .eventStore(otelEventStore)
+                            .orchestratorExecutor(EXECUTOR)
+                            .start());
 
-        // The application-layer bridge from connection.receive() into the net.
-        Disposable receivePump = connection.receive()
-                .subscribe(frame -> runner.inject(AdkColours.LLM_RESPONSE, frame));
+            // The application-layer bridge from connection.receive() into the net.
+            Disposable receivePump = connection.receive()
+                    .subscribe(frame -> runner.inject(AdkColours.LLM_RESPONSE, frame));
 
-        // Observe net egress as the BIDI client would, via the runLive Flowable
-        // surface (PetriAgent.runLiveImpl returns runner.adkEvents() directly).
-        TestSubscriber<Event> egress = runner.adkEvents().test();
+            // Observe net egress as the BIDI client would, via the runLive Flowable
+            // surface (PetriAgent.runLiveImpl returns runner.adkEvents() directly).
+            TestSubscriber<Event> egress = runner.adkEvents().test();
 
-        // ============================================================
-        //  4. Drive the BIDI loop. The application sends a user content
-        //     to the LLM via the net (LLM_REQUEST env). The transition
-        //     forwards to the connection. Then we simulate two response
-        //     frames from "Gemini" arriving on the connection's receive
-        //     Flowable.
-        // ============================================================
-        runner.inject(AdkColours.LLM_REQUEST, LlmRequest.builder()
-                        .model("gemini-live")
-                        .contents(List.of(userMessage("what's the weather")))
-                        .build())
-                .get(1, java.util.concurrent.TimeUnit.SECONDS);
-        // Open voice window and simulate a barge-in to exercise the BargeIn subnet.
-        signal(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
+            // ============================================================
+            //  4. Drive the BIDI loop. The application sends a user content
+            //     to the LLM via the net (LLM_REQUEST env). The transition
+            //     forwards to the connection. Then we simulate two response
+            //     frames from "Gemini" arriving on the connection's receive
+            //     Flowable.
+            // ============================================================
+            runner.inject(AdkColours.LLM_REQUEST, LlmRequest.builder()
+                            .model("gemini-live")
+                            .contents(List.of(userMessage("what's the weather")))
+                            .build())
+                    .get(1, java.util.concurrent.TimeUnit.SECONDS);
+            // Open voice window and simulate a barge-in to exercise the BargeIn subnet.
+            signal(runner, BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
 
-        connection.pushResponse(LlmResponse.builder()
-                .content(Content.builder().role("model")
-                        .parts(List.of(Part.fromText("Sunny, "))).build())
-                .build());
-        connection.pushResponse(LlmResponse.builder()
-                .content(Content.builder().role("model")
-                        .parts(List.of(Part.fromText("with light wind."))).build())
-                .build());
-        // Signalled straight after the chunks, with nothing awaited in between. The
-        // receive pump's inject is asynchronous and fire-and-forget, so both chunks may
-        // still be sitting in LLM_RESPONSE at this point. Bidi_EmitTurnEnd's inhibitor
-        // on LLM_RESPONSE is what keeps the terminal behind them.
-        signal(runner, BIDI_TURN_COMPLETE);
-        signal(runner, BargeInSubnet.Places.INTERRUPTED);
+            connection.pushResponse(LlmResponse.builder()
+                    .content(Content.builder().role("model")
+                            .parts(List.of(Part.fromText("Sunny, "))).build())
+                    .build());
+            connection.pushResponse(LlmResponse.builder()
+                    .content(Content.builder().role("model")
+                            .parts(List.of(Part.fromText("with light wind."))).build())
+                    .build());
+            // Signalled straight after the chunks, with nothing awaited in between. The
+            // receive pump's inject is asynchronous and fire-and-forget, so both chunks may
+            // still be sitting in LLM_RESPONSE at this point. Bidi_EmitTurnEnd's inhibitor
+            // on LLM_RESPONSE is what keeps the terminal behind them.
+            signal(runner, BIDI_TURN_COMPLETE);
+            signal(runner, BargeInSubnet.Places.INTERRUPTED);
 
-        awaitQuiescent(runner, 2_000);
+            // Wait for what is asserted, not for quiescence: the pump's injects are
+            // fire-and-forget, so the net can look quiescent before the last chunk
+            // has been processed, and egress is delivered to its subscriber after
+            // the token lands.
+            egress.awaitCount(3);
+            awaitMarked(runner, BargeInSubnet.Places.BARGE_IN_SENT, 2_000);
 
-        // ============================================================
-        //  5. Assert: the send went to the connection; two responses
-        //     surfaced as ADK partial Events followed by one net-authored
-        //     terminal event; the barge-in routed to BARGE_IN_SENT (voice
-        //     window was open).
-        // ============================================================
-        assertThat(connection.sentContents).hasSize(1);
-        assertThat(connection.sentContents.get(0).text()).isEqualTo("what's the weather");
+            // ============================================================
+            //  5. Assert: the send went to the connection; two responses
+            //     surfaced as ADK partial Events followed by one net-authored
+            //     terminal event; the barge-in routed to BARGE_IN_SENT (voice
+            //     window was open).
+            // ============================================================
+            assertThat(connection.sentContents).hasSize(1);
+            assertThat(connection.sentContents.get(0).text()).isEqualTo("what's the weather");
 
-        var agentEvents = egress.values().stream()
-                .filter(e -> "bidi_agent".equals(e.author()))
-                .toList();
-        assertThat(agentEvents).hasSize(3);
-        assertThat(agentEvents.get(0).content().get().text()).isEqualTo("Sunny, ");
-        assertThat(agentEvents.get(0).partial()).hasValue(true);
-        assertThat(agentEvents.get(1).content().get().text()).isEqualTo("with light wind.");
-        assertThat(agentEvents.get(1).partial()).hasValue(true);
+            var agentEvents = egress.values().stream()
+                    .filter(e -> "bidi_agent".equals(e.author()))
+                    .toList();
+            assertThat(agentEvents).hasSize(3);
+            assertThat(agentEvents.get(0).content().get().text()).isEqualTo("Sunny, ");
+            assertThat(agentEvents.get(0).partial()).hasValue(true);
+            assertThat(agentEvents.get(1).content().get().text()).isEqualTo("with light wind.");
+            assertThat(agentEvents.get(1).partial()).hasValue(true);
 
-        // The turn boundary is the net's call: Bidi_EmitTurnEnd authored it, not the
-        // transport bridge. ADK's runLive consumers can now tell partials from finals.
-        assertThat(agentEvents.get(2).partial()).hasValue(false);
-        assertThat(agentEvents.get(2).turnComplete()).hasValue(true);
+            // The turn boundary is the net's call: Bidi_EmitTurnEnd authored it, not the
+            // transport bridge. ADK's runLive consumers can now tell partials from finals.
+            assertThat(agentEvents.get(2).partial()).hasValue(false);
+            assertThat(agentEvents.get(2).turnComplete()).hasValue(true);
 
-        var finalMarking = runner.executor().marking();
-        assertThat(finalMarking.peekTokens(BargeInSubnet.Places.BARGE_IN_SENT)).hasSize(1);
+            var finalMarking = runner.executor().marking();
+            assertThat(finalMarking.peekTokens(BargeInSubnet.Places.BARGE_IN_SENT)).hasSize(1);
+
+            receivePump.dispose();
+        } finally {
+            connection.close();
+            registry.closeAll();
+        }
 
         // ============================================================
         //  6. OTel session-long parent-linkage assertion. Every transition
@@ -538,9 +552,6 @@ class VoiceSessionDemoTest {
         //     session-long pattern covers both invocation-driven AND
         //     background side-channel transitions.
         // ============================================================
-        receivePump.dispose();
-        connection.close();
-        registry.closeAll();
         sessionBinding.close();
         sessionRootSpan.end();
         tracerProvider.forceFlush().join(2, java.util.concurrent.TimeUnit.SECONDS);
@@ -737,52 +748,54 @@ class VoiceSessionDemoTest {
                 .description("Demonstrates reset-arc wipe of in-net intent state per utterance")
                 .build();
 
-        var adkRunner = new InMemoryRunner(agent);
-        var session = adkRunner.sessionService()
-                .createSession(adkRunner.appName(), "u", (Map<String, Object>) null, "s").blockingGet();
+        try {
+            var adkRunner = new InMemoryRunner(agent);
+            var session = adkRunner.sessionService()
+                    .createSession(adkRunner.appName(), "u", (Map<String, Object>) null, "s").blockingGet();
 
-        var sessionKey = SessionKey.from(session);
-        var runner = registry.getOrCreate(sessionKey,
-                key -> PetriRunner.builder(net)
-                        .environmentPlace(AdkColours.USER_IN)
-                        .environmentPlace(UTTERANCE_IN)
-                        .orchestratorExecutor(EXECUTOR)
-                        .start());
+            var sessionKey = SessionKey.from(session);
+            var runner = registry.getOrCreate(sessionKey,
+                    key -> PetriRunner.builder(net)
+                            .environmentPlace(AdkColours.USER_IN)
+                            .environmentPlace(UTTERANCE_IN)
+                            .orchestratorExecutor(EXECUTOR)
+                            .start());
 
-        // ============================================================
-        //  Side-channel: two consecutive utterance events. The second
-        //  triggers the reset arc, wiping the intent from the first.
-        // ============================================================
-        runner.inject(UTTERANCE_IN, userMessage("what time is it"))
-                .get(1, java.util.concurrent.TimeUnit.SECONDS);
-        runner.inject(UTTERANCE_IN, userMessage("tell me a joke"))
-                .get(1, java.util.concurrent.TimeUnit.SECONDS);
-        awaitQuiescent(runner, 1_000);
+            // ============================================================
+            //  Side-channel: two consecutive utterance events. The second
+            //  triggers the reset arc, wiping the intent from the first.
+            // ============================================================
+            runner.inject(UTTERANCE_IN, userMessage("what time is it"))
+                    .get(1, java.util.concurrent.TimeUnit.SECONDS);
+            runner.inject(UTTERANCE_IN, userMessage("tell me a joke"))
+                    .get(1, java.util.concurrent.TimeUnit.SECONDS);
+            awaitQuiescent(runner, 1_000);
 
-        // ============================================================
-        //  ADK turn — T_EchoIntent reads the surviving CURRENT_INTENT.
-        // ============================================================
-        var events = adkRunner.runAsync(
-                        session.userId(), session.id(),
-                        userMessage("respond now"),
-                        RunConfig.builder().build())
-                .toList().blockingGet();
+            // ============================================================
+            //  ADK turn — T_EchoIntent reads the surviving CURRENT_INTENT.
+            // ============================================================
+            var events = adkRunner.runAsync(
+                            session.userId(), session.id(),
+                            userMessage("respond now"),
+                            RunConfig.builder().build())
+                    .toList().blockingGet();
 
-        var agentEvent = events.stream()
-                .filter(e -> "reset_arc_agent".equals(e.author()))
-                .findFirst()
-                .orElseThrow();
-        assertThat(agentEvent.content().get().text())
-                .isEqualTo("intent-from:tell me a joke");
+            var agentEvent = events.stream()
+                    .filter(e -> "reset_arc_agent".equals(e.author()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(agentEvent.content().get().text())
+                    .isEqualTo("intent-from:tell me a joke");
 
-        // Exactly ONE intent token survives — the second utterance reset
-        // the first, then deposited the new one. No stale leftover.
-        var finalMarking = runner.executor().marking();
-        var intents = finalMarking.peekTokens(CURRENT_INTENT).stream()
-                .map(Token::value).toList();
-        assertThat(intents).containsExactly("intent-from:tell me a joke");
-
-        registry.closeAll();
+            // Exactly ONE intent token survives — the second utterance reset
+            // the first, then deposited the new one. No stale leftover.
+            var finalMarking = runner.executor().marking();
+            var intents = finalMarking.peekTokens(CURRENT_INTENT).stream()
+                    .map(Token::value).toList();
+            assertThat(intents).containsExactly("intent-from:tell me a joke");
+        } finally {
+            registry.closeAll();
+        }
     }
 
     private static TransitionAction onNewUtteranceAction() {

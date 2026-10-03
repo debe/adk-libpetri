@@ -55,51 +55,58 @@ SSE and BIDI surfaces below are `@Experimental`.
 ## Quickstart: hello world
 
 ```java
+import com.google.adk.agents.RunConfig;
 import com.google.adk.runner.InMemoryRunner;
+import com.google.genai.types.Content;
+import com.google.genai.types.Part;
+import java.util.Map;
+import java.util.concurrent.Executors;
 import org.libpetri.adk.colours.AdkColours;
-import org.libpetri.adk.subnet.LlmAgentSubnet;
 import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
-import org.libpetri.adk.runner.SessionKey;
+import org.libpetri.adk.subnet.LlmAgentSubnet;
+import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.core.PetriNet;
-import java.util.concurrent.Executors;
 
-var llm     = /* your com.google.adk.models.BaseLlm */;
-var config  = LlmAgentSubnet.Config.builder("my_agent", "gemini-2.0-flash")
-                .systemInstruction("Be helpful.")
-                .reaskBudget(3)
-                .build();
-
-var net = PetriNet.builder("hello")
-        .compose(LlmAgentSubnet.DEF)
-        .build()
-        .bindActions(LlmAgentSubnet.actionBindings(llm, config));
+var llm = /* your com.google.adk.models.BaseLlm */;
 
 // Actions are invoked inline on the orchestrator thread, so this is the
-// pool that runs them, so make it virtual-threaded when actions block.
+// pool that runs them: make it virtual-threaded when actions block.
 var orchestratorExecutor = Executors.newVirtualThreadPerTaskExecutor();
-// Separate pool for explicit fan-out inside an action (tool dispatch).
+// Required: the pool tool dispatch fans out on, inside an action.
 var dispatchExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
-// strongOwned() is the recommended default: close the registry entry from
-// your session-end hook. The owner map supplies the stable identity object
-// SessionExecutorRegistry requires for repeated calls in the same session.
-var registry = SessionExecutorRegistry.strongOwned();
-var sessionOwners = new java.util.concurrent.ConcurrentHashMap<SessionKey, Object>();
+var config = LlmAgentSubnet.Config.builder("my_agent", "gemini-2.5-flash")
+        .systemInstruction("Be helpful.")
+        .reaskBudget(3)
+        .dispatchExecutor(dispatchExecutor)
+        .build();
 
-var agent = PetriAgent.of("my_agent", "Petri-backed agent",
-        registry,
-        key -> PetriRunner.builder(net)
-                .environmentPlace(AdkColours.USER_IN)
-                .orchestratorExecutor(orchestratorExecutor)
-                .start(),
-        ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()));
+// bindComposed checks the bindings against the composed net's transitions;
+// a bare bindActions(Map) would turn a missing binding into a silent no-op.
+var net = SubnetActions.bindComposed(
+        PetriNet.builder("hello").compose(LlmAgentSubnet.DEF).build(),
+        LlmAgentSubnet.actionBindings(llm, config));
+
+// strongOwned() is the documented default: a session's runner lives until
+// registry.close(key) from your session-end hook (closeAll() at shutdown).
+// It needs no owner object.
+var registry = SessionExecutorRegistry.strongOwned();
+
+var agent = PetriAgent.builder("my_agent", registry,
+                key -> PetriRunner.builder(net)
+                        .environmentPlace(AdkColours.USER_IN)
+                        .orchestratorExecutor(orchestratorExecutor)
+                        .start())
+        .description("Petri-backed agent")
+        .build();
 
 // Drop into stock ADK Runner, no fork:
 var runner = new InMemoryRunner(agent);
 var session = runner.sessionService()
-        .createSession(runner.appName(), "user", null, "session").blockingGet();
+        .createSession(runner.appName(), "user", (Map<String, Object>) null, "session")
+        .blockingGet();
 
 runner.runAsync(session.userId(), session.id(),
         Content.fromParts(Part.fromText("hi")),
@@ -114,33 +121,30 @@ runner.runAsync(session.userId(), session.id(),
 
 
 Use `StreamingLlmAgentSubnet` when the ADK turn should expose token
-partials. Declare `LlmStreamingStepSubnet.Places.CHUNK` as an env place,
-pass the same executor reference to the subnet config and
-`PetriRunner.Builder.deferredExecutorRef(...)`, then run with
-`RunConfig.StreamingMode.SSE`.
+partials, and wire it with `StreamingLlmAgentSubnet.runnerFactory(...)`.
+Chunks reach the net through the session's own executor, so each session
+needs its own executor reference; the factory creates one per session,
+binds the actions to it, declares `USER_IN` and
+`LlmStreamingStepSubnet.Places.CHUNK` as env places and registers the
+reference with `deferredExecutorRef`. One reference shared by every
+session's runner routes all chunks into whichever runner started last.
+Then run with `RunConfig.StreamingMode.SSE`.
 
 ```java
-var execRef = new java.util.concurrent.atomic.AtomicReference<org.libpetri.runtime.PetriNetExecutor>();
-var config = StreamingLlmAgentSubnet.Config.builder("my_agent", "gemini-2.0-flash")
+var streamingConfig = StreamingLlmAgentSubnet.Config.builder("my_agent", "gemini-2.5-flash")
         .dispatchExecutor(dispatchExecutor)
-        .executorRef(execRef)
         .build();
 
-var net = PetriNet.builder("streaming")
-        .compose(StreamingLlmAgentSubnet.DEF)
-        .build()
-        .bindActions(StreamingLlmAgentSubnet.actionBindings(llm, config));
+var streamingAgent = PetriAgent.builder("my_agent", registry,
+                StreamingLlmAgentSubnet.runnerFactory(llm, streamingConfig,
+                        // Runs before the factory's own settings, with the
+                        // session's key: the place for an event store or
+                        // .resumeFrom(store, key).
+                        (key, b) -> b.orchestratorExecutor(orchestratorExecutor)))
+        .description("Streaming agent")
+        .build();
 
-var agent = PetriAgent.of("my_agent", "Streaming agent", registry,
-        key -> PetriRunner.builder(net)
-                .environmentPlace(AdkColours.USER_IN)
-                .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
-                .deferredExecutorRef(execRef)
-                .orchestratorExecutor(orchestratorExecutor)
-                .start(),
-        ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()));
-
-runner.runAsync(session.userId(), session.id(), userContent,
+new InMemoryRunner(streamingAgent).runAsync(session.userId(), session.id(), userContent,
         RunConfig.builder().streamingMode(RunConfig.StreamingMode.SSE).build())
     .blockingForEach(event -> {
         if (event.partial().orElse(false)) System.out.print(event.content().get().text());
@@ -149,62 +153,72 @@ runner.runAsync(session.userId(), session.id(), userContent,
 
 ## Live (BIDI)
 
-> **Beta.** `BidiPetriAgent`, `LiveConnection` and `PetriAgent.ofLive`
-> are `@Experimental`: they may change incompatibly within a 0.x minor.
-> `bridge` already took one such break in 0.4.0 (see the CHANGELOG).
+> **Beta.** `BidiPetriAgent`, `LiveConnection`, `PetriAgent.LiveConfig` and
+> `PetriAgent.ofLive` are `@Experimental`: they may change incompatibly
+> within a 0.x minor. `bridge` already took one such break in 0.4.0 (see
+> the CHANGELOG).
 
 
-Use `PetriAgent.ofLive(...)` when ADK `runLive` should pump a
-`LiveRequestQueue` into a genai-backed `LiveConnection` and merge raw live
-server messages with net egress.
+Give the builder a `LiveConfig` when ADK `runLive` should pump a
+`LiveRequestQueue` into a genai-backed `LiveConnection`. The bridge
+authors no events: it hands each raw server message to your callback,
+which injects model content and signals into the net, and `runLive`
+returns the net's egress alone. Every `Event`, including its `partial` and
+`turnComplete` flags, is authored by a net transition.
 
 ```java
 var liveConfig = new PetriAgent.LiveConfig(
         ctx -> openLiveConnection(ctx),
         (serverMessage, petriRunner) -> {
-            // Decode provider frames and inject net signals/tool results here.
+            // Decode provider frames: inject model content, signal turn and
+            // voice-activity edges, route tool calls.
         });
 
-var liveAgent = PetriAgent.ofLive("my_agent", "Live agent", registry,
-        runnerFactory,
-        ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()),
-        liveConfig);
+var liveAgent = PetriAgent.builder("my_agent", registry, runnerFactory)
+        .description("Live agent")
+        .live(liveConfig)
+        .build();
 
 inMemoryRunner.runLive(session, liveRequestQueue,
         RunConfig.builder().streamingMode(RunConfig.StreamingMode.BIDI).build())
     .blockingForEach(event -> handleLiveEvent(event));
 ```
 
-`PetriAgent.of(...)` still preserves the legacy egress-only `runLive`
-surface. `LiveConnection` is intentionally genai Live-message typed; ship
-your transport binding in application code.
+Without a `LiveConfig`, `runLive` keeps the legacy egress-only surface:
+it returns the net's egress and pumps nothing. `LiveConnection` is
+intentionally genai Live-message typed; ship your transport binding in
+application code.
 
 
 ## Source layout
 
 ```
 src/main/java/org/libpetri/adk/
+├── Experimental.java                      # marks surfaces that may change in any 0.x minor
 ├── colours/AdkColours.java                # typed boundary catalog
 ├── bridge/
 │   ├── EventStoreToFlowableBridge.java    # EventStore to Flowable<Event>
-│   └── OtelEventStore.java                # OT span per transition fire
+│   ├── OtelEventStore.java                # OT span per transition fire
+│   └── TransitionFailure.java             # a failed transition, as PetriRunner.failureSignal() emits it
 ├── subnet/                                # stock subnets + binding helpers
 │   ├── LlmStepSubnet.java                 # LLM call + Before/After/Error callbacks
 │   ├── LlmStreamingStepSubnet.java        # streaming LLM call, chunk env place, final response
+│   ├── LlmRequests.java                   # package-private LlmRequest factory for the stock subnets
 │   ├── StreamingLlmAgentSubnet.java       # SSE agent loop counterpart to LlmAgentSubnet
 │   ├── ToolDispatchSubnet.java            # trivial parallel tool dispatch
 │   ├── PromptBuilderSubnet.java           # Content + tools to LlmRequest
 │   ├── RouterSubnet.java                  # LlmResponse to Out.xor(tools, transfer, final)
-│   ├── LlmAgentSubnet.java                # composes the above + reask budget
+│   ├── LlmAgentSubnet.java                # composes the above + reask budget + turn permit
 │   ├── PersistStateSubnet.java            # single legacy-session writer
 │   ├── TransferRouterSubnet.java          # Out.xor over compile-time agent names
-│   └── SubnetActions.java                 # binding-map validator
+│   └── SubnetActions.java                 # binding-map validator, merge, bindComposed
 ├── runner/
 │   ├── PetriRunner.java                   # per-session NetExecutor handle
 │   ├── PetriAgent.java                    # normal, SSE, and live BaseAgent adapter
 │   ├── BidiPetriAgent.java                # Live/BIDI pump used by PetriAgent.ofLive
 │   ├── LiveConnection.java                # genai Live server-message boundary
 │   ├── SessionExecutorRegistry.java       # lazy Map<SessionKey, PetriRunner>
+│   ├── SessionCheckpointStore.java        # drain-then-save checkpoints for resumeFrom (experimental)
 │   └── SessionKey.java                    # (appName, userId, sessionId)
 └── verify/AdkNetInvariants.java           # 3 structural checks + 2 SMT property factories
 ```

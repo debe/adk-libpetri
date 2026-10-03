@@ -12,7 +12,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import org.libpetri.adk.Experimental;
@@ -41,7 +41,7 @@ import org.libpetri.runtime.PetriNetExecutor;
  *     .dispatchExecutor(EXEC).build();
  * var agent = PetriAgent.builder("agent", SessionExecutorRegistry.strongOwned(),
  *         StreamingLlmAgentSubnet.runnerFactory(llm, config,
- *             b -> b.orchestratorExecutor(EXEC)))
+ *             (key, b) -> b.orchestratorExecutor(EXEC)))
  *     .build();
  * }</pre>
  *
@@ -177,22 +177,29 @@ public final class StreamingLlmAgentSubnet {
 
     /**
      * A {@code PetriAgent} runner factory for this subnet. Each call, one per
-     * session, creates a fresh executor reference, binds the actions to it,
+     * session, creates a fresh executor reference and binds the actions to
+     * it, applies {@code customize} to a new builder for that session, then
      * declares {@link AdkColours#USER_IN} and
      * {@link LlmStreamingStepSubnet.Places#CHUNK} as environment places
      * ({@code PetriRunner} adds {@link AdkColours#TURN_ABORT} and seeds the
      * {@link AdkColours#TURN_PERMIT} itself), registers the reference via
-     * {@link PetriRunner.Builder#deferredExecutorRef(AtomicReference)}, applies
-     * {@code customize}, and starts the runner.
+     * {@link PetriRunner.Builder#deferredExecutorRef(AtomicReference)}, and
+     * starts the runner.
      *
      * <p>{@code customize} must at least set
      * {@link PetriRunner.Builder#orchestratorExecutor}; it is also where an
-     * event store or extra environment places go. Any {@code executorRef} on
+     * event store, extra environment places or
+     * {@link PetriRunner.Builder#resumeFrom resumeFrom(store, key)} go,
+     * which is why it receives the session's key. It runs before the
+     * factory's own settings, so it cannot displace them: the per-session
+     * executor reference always wins, and declaring
+     * {@code USER_IN} or {@code CHUNK} itself fails the start with
+     * {@link IllegalStateException}. Any {@code executorRef} on
      * {@code config} is ignored, since sharing one across sessions is the bug
      * this factory exists to prevent.
      */
     public static Function<SessionKey, PetriRunner> runnerFactory(
-            BaseLlm baseLlm, Config config, Consumer<PetriRunner.Builder> customize) {
+            BaseLlm baseLlm, Config config, BiConsumer<SessionKey, PetriRunner.Builder> customize) {
         Objects.requireNonNull(baseLlm, "baseLlm");
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(customize, "customize");
@@ -200,12 +207,13 @@ public final class StreamingLlmAgentSubnet {
         return key -> {
             var ref = new AtomicReference<PetriNetExecutor>();
             var builder = PetriRunner.builder(
-                            net.bindActions(actionBindings(baseLlm, config.withExecutorRef(ref))))
+                    net.bindActions(actionBindings(baseLlm, config.withExecutorRef(ref))));
+            customize.accept(key, builder);
+            return builder
                     .environmentPlace(AdkColours.USER_IN)
                     .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
-                    .deferredExecutorRef(ref);
-            customize.accept(builder);
-            return builder.start();
+                    .deferredExecutorRef(ref)
+                    .start();
         };
     }
 
