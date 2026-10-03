@@ -67,36 +67,55 @@ generated from [`docs/diagrams/`](docs/diagrams/).
   `EventStore`) and `OtelEventStore` (OT spans per transition fire).
   Executors are caller-supplied. The library carries no shared
   executor singleton.
-- **`subnet/`**: 9 stock subnets plus `SubnetActions` validator.
+- **`subnet/`**: 9 stock subnets plus `SubnetActions` (per-subnet
+  `bind` validation, and `merge`/`bindComposed` for binding a composed
+  net's maps in one checked call).
   `LlmStep`, `ToolDispatch`, `PromptBuilder`, `Router`, `LlmAgent`,
   `PersistState`, `TransferRouter`, plus the beta SSE-streaming pair
   `LlmStreamingStep` and `StreamingLlmAgent` (both `@Experimental`).
   Voice-specific demo subnets (`BargeIn`, `LiveApiRecovery`, `Vad`)
   are not part of the shipped library. They live under
   `src/test/java/org/libpetri/adk/demos/voice/` as exemplars of
-  BIDI and Live-API composition. `Vad` is the producer that reads
-  genai's Live session directly and turns its speech-activity edges
-  into the `VOICE_ACTIVITY_OPEN` window `BargeIn` reads.
-- **`runner/`**: `PetriRunner` (libpetri-native handle),
-  `PetriAgent` (ADK `BaseAgent` adapter),
-  `SessionExecutorRegistry` (lazy per-session executor map), and
+  BIDI and Live-API composition. `Vad` turns speech-activity edges
+  into the `VOICE_ACTIVITY_OPEN` window `BargeIn` reads; the edges come
+  from `demos/VadTapGemini` (wraps ADK's live transport, preferred) or
+  `demos/SyncGeminiLiveConnection` (reads genai's Live session directly).
+  `LlmAgentSubnet` keeps the invocation's turns on an in-net
+  `CONVERSATION` place so every re-ask carries the whole exchange.
+- **`runner/`**: `PetriRunner` (libpetri-native handle; its builder
+  takes libpetri's `restore`, `executionScope`, `executionEnvironment`
+  and `deadlineTolerance` options through `ExecutorSpec`),
+  `PetriAgent` (ADK `BaseAgent` adapter, built with
+  `PetriAgent.builder(...)`), `SessionExecutorRegistry` (lazy
+  per-session executor map), `SessionCheckpointStore`
+  (`@Experimental` save-on-teardown / `resumeFrom` checkpoints) and
   `SessionKey`.
-- **`verify/`**: `AdkNetInvariants`. 3 structural validators (run
-  on every `mvn verify`) plus 3 SMT property factories
-  (`PlaceBound`, `MutualExclusion` via libpetri's `SmtVerifier`).
+- **`verify/`**: `AdkNetInvariants`. 3 structural validators plus 2
+  SMT property factories (`budgetPlaceBounded`, `eventOutBounded`).
+  Which property is proved on which net is listed in the README's
+  Verification section; `StockSubnetProofsTest` proves each stock
+  subnet alone via `SubnetDef.verify` with `arrivals(k, k)`. Budget
+  bounds are stated in seeds (libpetri models an N-permit seed as one
+  token).
+- **Test support**: `ManualClock` (`src/test/.../adk/`) is a
+  thread-safe virtual clock for libpetri's `ExecutionEnvironment`;
+  `settle(action)` makes timed tests deterministic. Prefer it to
+  sleeps for anything driven by `delayed`/`deadline` timings.
 
 ### Two demo programs (`java/src/test/java/org/libpetri/adk/demos/`)
 
 - **`MultiAgentDemoTest`**. Planner LlmAgent plus TransferRouter
   composed, driven via stock `InMemoryRunner`, observability via
   `OtelEventStore`, structural invariants asserted before execution.
-  Z3 proves the composed net is deadlock-free.
+  Z3 proves the composed net is deadlock-free and that a turn emits at
+  most one event.
 - **`VoiceSessionDemoTest`**. Streaming plus barge-in plus silence
   recovery composed into one long-lived per-session net with
   multi-direction env places. Z3 proves it deadlock-free and proves the
   chunk budget bounded, with the env places modelled via
   `environmentMode(bounded(1))`. Without that the verifier returns
   `Unknown`, because a proof that ignores env places would be vacuous.
+  Its silence-recovery timers run on `ManualClock`.
   SCG bounded exploration lives next door in `LiveApiRecoverySubnetTest`
   and confirms a finite reachable state space for the composed BIDI net.
 

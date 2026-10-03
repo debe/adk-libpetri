@@ -53,13 +53,14 @@ function llmAgentSubnet(): void {
   const TOOL_CALLS = place<unknown>('TOOL_CALLS');
   const TOOL_RESULTS = place<unknown>('TOOL_RESULTS');
   const TRANSFER = place<unknown>('TRANSFER');
-  const LEGACY_SESSION_WRITE = place<unknown>('LEGACY_SESSION_WRITE');
   const REASK_BUDGET = place<unknown>('REASK_BUDGET');
+  const CONVERSATION = place<unknown>('CONVERSATION');
 
   const buildPrompt = Transition.builder('BuildPrompt')
     .inputs(one(USER_IN))
-    .outputs(and(outPlace(LLM_REQUEST), outPlace(REASK_BUDGET)))
+    .outputs(and(outPlace(LLM_REQUEST), outPlace(REASK_BUDGET), outPlace(CONVERSATION)))
     .reset(REASK_BUDGET)
+    .reset(CONVERSATION)
     .build();
 
   const llmCall = Transition.builder('LlmStep_Call')
@@ -69,7 +70,7 @@ function llmAgentSubnet(): void {
 
   const route = Transition.builder('Router_Route')
     .inputs(one(LLM_RESPONSE))
-    .outputs(xor(outPlace(TOOL_CALLS), outPlace(TRANSFER), and(outPlace(EVENT_OUT), outPlace(LEGACY_SESSION_WRITE))))
+    .outputs(xor(outPlace(TOOL_CALLS), outPlace(TRANSFER), outPlace(EVENT_OUT)))
     .build();
 
   const dispatchTools = Transition.builder('ToolDispatch')
@@ -77,16 +78,16 @@ function llmAgentSubnet(): void {
     .outputs(outPlace(TOOL_RESULTS))
     .build();
 
+  // Consumes one budget token per re-ask, and replays the conversation.
   const reAsk = Transition.builder('ReAsk')
-    .inputs(one(TOOL_RESULTS))
-    .outputs(outPlace(LLM_REQUEST))
-    .read(REASK_BUDGET)
+    .inputs(one(TOOL_RESULTS), one(REASK_BUDGET), one(CONVERSATION))
+    .outputs(and(outPlace(LLM_REQUEST), outPlace(CONVERSATION)))
     .priority(10)
     .build();
 
   const reAskExhausted = Transition.builder('ReAskExhausted')
     .inputs(one(TOOL_RESULTS))
-    .outputs(and(outPlace(EVENT_OUT), outPlace(LEGACY_SESSION_WRITE)))
+    .outputs(outPlace(EVENT_OUT))
     .inhibitor(REASK_BUDGET)
     .priority(-10)
     .build();

@@ -28,33 +28,38 @@ import org.libpetri.adk.colours.AdkColours;
  * drop-in inside ADK's stock {@code com.google.adk.runner.Runner} —
  * <b>no source changes to ADK required</b>.
  *
- * <p>On each {@code runAsyncImpl(ctx)} call:
+ * <p>Build one with {@link #builder}. On each {@code runAsyncImpl(ctx)} call:
  * <ol>
  *   <li>Derives a {@link SessionKey} from {@code ctx.session()}.</li>
- *   <li>Derives a <b>lifetime owner</b> via the configured
- *       {@code ownerExtractor} — see the lifetime contract below.</li>
  *   <li>Asks the {@link SessionExecutorRegistry} for the per-session
  *       {@link PetriRunner}, creating it on first call (one net per
- *       user, kept alive across invocations). The runner's lifetime is
- *       now bound to the lifetime-owner object — when that object is
- *       GC'd, the runner is automatically shut down.</li>
+ *       user, kept alive across invocations). With an
+ *       {@code ownerExtractor} configured, the owner it returns is passed
+ *       along; see the lifetime contract below.</li>
+ *   <li>Subscribes to the runner's egress, stamping every {@link Event}
+ *       with the ADK invocation id and merging the net's failure signal,
+ *       so a transition that fails mid-turn fails the turn instead of
+ *       stalling it.</li>
  *   <li>{@code runner.inject(USER_IN, userContent)} injects the user's
  *       message onto the net's {@code USER_IN} env place.</li>
- *   <li>Returns {@code runner.adkEvents().take(1)} — emits the next
- *       {@link Event} produced into the net's {@code EVENT_OUT} place
- *       and then {@code onComplete}s, satisfying the per-invocation
- *       termination contract that ADK {@code Runner} expects.</li>
+ *   <li>Returns the turn: by default the first non-partial {@link Event}
+ *       ({@code take(1)}), then {@code onComplete}; under
+ *       {@code RunConfig.StreamingMode.SSE}, every partial through to the
+ *       first non-partial one ({@code takeUntil}).</li>
  * </ol>
  *
- * <h2>Lifetime owner — load-bearing</h2>
- * <p>The {@code ownerExtractor} must return an object whose <b>reference
- * identity</b> is <i>stable across every invocation for the same
- * session</i>, and whose lifetime corresponds to "this session is
- * over." When the owner is collected, the {@link java.lang.ref.Cleaner Cleaner}
- * attached by {@link SessionExecutorRegistry} tears down the runner
- * and removes it from the registry — no possibility of leaking
- * orchestrator threads, hot processors, or executor state. Typical
- * choices:
+ * <h2>Session lifetime</h2>
+ * <p>Lifetime follows the registry's mode. Under
+ * {@link SessionExecutorRegistry#strongOwned()}, the documented default, a
+ * runner lives until {@code close(SessionKey)} or {@code closeAll()} is
+ * called from your session-end hook, and no owner is needed. Under
+ * {@link SessionExecutorRegistry#cleanerOwned()} the {@code ownerExtractor}
+ * is required and is load-bearing: it must return an object whose
+ * <b>reference identity</b> is <i>stable across every invocation for the
+ * same session</i> and whose lifetime corresponds to "this session is
+ * over." When the owner is collected, the
+ * {@link java.lang.ref.Cleaner Cleaner} attached by the registry tears the
+ * runner down. Typical choices:
  * <ul>
  *   <li>The application's websocket-session / connection object
  *       (released by the server on disconnect).</li>
@@ -66,17 +71,6 @@ import org.libpetri.adk.colours.AdkColours;
  * call sees a fresh instance that becomes GC-eligible immediately,
  * triggering premature shutdown.
  *
- * <h2>Why {@code take(1)} (and what that misses)</h2>
- * <p>The stock {@link org.libpetri.adk.subnet.LlmAgentSubnet} emits
- * exactly one final {@link Event} per user message (either via the
- * Router's text-only branch or via the reask-budget fallback) — so
- * {@code take(1)} is a perfect match for one-invocation = one-event.
- * Streaming partials ({@code RunConfig.StreamingMode.SSE}) and
- * bidi audio require multi-event semantics with a proper
- * end-of-turn signal — a future variant of this adapter would use
- * {@code takeUntil(e -> e.turnComplete().orElse(false))} or filter by
- * invocation id once the subnet propagates one through the net.
- *
  * <h2>{@code subAgents()} is empty by design</h2>
  * <p>The Petri net <i>is</i> the topology — there are no
  * {@code BaseAgent} sub-instances to expose. Plugins / tooling that
@@ -86,16 +80,18 @@ import org.libpetri.adk.colours.AdkColours;
  * tree.
  *
  * <h2>{@code runLiveImpl} (BIDI / Live-API)</h2>
- * <p>This adapter is the <b>egress half</b> of the bridge between ADK's
- * BIDI runtime and the per-session libpetri net. {@code runLiveImpl}
- * resolves (or creates) the runner exactly like {@code runAsyncImpl}
- * and returns {@link PetriRunner#adkEvents()} directly — the hot
- * {@code Flowable} of {@link Event} tokens that the net produces into
- * {@link AdkColours#EVENT_OUT}. The ADK {@code Runner.runLive} pipeline
- * forwards those events to the BIDI client.
+ * <p>Without a {@link LiveConfig}, this adapter is the <b>egress half</b>
+ * of the bridge between ADK's BIDI runtime and the per-session libpetri
+ * net: {@code runLiveImpl} resolves (or creates) the runner exactly like
+ * {@code runAsyncImpl} and returns {@link PetriRunner#adkEvents()}
+ * directly — the hot {@code Flowable} of {@link Event} tokens that the net
+ * produces into {@link AdkColours#EVENT_OUT}. The ADK
+ * {@code Runner.runLive} pipeline forwards those events to the BIDI client.
+ * With a {@code LiveConfig} ({@link Builder#live}), it runs the full bridge
+ * below.
  *
- * <p>Full BIDI input wiring is handled by {@link BidiPetriAgent#bridge}
- * when a consumer supplies a provider-specific {@link LiveConnection}.
+ * <p>Full BIDI input wiring is handled by {@link BidiPetriAgent#bridge},
+ * driven by a {@code LiveConfig}'s provider-specific {@link LiveConnection}.
  * ADK delivers BIDI input as {@code com.google.adk.agents.LiveRequestQueue}
  * frames — audio chunks, text fragments, close signals — and the bridge
  * forwards those frames to the connection while the consumer callback decodes
