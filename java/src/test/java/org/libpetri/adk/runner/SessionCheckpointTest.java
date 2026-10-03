@@ -119,6 +119,43 @@ class SessionCheckpointTest {
         }
     }
 
+    /**
+     * The Cleaner path checkpoints too: once a {@code cleanerOwned(store)}
+     * runner's owner is collected, its final marking is saved on a virtual
+     * thread, and the next runner for the key resumes from it.
+     */
+    @Test
+    void a_cleaner_owned_session_is_saved_when_its_owner_is_collected() throws Exception {
+        var checkpoints = SessionCheckpointStore.inMemory();
+        var net = counterNet(new CountDownLatch(0));
+        Function<SessionKey, PetriRunner> factory = key -> counterRunner(net, checkpoints, key).start();
+        try (var registry = SessionExecutorRegistry.cleanerOwned(checkpoints)) {
+            bumpOnce(registry, factory);
+
+            long deadline = System.currentTimeMillis() + 10_000;
+            while (checkpoints.load(KEY).isEmpty()) {
+                if (System.currentTimeMillis() > deadline) {
+                    throw new AssertionError("owner was not collected, or its runner not saved, in 10s");
+                }
+                System.gc();
+                Thread.sleep(50);
+            }
+            assertThat(counterOf(checkpoints.load(KEY).orElseThrow())).isEqualTo(1);
+
+            var owner = new Object();
+            var resumed = registry.getOrCreate(KEY, owner, factory);
+            assertThat(counterOf(resumed.snapshot().marking())).isEqualTo(1);
+            java.lang.ref.Reference.reachabilityFence(owner);
+        }
+    }
+
+    /** Own frame, so the owner is unreachable once it returns. */
+    private static void bumpOnce(SessionExecutorRegistry registry,
+                                 Function<SessionKey, PetriRunner> factory) throws Exception {
+        var runner = registry.getOrCreate(KEY, new Object(), factory);
+        runner.inject(BUMP, "x").get(1, TimeUnit.SECONDS);
+    }
+
     /** Further egress places can be left out alongside {@code EVENT_OUT}. */
     @Test
     void a_runner_names_further_places_to_leave_out() throws Exception {

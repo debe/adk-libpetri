@@ -327,14 +327,22 @@ public final class SessionExecutorRegistry implements AutoCloseable {
                 if (mode == Mode.CLEANER) {
                     // CRITICAL: this lambda must NOT capture `owner`. It
                     // captures `this` (the registry), `key` (a record of
-                    // three strings) and `candidate`, whose owner reference
-                    // is weak — none of them keeps owner reachable. If we
-                    // captured owner here, the cleaner action would hold a
-                    // strong ref through itself to owner, preventing
-                    // collection forever. `candidate` (not just `key`) is
-                    // what lets the action tell its own slot from a
-                    // successor's installed after a stale eviction.
-                    CLEANER.register(owner, () -> drain(key, candidate));
+                    // three strings) and a weak reference to `candidate` —
+                    // none of them keeps owner reachable. If we captured
+                    // owner here, the cleaner action would hold a strong
+                    // ref through itself to owner, preventing collection
+                    // forever. `candidate` (not just `key`) is what lets the
+                    // action tell its own slot from a successor's installed
+                    // after a stale eviction. It is held weakly because it
+                    // holds the runner: an explicitly closed runner must not
+                    // stay reachable until its owner is collected. While the
+                    // slot is in the map, the map keeps it alive for the
+                    // action; once it is gone, there is nothing to drain.
+                    var slotRef = new WeakReference<>(candidate);
+                    CLEANER.register(owner, () -> {
+                        var live = slotRef.get();
+                        if (live != null) drain(key, live);
+                    });
                     // Keep the lifetime owner strongly reachable until
                     // after the Cleaner registration is installed. Otherwise
                     // an aggressive GC/JIT is allowed to clear `owner`
@@ -514,9 +522,11 @@ public final class SessionExecutorRegistry implements AutoCloseable {
                 return false;
             }
             if (slot instanceof Slot.Closing closing) {
-                // Someone else's teardown. Wait for it, then look again: a
-                // discard still has the checkpoint it saved to remove.
-                if (!awaitClosed(closing)) return false;
+                // Someone else's teardown: wait for it. A close is then
+                // done, and must not tear down a successor a getOrCreate
+                // installed meanwhile. A discard looks again: it still has
+                // the checkpoint that teardown saved to remove.
+                if (!awaitClosed(closing) || save) return false;
                 continue;
             }
             var live = (Slot.Live) slot;

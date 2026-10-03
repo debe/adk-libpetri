@@ -207,8 +207,8 @@ existed.
   token, or no turn starts. An agent composed through
   `DEF.instantiate(prefix)` must have its `prefix/turnPermit` seeded in
   `initialMarking` and its `turnAbort` port bound to
-  `AdkColours.TURN_ABORT`; `PetriRunner` refuses to start it unseeded. `SubnetDef.verify` on the agent needs a
-  `turnAbort` generator.
+  `AdkColours.TURN_ABORT`; `PetriRunner` refuses to start it unseeded.
+  `SubnetDef.verify` on the agent needs a `turnAbort` generator.
 - `ToolDispatchSubnet` fails the firing for a `ToolCalls` with no calls,
   where it used to produce an empty `ToolResults`.
 - `PetriRunner.ExecutorFactory.build` takes one `ExecutorSpec` record
