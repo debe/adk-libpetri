@@ -47,3 +47,9 @@ jobs:
       - run: ./mvnw verify
         env:
           REQUIRE_Z3: '1'
+
+      # Javadoc runs with doclint (all but `missing`) and failOnWarnings, as
+      # configured in the pom. Without this step a broken {@link} or bad
+      # HTML surfaced only at release time, inside -Prelease.
+      - name: Javadoc
+        run: ./mvnw -B -q javadoc:javadoc

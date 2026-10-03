@@ -133,6 +133,29 @@
     </dependencies>
 
     <build>
+        <pluginManagement>
+            <plugins>
+                <!--
+                  Shared by the release profile's javadoc JAR and by CI's
+                  `javadoc:javadoc` check. doclint runs every check except
+                  `missing` (which would demand a comment on every public
+                  member); failOnWarnings makes a broken {@link}, malformed
+                  HTML or bad @param fail the build instead of the release.
+                -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-javadoc-plugin</artifactId>
+                    <version>${maven-javadoc-plugin.version}</version>
+                    <configuration>
+                        <release>25</release>
+                        <encoding>UTF-8</encoding>
+                        <doclint>all,-missing</doclint>
+                        <failOnWarnings>true</failOnWarnings>
+                        <quiet>true</quiet>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -183,7 +206,6 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>${maven-javadoc-plugin.version}</version>
                         <executions>
                             <execution>
                                 <id>attach-javadocs</id>
@@ -192,12 +214,6 @@
                                 </goals>
                             </execution>
                         </executions>
-                        <configuration>
-                            <release>25</release>
-                            <encoding>UTF-8</encoding>
-                            <doclint>none</doclint>
-                            <quiet>true</quiet>
-                        </configuration>
                     </plugin>
 
                     <!-- GPG signing -->

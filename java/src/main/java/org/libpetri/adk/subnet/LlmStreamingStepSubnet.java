@@ -37,7 +37,7 @@ import org.libpetri.runtime.PetriNetExecutor;
  * would bypass the env-place interaction model — subscribers wouldn't
  * see partials until the LLM call fully completes (because libpetri
  * produces a transition's outputs only when its action's
- * {@link CompletionStage} completes). That defeats the point of
+ * {@link java.util.concurrent.CompletionStage} completes). That defeats the point of
  * streaming.
  *
  * <p>This subnet instead has the {@code T_LlmCallStream} action call
