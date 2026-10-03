@@ -13,6 +13,7 @@ import io.reactivex.rxjava3.core.Completable;
 import io.reactivex.rxjava3.core.Maybe;
 import io.reactivex.rxjava3.core.Single;
 import java.util.ArrayList;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -184,7 +185,53 @@ class PersistStateSubnetTest {
 
     @Test
     void session_service_error_surfaces_as_transition_failure() {
-        var failing = new BaseSessionService() {
+        var failed = persistOnceWith(serviceAppending(Single.error(new RuntimeException("db down"))),
+                PersistStateSubnet.Config.DEFAULT_PERSIST_TIMEOUT);
+        assertThat(failed).hasSize(1);
+    }
+
+    /**
+     * A session service that never answers must not hold the transition
+     * forever: the action times out and surfaces as a failure. This used to be
+     * claimed for a {@code Timing.deadline(5s)} on the transition, which bounds
+     * how long it may stay enabled before firing, not how long it runs, so a
+     * hung {@code appendEvent} was never bounded.
+     */
+    @Test
+    void a_hung_session_service_times_out_as_a_transition_failure() {
+        var failed = persistOnceWith(serviceAppending(Single.never()), Duration.ofMillis(50));
+        assertThat(failed).hasSize(1);
+        assertThat(((NetEvent.TransitionFailed) failed.getFirst()).exceptionType())
+                .contains("TimeoutException");
+    }
+
+    private static List<NetEvent> persistOnceWith(BaseSessionService service, Duration timeout) {
+        var session = Session.builder("s").appName("app").userId("u").build();
+        var config = PersistStateSubnet.Config.builder("agent", service, () -> session)
+                .persistTimeout(timeout)
+                .build();
+
+        var store = EventStore.inMemory();
+        var net = PetriNet.builder("test")
+                .compose(PersistStateSubnet.DEF)
+                .build()
+                .bindActions(PersistStateSubnet.actionBindings(config));
+
+        var executor = BitmapNetExecutor.builder(net,
+                        Map.of(AdkColours.LEGACY_SESSION_WRITE, List.of(
+                                Token.of(PersistStateSubnet.legacyWrite(Map.of("k", "v"))))))
+                .eventStore(store)
+                .build();
+        executor.run();
+
+        return store.events().stream()
+                .filter(NetEvent.TransitionFailed.class::isInstance)
+                .toList();
+    }
+
+    /** A session service whose {@code appendEvent} answers with {@code result}. */
+    private static BaseSessionService serviceAppending(Single<Event> result) {
+        return new BaseSessionService() {
             @Override public Single<Session> createSession(String a, String u,
                                                             ConcurrentMap<String,Object> s,
                                                             String i) {
@@ -208,30 +255,9 @@ class PersistStateSubnetTest {
                 return Single.error(new UnsupportedOperationException());
             }
             @Override public Single<Event> appendEvent(Session session, Event event) {
-                return Single.error(new RuntimeException("db down"));
+                return result;
             }
         };
-
-        var session = Session.builder("s").appName("app").userId("u").build();
-        var config = PersistStateSubnet.Config.builder("agent", failing, () -> session).build();
-
-        var store = EventStore.inMemory();
-        var net = PetriNet.builder("test")
-                .compose(PersistStateSubnet.DEF)
-                .build()
-                .bindActions(PersistStateSubnet.actionBindings(config));
-
-        var executor = BitmapNetExecutor.builder(net,
-                        Map.of(AdkColours.LEGACY_SESSION_WRITE, List.of(
-                                Token.of(PersistStateSubnet.legacyWrite(Map.of("k", "v"))))))
-                .eventStore(store)
-                .build();
-        executor.run();
-
-        var failed = store.events().stream()
-                .filter(NetEvent.TransitionFailed.class::isInstance)
-                .toList();
-        assertThat(failed).hasSize(1);
     }
 
     /** Drive a net with just PersistStateSubnet + StateDelta tokens in the initial marking. */

@@ -414,6 +414,9 @@ class MultiAgentDemoTest {
                 .sinkPlacesWhen(TransferRouterSubnet.targetPlace("tech_support"),
                         LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION)
                 .property(SmtProperty.deadlockFree())
+                // One user turn yields at most one egress event: the router's
+                // answer, or the reask-exhausted fallback, never both.
+                .property(AdkNetInvariants.eventOutBounded(1))
                 .verify();
 
         // No counterexample = no reachable deadlock from the seeded initial

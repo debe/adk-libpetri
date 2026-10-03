@@ -877,8 +877,11 @@ class VoiceSessionDemoTest {
                         BargeInSubnet.Places.INTERRUPT_DISCARDED,
                         LiveApiRecoverySubnet.Places.NUDGE_NEEDED,
                         LiveApiRecoverySubnet.Places.RECONNECT_NEEDED)
+                // Stated in seeds: libpetri models SeedAndStart's K permits
+                // as one token (no weighted output arcs), so a bound of K
+                // would be vacuous. One seed's worth is the real invariant.
                 .property(AdkNetInvariants.budgetPlaceBounded(
-                        LlmStreamingStepSubnet.Places.CHUNK_BUDGET, 4))
+                        LlmStreamingStepSubnet.Places.CHUNK_BUDGET, 1))
                 .property(SmtProperty.deadlockFree())
                 .verify();
 

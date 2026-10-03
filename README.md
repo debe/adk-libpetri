@@ -697,23 +697,43 @@ discouraged.
 
 ## Verification
 
-Every `mvn verify` runs the following.
+Every `mvn verify` runs the following. Each SMT row is a test that
+asserts `isProven()`, so a claim that stops holding fails the build
+rather than quietly turning into `Unknown`.
 
-- Three structural validators, no SMT solver needed.
-  `singleLegacySessionWriter` catches parallel writes to
-  `Session.state`. `endInvocationInhibitsAll` catches missing
-  termination inhibitors. `transferDemuxHasUnknownFallback` catches
-  dead-letter accumulation.
-- SMT property factories (`budgetPlaceBounded`, `eventOutBounded`,
-  `noFireAfterEndInvocation`) proved on the assembled nets via
-  libpetri's `SmtVerifier`. Anything already expressible as a libpetri
-  primitive stays one: mutual exclusion is `SmtProperty.mutualExclusion`
-  rather than a wrapper that only adds null checks.
-- Both demos Z3-proved deadlock-free via
-  `SmtVerifier.forNet(net).property(deadlockFree()).verify()`.
-- The BIDI demo's reachable state space confirmed bounded by
-  `StateClassGraph.build(net, initial, 256)` terminating within the
-  exploration cap.
+**Structural validators** (`AdkNetInvariants`, no solver needed):
+
+- `singleLegacySessionWriter` catches parallel writes to
+  `Session.state`, and `transferDemuxHasUnknownFallback` catches
+  dead-letter accumulation. Both run on the multi-agent demo net.
+- `endInvocationInhibitsAll` catches advancing transitions that ignore
+  the end signal. The stock subnets do not use `END_INVOCATION`, so this
+  is a check for your own nets; its test runs it on synthetic ones.
+
+**SMT proofs** (libpetri's `SmtVerifier`, needs `z3`):
+
+| What is proved | Net | Test |
+|---|---|---|
+| Each stock subnet is deadlock-free and turns k inputs into exactly k outcomes (`LlmStep`, `Router`, `ToolDispatch`, `TransferRouter`); `PersistState` takes every write | each subnet alone, via `SubnetDef.verify` with `arrivals(k, k)` | `StockSubnetProofsTest` |
+| The reask budget never stacks across user inputs (commitment 6) | `LlmAgentSubnet` | `StockSubnetProofsTest` |
+| The chunk budget never stacks | `LlmStreamingStepSubnet`; the voice demo net | `LlmStreamingStepSubnetTest`, `VoiceSessionDemoTest` |
+| Deadlock-free, and at most one egress event per turn (`eventOutBounded`) | multi-agent demo net | `MultiAgentDemoTest` |
+| Deadlock-free | voice demo net | `VoiceSessionDemoTest` |
+| One winner per turn (one race commit; one quorum synthesis; one optimistic commit, validation verdicts mutually exclusive), deadlock-free | the three pattern demos | `Pattern{A,B,C}_*DemoTest` |
+
+Budget bounds are stated in seeds. libpetri has no weighted output arc,
+so a seed transition that writes N permits is modelled as writing one,
+and a bound of N would hold trivially. The property that matters is
+that the place never holds more than one seed's worth, which fails
+without the seed's reset arc.
+
+Anything already expressible as a libpetri primitive stays one: mutual
+exclusion is `SmtProperty.mutualExclusion` rather than a wrapper that
+only adds null checks.
+
+**State space**: the BIDI demo's reachable state space is confirmed
+bounded by `StateClassGraph.build(net, initial, 256)` terminating within
+the exploration cap.
 
 The tests assert the proof result rather than relying on example
 traces.

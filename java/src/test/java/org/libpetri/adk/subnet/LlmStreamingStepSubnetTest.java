@@ -144,14 +144,22 @@ class LlmStreamingStepSubnetTest {
         var result = SmtVerifier.forNet(net)
                 .environmentPlaces(EnvironmentPlace.of(LlmStreamingStepSubnet.Places.CHUNK))
                 .environmentMode(EnvironmentAnalysisMode.bounded(1))
+                // libpetri has no weighted output arc: SeedAndStart's K
+                // permits are modelled as one token. So the bound is stated
+                // in seeds, and K would be vacuous: the place never holds
+                // more than one seed's worth, because EmitChunk only returns
+                // the permit it took and SeedAndStart resets before seeding.
                 .property(AdkNetInvariants.budgetPlaceBounded(
-                        LlmStreamingStepSubnet.Places.CHUNK_BUDGET, k))
+                        LlmStreamingStepSubnet.Places.CHUNK_BUDGET, 1))
                 .verify();
 
-        // With CHUNK modelled as a bounded environment place the bound is
-        // genuinely proven rather than vacuously unrefuted. Left on the
-        // default ignore() mode the verifier returns Unknown ("a proof would
-        // be vacuous"), which isViolated()==false would have accepted.
+        // CHUNK is an internal environment place, not a port, and a stream
+        // may carry any number of chunks, so bounded(1) (one resident chunk,
+        // refilled forever) is the right model, not a finite arrivals(k).
+        // With CHUNK modelled this way the bound is genuinely proven rather
+        // than vacuously unrefuted. Left on ignore() the verifier returns
+        // Unknown ("a proof would be vacuous"), which isViolated()==false
+        // would have accepted.
         assertThat(result.isProven()).isTrue();
         assertThat(result.isViolated()).isFalse();
     }
