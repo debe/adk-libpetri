@@ -41,6 +41,7 @@ import org.libpetri.adk.subnet.RouterSubnet;
 import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.adk.subnet.TransferRouterSubnet;
 import org.libpetri.adk.verify.AdkNetInvariants;
+import org.libpetri.adk.verify.SmtProofs;
 import org.libpetri.event.EventStore;
 import org.libpetri.smt.SmtProperty;
 import org.libpetri.smt.SmtVerifier;
@@ -365,45 +366,43 @@ class MultiAgentDemoTest {
                         scriptedLlm(textResponse("verification stub")), dlfConfig),
                 TransferRouterSubnet.actionBindings(knownSpecialists, dlfRouterConfig));
 
-        var result = SmtVerifier.forNet(net)
-                .initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
-                .sinkPlaces(
-                        // Terminal places — a marking with tokens here is
-                        // a finished agent turn, not a deadlock.
-                        AdkColours.EVENT_OUT,
-                        AdkColours.LEGACY_SESSION_WRITE,
-                        TransferRouterSubnet.UNKNOWN_TARGET,
-                        TransferRouterSubnet.targetPlace("billing"),
-                        TransferRouterSubnet.targetPlace("tech_support"))
-                // Strict deadlock-freedom (libpetri 5.0+) reads a resting
-                // token on a non-sink place as a stranding. Every turn leaves
-                // its conversation and any unspent reask budget behind; the
-                // next BuildPrompt resets both. Excuse them only once the turn
-                // has ended, by emitting or by transferring, so either one
-                // stuck mid-turn is still a deadlock.
-                .sinkPlacesWhen(AdkColours.EVENT_OUT, LlmAgentSubnet.REASK_BUDGET,
-                        LlmAgentSubnet.CONVERSATION)
-                .sinkPlacesWhen(TransferRouterSubnet.UNKNOWN_TARGET, LlmAgentSubnet.REASK_BUDGET,
-                        LlmAgentSubnet.CONVERSATION)
-                .sinkPlacesWhen(TransferRouterSubnet.targetPlace("billing"),
-                        LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION)
-                .sinkPlacesWhen(TransferRouterSubnet.targetPlace("tech_support"),
-                        LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION)
-                .property(SmtProperty.deadlockFree())
-                // One user turn yields at most one egress event: the router's
-                // answer, or the reask-exhausted fallback, never both.
-                .property(AdkNetInvariants.eventOutBounded(1))
-                .verify();
-
-        // No counterexample = no reachable deadlock from the seeded initial
-        // marking. Assert the strong form: the README and CLAUDE.md both say
-        // Z3 *proves* this net deadlock-free, and libpetri downgrades a
-        // verdict it cannot validate (certificate or closed enumeration) to
-        // Unknown.
-        // isViolated()==false alone also passes on Unknown, which would let
-        // the claim rot silently.
-        assertThat(result.isProven()).isTrue();
-        assertThat(result.isViolated()).isFalse();
+        // One verify() per property: SmtVerifier.property() replaces rather
+        // than adds, so the chain this used to be checked only its last one.
+        // Assert the strong form: the README and CLAUDE.md both say Z3
+        // *proves* this net deadlock-free, and libpetri downgrades a verdict
+        // it cannot validate (certificate or closed enumeration) to Unknown.
+        SmtProofs.assertEachProven(net,
+                v -> v.initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
+                        .sinkPlaces(
+                                // Terminal places — a marking with tokens here is
+                                // a finished agent turn, not a deadlock.
+                                AdkColours.EVENT_OUT,
+                                AdkColours.LEGACY_SESSION_WRITE,
+                                TransferRouterSubnet.UNKNOWN_TARGET,
+                                TransferRouterSubnet.targetPlace("billing"),
+                                TransferRouterSubnet.targetPlace("tech_support"))
+                        // Strict deadlock-freedom (libpetri 5.0+) reads a resting
+                        // token on a non-sink place as a stranding. Every turn leaves
+                        // its conversation and any unspent reask budget behind; the
+                        // next BuildPrompt resets both. Excuse them only once the turn
+                        // has ended, by emitting or by transferring, so either one
+                        // stuck mid-turn is still a deadlock.
+                        .sinkPlacesWhen(AdkColours.EVENT_OUT, LlmAgentSubnet.REASK_BUDGET,
+                                LlmAgentSubnet.CONVERSATION)
+                        .sinkPlacesWhen(TransferRouterSubnet.UNKNOWN_TARGET,
+                                LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION)
+                        .sinkPlacesWhen(TransferRouterSubnet.targetPlace("billing"),
+                                LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION)
+                        .sinkPlacesWhen(TransferRouterSubnet.targetPlace("tech_support"),
+                                LlmAgentSubnet.REASK_BUDGET, LlmAgentSubnet.CONVERSATION),
+                Map.of(
+                        "deadlockFree",
+                        SmtProperty.deadlockFree(),
+                        // One user turn yields at most one egress event: the
+                        // router's answer, or the reask-exhausted fallback,
+                        // never both.
+                        "one egress event per turn: eventOutBounded(1)",
+                        AdkNetInvariants.eventOutBounded(1)));
     }
 
     // ============================================================

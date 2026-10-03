@@ -78,7 +78,6 @@ public final class StreamingLlmAgentSubnet {
             Content fallbackContent,
             Supplier<String> invocationIdSupplier,
             ExecutorService dispatchExecutor,
-            int chunkBudget,
             AtomicReference<PetriNetExecutor> executorRef,
             LlmStepSubnet.Callbacks callbacks,
             Supplier<ToolContext> toolContextSupplier) {
@@ -95,9 +94,6 @@ public final class StreamingLlmAgentSubnet {
             Objects.requireNonNull(fallbackContent, "fallbackContent");
             Objects.requireNonNull(invocationIdSupplier, "invocationIdSupplier");
             Objects.requireNonNull(dispatchExecutor, "dispatchExecutor");
-            if (chunkBudget < 1) {
-                throw new IllegalArgumentException("chunkBudget must be >= 1, got: " + chunkBudget);
-            }
             callbacks = callbacks == null ? LlmStepSubnet.Callbacks.none() : callbacks;
             toolContextSupplier = toolContextSupplier == null ? () -> null : toolContextSupplier;
         }
@@ -109,7 +105,7 @@ public final class StreamingLlmAgentSubnet {
         /** This config bound to {@code ref}; how {@link #runnerFactory} gives each session its own. */
         public Config withExecutorRef(AtomicReference<PetriNetExecutor> ref) {
             return new Config(name, model, systemInstruction, tools, reaskBudget,
-                    fallbackContent, invocationIdSupplier, dispatchExecutor, chunkBudget,
+                    fallbackContent, invocationIdSupplier, dispatchExecutor,
                     Objects.requireNonNull(ref, "ref"), callbacks, toolContextSupplier);
         }
 
@@ -125,7 +121,6 @@ public final class StreamingLlmAgentSubnet {
             private ExecutorService dispatchExecutor;
             private LlmStepSubnet.Callbacks callbacks = LlmStepSubnet.Callbacks.none();
             private Supplier<ToolContext> toolContextSupplier = () -> null;
-            private int chunkBudget = 4;
             private AtomicReference<PetriNetExecutor> executorRef;
 
             private Builder(String name, String model) {
@@ -145,13 +140,12 @@ public final class StreamingLlmAgentSubnet {
 
             /** Supplies the {@link ToolContext} handed to each tool; defaults to {@code () -> null}. */
             public Builder toolContextSupplier(Supplier<ToolContext> s) { this.toolContextSupplier = s; return this; }
-            public Builder chunkBudget(int n)                      { this.chunkBudget = n; return this; }
             public Builder executorRef(AtomicReference<PetriNetExecutor> ref) { this.executorRef = ref; return this; }
 
             public Config build() {
                 return new Config(name, model, Optional.ofNullable(systemInstruction),
                         tools, reaskBudget, fallbackContent, invocationIdSupplier,
-                        dispatchExecutor, chunkBudget, executorRef,
+                        dispatchExecutor, executorRef,
                         callbacks, toolContextSupplier);
             }
         }
@@ -217,7 +211,6 @@ public final class StreamingLlmAgentSubnet {
         return new LlmStreamingStepSubnet.Config(
                 config.name(),
                 config.invocationIdSupplier(),
-                config.chunkBudget(),
                 config.executorRef());
     }
 

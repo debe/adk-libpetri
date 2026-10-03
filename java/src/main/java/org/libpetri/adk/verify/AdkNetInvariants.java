@@ -47,8 +47,8 @@ import org.libpetri.adk.subnet.TransferRouterSubnet;
  * </ol>
  *
  * <p>The SMT side adds bounded-resource properties: a budget-place bound
- * (the reask and chunk budgets) and an event-out queue bound. Where each is
- * proved, and on which net, is listed in the README's verification section.
+ * (the reask budget) and an event-out queue bound. Where each is proved, and
+ * on which net, is listed in the README's verification section.
  */
 public final class AdkNetInvariants {
 
@@ -161,14 +161,22 @@ public final class AdkNetInvariants {
     // ============================================================
 
     /**
-     * Property: {@code budgetPlace} never exceeds {@code maxTokens} tokens.
-     * Combined with the reset arc on the seed transition, this proves the
-     * place is exactly {@code [0, maxTokens]}-bounded across all reachable
-     * markings.
+     * Property: {@code budgetPlace} never exceeds {@code maxTokens} tokens in
+     * any reachable marking. It is {@link SmtProperty#placeBound} under a
+     * name that says what it is for: a budget that must not stack when its
+     * seed transition fires again before the old budget is spent.
      *
-     * <p>Named for the shape, not for one caller. The reask budget is the
-     * motivating case, but every use in this repo passes a chunk budget, and
-     * the property is the same either way.
+     * <p>State the bound in seeds. libpetri has no weighted output arc, so a
+     * seed transition that writes N permits is verified as writing one, and a
+     * bound of N would hold trivially. {@code maxTokens = 1} is the claim that
+     * matters: the place never holds more than one seed's worth, which fails
+     * without a reset arc on the seed transition. Run it with more than one
+     * arrival at the seed, or it cannot fail.
+     *
+     * <p>A budget only bounds something if a transition consumes a permit
+     * without returning it, and an exhaustion path takes over when none is
+     * left. The reask budget of {@code LlmAgentSubnet} is the case in this
+     * repo.
      */
     public static SmtProperty budgetPlaceBounded(Place<?> budgetPlace, int maxTokens) {
         Objects.requireNonNull(budgetPlace, "budgetPlace");

@@ -1,6 +1,7 @@
 package org.libpetri.adk.subnet;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 import com.google.adk.events.Event;
 import com.google.adk.models.BaseLlm;
@@ -20,22 +21,25 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.Assertions;
+import java.util.function.UnaryOperator;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.libpetri.analysis.EnvironmentAnalysisMode;
+import org.libpetri.core.Arc;
 import org.libpetri.core.EnvironmentPlace;
 import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
 import org.libpetri.core.Token;
+import org.libpetri.core.Transition;
 import org.libpetri.event.EventStore;
 import org.libpetri.event.NetEvent;
 import org.libpetri.adk.bridge.EventStoreToFlowableBridge;
 import org.libpetri.adk.colours.AdkColours;
-import org.libpetri.adk.verify.AdkNetInvariants;
+import org.libpetri.adk.verify.SmtProofs;
 import org.libpetri.runtime.BitmapNetExecutor;
 import org.libpetri.runtime.Marking;
 import org.libpetri.runtime.PetriNetExecutor;
+import org.libpetri.smt.SmtProperty;
 import org.libpetri.smt.SmtVerifier;
 
 class LlmStreamingStepSubnetTest {
@@ -56,7 +60,7 @@ class LlmStreamingStepSubnetTest {
                 chunkResponse(", "),
                 chunkResponse("world!"));
         var fixture = runStreaming(streamingLlm(chunks),
-                LlmStreamingStepSubnet.Config.builder("streamer").chunkBudget(4),
+                LlmStreamingStepSubnet.Config.builder("streamer"),
                 simpleRequest("hi"));
 
         // Three partial Events were emitted to EVENT_OUT via T_EmitChunk.
@@ -77,63 +81,71 @@ class LlmStreamingStepSubnetTest {
     }
 
     @Test
-    void large_batch_of_chunks_each_emitted_through_budget() throws Exception {
-        // 20 chunks, budget = 4. Even at the worst case, CHUNK_BUDGET stays
-        // pinned at 4 across the run because emit consumes-and-returns one
-        // permit per fire. The test asserts that all 20 chunks emitted, then
-        // CHUNK_BUDGET is back at exactly 4 at quiescence.
+    void large_batch_of_chunks_each_emitted_in_order() throws Exception {
         var chunks = new ArrayList<LlmResponse>();
         for (int i = 0; i < 20; i++) chunks.add(chunkResponse("chunk-" + i));
 
         var fixture = runStreaming(streamingLlm(chunks),
-                LlmStreamingStepSubnet.Config.builder("burst").chunkBudget(4),
+                LlmStreamingStepSubnet.Config.builder("burst"),
                 simpleRequest("burst me"));
 
         assertThat(fixture.events).hasSize(20);
-        // CHUNK_BUDGET invariant: at quiescence equals the configured K.
-        long budgetTokens = fixture.finalMarking
-                .peekTokens(LlmStreamingStepSubnet.Places.CHUNK_BUDGET).size();
-        assertThat(budgetTokens).isEqualTo(4L);
+        assertThat(fixture.events.stream().map(e -> e.content().get().text()).toList())
+                .containsExactlyElementsIn(chunks.stream()
+                        .map(c -> c.content().get().text()).toList())
+                .inOrder();
+        assertThat(fixture.mergedResponses).hasSize(1);
     }
 
     @Test
-    void budget_resets_on_each_new_request() throws Exception {
-        // Two requests through the SAME long-lived executor — each should
-        // reset CHUNK_BUDGET (via the Reset arc on T_SeedAndStart) and seed
-        // K fresh permits. The end-of-run CHUNK_BUDGET must still equal K
-        // (not 2*K, not K-leftover).
+    void each_request_on_one_executor_streams_its_own_chunks() throws Exception {
+        // Two requests through the SAME long-lived executor. The executor
+        // never starts LlmCallStream again while a stream is in flight, so
+        // the second call begins only after the first has injected its
+        // terminal chunk: four partials, in request order, and one merged
+        // response per request.
         var llm = scriptedStreamingLlm(
                 List.of(chunkResponse("a"), chunkResponse("b")),
                 List.of(chunkResponse("c"), chunkResponse("d")));
 
         var fixture = runStreamingMultiRequest(llm,
-                LlmStreamingStepSubnet.Config.builder("multi").chunkBudget(3),
+                LlmStreamingStepSubnet.Config.builder("multi"),
                 List.of(simpleRequest("one"), simpleRequest("two")));
 
-        assertThat(fixture.events).hasSize(4);
-        long budgetTokens = fixture.finalMarking
-                .peekTokens(LlmStreamingStepSubnet.Places.CHUNK_BUDGET).size();
-        assertThat(budgetTokens).isEqualTo(3L);
+        assertThat(fixture.events.stream().map(e -> e.content().get().text()).toList())
+                .containsExactly("a", "b", "c", "d").inOrder();
+        assertThat(fixture.mergedResponses).hasSize(2);
     }
 
     // ============================================================
-    //  Structural verification — the budget bound is SMT-provable
+    //  Structural verification
     // ============================================================
 
+    /**
+     * Every request is taken and every chunk the stream injects drains to
+     * {@code EVENT_OUT} or {@code LLM_RESPONSE}; nothing strands on
+     * {@code LLM_REQUEST} or {@code CHUNK}.
+     *
+     * <p>{@code CHUNK} is an internal environment place, not a port, and a
+     * stream may carry any number of chunks, so {@code bounded(1)} (one
+     * resident chunk, refilled forever) is the model rather than a finite
+     * {@code arrivals(k)}. Left on {@code ignore()}, nothing would ever reach
+     * {@code CHUNK} and the proof would say nothing about emission.
+     *
+     * <p>The second half keeps the proof honest: the same check on a variant
+     * whose emit also needs a token nobody produces, an exhausted permit
+     * pool, must come back Violated. The chunk-budget proof this replaces
+     * seeded no request and held even at bound 0.
+     */
     @Test
     @EnabledIf("z3Available")
-    void chunk_budget_is_smt_provably_bounded() {
-        // Build a synthetic-but-shaped net: SeedAndStart + EmitChunk pattern.
-        // Z3 Spacer should prove CHUNK_BUDGET <= K under the consume-and-return
-        // pattern of T_EmitChunk.
-        var k = 4;
+    void streaming_step_never_strands_a_request_or_a_chunk() {
         // CORE-043 (libpetri 2.14+): a transition declaring an output spec
         // must carry a producing action at verification as well as at
-        // execution. Bind the subnet's real actions so the bound is proven
+        // execution. Bind the subnet's real actions so the property is proven
         // about the net that runs, not an unbound skeleton. The actions are
         // never invoked here; only the structure is encoded.
         var verifyConfig = LlmStreamingStepSubnet.Config.builder("verify")
-                .chunkBudget(k)
                 .executorRef(new AtomicReference<PetriNetExecutor>())
                 .build();
         var net = PetriNet.builder("streaming")
@@ -141,28 +153,21 @@ class LlmStreamingStepSubnetTest {
                 .build()
                 .bindActions(LlmStreamingStepSubnet.actionBindings(
                         streamingLlm(List.of()), verifyConfig));
-
-        var result = SmtVerifier.forNet(net)
+        UnaryOperator<SmtVerifier> twoRequestsOpenStream = v -> v
+                .initialMarking(b -> b.tokens(AdkColours.LLM_REQUEST, 2))
                 .environmentPlaces(EnvironmentPlace.of(LlmStreamingStepSubnet.Places.CHUNK))
                 .environmentMode(EnvironmentAnalysisMode.bounded(1))
-                // libpetri has no weighted output arc: SeedAndStart's K
-                // permits are modelled as one token. So the bound is stated
-                // in seeds, and K would be vacuous: the place never holds
-                // more than one seed's worth, because EmitChunk only returns
-                // the permit it took and SeedAndStart resets before seeding.
-                .property(AdkNetInvariants.budgetPlaceBounded(
-                        LlmStreamingStepSubnet.Places.CHUNK_BUDGET, 1))
-                .verify();
+                .sinkPlaces(AdkColours.EVENT_OUT, AdkColours.LLM_RESPONSE);
 
-        // CHUNK is an internal environment place, not a port, and a stream
-        // may carry any number of chunks, so bounded(1) (one resident chunk,
-        // refilled forever) is the right model, not a finite arrivals(k).
-        // With CHUNK modelled this way the bound is genuinely proven rather
-        // than vacuously unrefuted. Left on ignore() the verifier returns
-        // Unknown ("a proof would be vacuous"), which isViolated()==false
-        // would have accepted.
-        assertThat(result.isProven()).isTrue();
-        assertThat(result.isViolated()).isFalse();
+        SmtProofs.assertEachProven(net, twoRequestsOpenStream,
+                Map.of("deadlockFree", SmtProperty.deadlockFree()));
+
+        var starved = twoRequestsOpenStream
+                .apply(SmtVerifier.forNet(withEmitGatedOnUnseededPlace(net)))
+                .property(SmtProperty.deadlockFree())
+                .verify();
+        assertWithMessage("a starved emit must strand a chunk:\n%s", starved.report())
+                .that(starved.isViolated()).isTrue();
     }
 
     // ============================================================
@@ -172,7 +177,7 @@ class LlmStreamingStepSubnetTest {
     @Test
     void empty_stream_fails_the_llm_call_transition() throws Exception {
         var fixture = runStreaming(streamingLlm(List.of()),
-                LlmStreamingStepSubnet.Config.builder("e").chunkBudget(2),
+                LlmStreamingStepSubnet.Config.builder("e"),
                 simpleRequest("hi"));
         assertThat(fixture.events).isEmpty();
         var failed = fixture.netEvents.stream()
@@ -189,24 +194,12 @@ class LlmStreamingStepSubnetTest {
     }
 
     @Test
-    void def_declares_seed_call_and_emit_transitions() {
+    void def_declares_call_and_emit_transitions() {
         var names = LlmStreamingStepSubnet.DEF.body().transitions().stream()
                 .map(t -> t.name()).sorted().toList();
         assertThat(names).containsExactly(
                 LlmStreamingStepSubnet.Transitions.EMIT_CHUNK,
-                LlmStreamingStepSubnet.Transitions.LLM_CALL_STREAM,
-                LlmStreamingStepSubnet.Transitions.SEED_AND_START).inOrder();
-    }
-
-    @Test
-    void config_rejects_zero_chunk_budget() {
-        var ex = Assertions.assertThrows(
-                IllegalArgumentException.class,
-                () -> LlmStreamingStepSubnet.Config.builder("a")
-                        .chunkBudget(0)
-                        .executorRef(new AtomicReference<>())
-                        .build());
-        assertThat(ex.getMessage()).contains("chunkBudget must be >= 1");
+                LlmStreamingStepSubnet.Transitions.LLM_CALL_STREAM).inOrder();
     }
 
     // ============================================================
@@ -290,13 +283,38 @@ class LlmStreamingStepSubnetTest {
             var snap = executor.snapshot();
             if (snap.isRestorePoint()
                     && !snap.marking().containsKey(AdkColours.LLM_REQUEST.name())
-                    && !snap.marking().containsKey(LlmStreamingStepSubnet.Places.LLM_REQUEST_INTERNAL.name())
                     && !snap.marking().containsKey(LlmStreamingStepSubnet.Places.CHUNK.name())) {
                 return;
             }
             Thread.sleep(2);
         }
         throw new AssertionError("streaming net did not settle within " + timeout);
+    }
+
+    /**
+     * {@code net} with {@code T_EmitChunk} also consuming from a place that
+     * nothing produces into: the shape of an emit gated on a permit pool
+     * that has run dry.
+     */
+    private static PetriNet withEmitGatedOnUnseededPlace(PetriNet net) {
+        var gate = Place.of("unseededGate", Void.class);
+        var mutant = PetriNet.builder(net.name() + "-starved").place(gate);
+        net.places().forEach(mutant::place);
+        for (var t : net.transitions()) {
+            if (!t.name().equals(LlmStreamingStepSubnet.Transitions.EMIT_CHUNK)) {
+                mutant.transition(t);
+                continue;
+            }
+            var inputs = new ArrayList<>(t.inputSpecs());
+            inputs.add(Arc.In.one(gate));
+            mutant.transition(Transition.builder(t.name())
+                    .inputs(inputs.toArray(Arc.In[]::new))
+                    .outputs(t.outputSpec())
+                    .priority(t.priority())
+                    .action(t.action())
+                    .build());
+        }
+        return mutant.build();
     }
 
     private static LlmRequest simpleRequest(String text) {

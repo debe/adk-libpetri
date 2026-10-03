@@ -123,7 +123,6 @@ pass the same executor reference to the subnet config and
 var execRef = new java.util.concurrent.atomic.AtomicReference<org.libpetri.runtime.PetriNetExecutor>();
 var config = StreamingLlmAgentSubnet.Config.builder("my_agent", "gemini-2.0-flash")
         .dispatchExecutor(dispatchExecutor)
-        .chunkBudget(4)
         .executorRef(execRef)
         .build();
 
@@ -207,7 +206,7 @@ src/main/java/org/libpetri/adk/
 │   ├── LiveConnection.java                # genai Live server-message boundary
 │   ├── SessionExecutorRegistry.java       # lazy Map<SessionKey, PetriRunner>
 │   └── SessionKey.java                    # (appName, userId, sessionId)
-└── verify/AdkNetInvariants.java           # 3 structural + 3 SMT property factories
+└── verify/AdkNetInvariants.java           # 3 structural checks + 2 SMT property factories
 ```
 
 Voice-specific demo subnets (`BargeInSubnet`, `LiveApiRecoverySubnet`,
@@ -233,8 +232,9 @@ Planner `LlmAgentSubnet` composed with `TransferRouterSubnet`
 - *Hallucinated agent name.* The planner emits a transfer to a
   garbage name, which demuxes to `UNKNOWN_TARGET`. A typed error
   Event flows back. There is no NPE.
-- *Z3 deadlock-free proof.* `SmtProperty.deadlockFree()` runs on the
-  composed net with sinks declared. Spacer says: not violated.
+- *Z3 proofs.* `SmtProperty.deadlockFree()` and
+  `AdkNetInvariants.eventOutBounded(1)` are each proved on the composed
+  net, one `verify()` per property, and the test asserts `isProven()`.
 
 ### `VoiceSessionDemoTest`
 
@@ -245,13 +245,12 @@ with typed env places.
 - *Full streaming voice scenario.* Three streamed chunks arrive via real
   env-place injection. A terminal router event completes the ADK turn, a
   user barge-in fires mid-stream (voice-activity-gated route), and a
-  silence-triggered two-stage recovery follows (nudge then reconnect). The
-  budget invariant holds: `CHUNK_BUDGET` returns to K at quiescence.
+  silence-triggered two-stage recovery follows (nudge then reconnect).
 - *BIDI bridge scenario.* A custom `BaseLlmConnection` records sends and
   pumps model frames back into the net.
 - *Reset arc pattern.* Stale-state cleanup on new utterance.
-- *SMT boundedness check.* Spacer checks the composed voice net's streaming
-  chunk budget property.
+- *Z3 deadlock-free proof.* The composed voice net, with its six env places
+  modelled as `bounded(1)`, is proved deadlock-free.
 
 
 See the root [`README.md`](../README.md) for the architectural

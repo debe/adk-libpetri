@@ -123,11 +123,10 @@ class StockSubnetProofsTest {
 
     /**
      * Persist is a pure consumer: there is no outcome to count, only that
-     * every write is taken. libpetri 8.0 models the reaping of a transition
-     * whose {@code deadline(5s)} a late executor misses; a reaped Persist
-     * stays disabled until its input changes. The proof keeps that semantics
-     * rather than assuming it away with {@code assumeNoReaping}, so it covers
-     * the slow-executor case too.
+     * every write is taken. The transition is untimed (its bound on
+     * {@code appendEvent} is an action timeout, which the verifier does not
+     * model), so no reaping is involved and no {@code assumeNoReaping} is
+     * needed.
      */
     @Test
     @EnabledIf("z3Available")
@@ -159,12 +158,13 @@ class StockSubnetProofsTest {
      * Without the reset arc this is violated after two arrivals.
      *
      * <p>{@code assumeAtomicFiring(true)} is exact here, not a convenience.
-     * BuildPrompt and ReAsk are the only transitions libpetri splits into
-     * start and completion (VER-004), and both actions return completed
-     * futures, which the Java executor deposits inline in the same step.
-     * Without it the only counterexample is BuildPrompt starting again while
-     * its earlier firing is in flight, which libpetri itself flags (CONC-002)
-     * as impossible on the Java executor.
+     * Synchronous actions do not close the gap: the executor deposits a
+     * completed future's outputs at the end of the firing pass, and a reset
+     * or inhibitor earlier in that pass does not see them (EXEC-003 AC5). What
+     * makes the assumption exact is that, without it, the only counterexample
+     * is BuildPrompt starting again while its earlier firing is in flight.
+     * libpetri's report flags that one (CONC-002): the Java executor never
+     * restarts a transition while it is in flight.
      */
     @Test
     @EnabledIf("z3Available")
@@ -187,12 +187,53 @@ class StockSubnetProofsTest {
         assertAllProven(result);
     }
 
+    /**
+     * The composed LLM agent turns every user input into exactly one turn
+     * outcome: an egress event (the answer, or the reask-exhausted fallback)
+     * or a transfer. Proved without {@code assumeAtomicFiring}.
+     *
+     * <p>Each turn leaves its conversation and any unspent reask budget at
+     * rest; the next BuildPrompt resets both. They are excused as sinks
+     * unconditionally, which cannot hide a stalled turn: a turn stuck with
+     * either one would be missing its outcome, and the count would fail.
+     */
+    @Test
+    @EnabledIf("z3Available")
+    void llm_agent_turns_every_user_input_into_exactly_one_outcome() {
+        var config = LlmAgentSubnet.Config.builder("agent", "fake-model")
+                .reaskBudget(2)
+                .dispatchExecutor(EXECUTOR)
+                .build();
+        assertOneOutcomePerInput(
+                LlmAgentSubnet.DEF.bindActions(LlmAgentSubnet.actionBindings(stubLlm(), config)),
+                "userIn", () -> Token.of(com.google.genai.types.Content.fromParts(
+                        com.google.genai.types.Part.fromText("hi"))),
+                new Place<?>[] {
+                        out("eventOut", com.google.adk.events.Event.class),
+                        out("transfer", AdkColours.TransferTarget.class)},
+                Place.of("sut/" + LlmAgentSubnet.REASK_BUDGET.name(), Void.class),
+                Place.of("sut/" + LlmAgentSubnet.CONVERSATION.name(),
+                        LlmAgentSubnet.Conversation.class));
+    }
+
     // ============================================================
     //  Helpers
     // ============================================================
 
     private static void assertOneOutcomePerInput(
             SubnetDef<Void> def, String inPort, Supplier<Token<?>> input, Place<?>... outs) {
+        assertOneOutcomePerInput(def, inPort, input, outs, new Place<?>[0]);
+    }
+
+    /**
+     * As above, with {@code atRest} places also excused as sinks: state a
+     * subnet keeps between inputs by design.
+     */
+    private static void assertOneOutcomePerInput(
+            SubnetDef<Void> def, String inPort, Supplier<Token<?>> input,
+            Place<?>[] outs, Place<?>... atRest) {
+        var sinks = new ArrayList<Place<?>>(List.of(outs));
+        sinks.addAll(List.of(atRest));
         var result = def.verify(
                 VerificationHarness.builder()
                         .input(inPort, input)
@@ -201,7 +242,8 @@ class StockSubnetProofsTest {
                         .build(),
                 SubnetVerifyOptions.DEFAULT
                         .withEnvironmentMode(EnvironmentAnalysisMode.arrivals(K, K))
-                        .withConfigure((v, synthetic) -> v.sinkPlaces(outs)));
+                        .withConfigure((v, synthetic) ->
+                                v.sinkPlaces(sinks.toArray(new Place<?>[0]))));
         assertAllProven(result);
     }
 

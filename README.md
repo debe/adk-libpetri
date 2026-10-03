@@ -205,8 +205,8 @@ Two paths fire concurrently: a slow accurate compute and a fast
 approximate one. The slow path is preferred if it returns within a
 2-second deadline; otherwise the fast result commits at the deadline.
 The user can barge in at any point, and both in-flight paths must cancel
-atomically while the `RESPONSE_SENT` lock resets so the next turn starts
-clean. A third tier (a cached default at five seconds) must slot in
+atomically, so that nothing from the cancelled race can still answer and
+the next turn starts clean. A third tier (a cached default at five seconds) must slot in
 without disturbing the at-most-once invariant or the cancellation.
 
 The closest one-liner is
@@ -218,20 +218,26 @@ rewriting the composition. None of these properties survive into a
 formal checker.
 
 In the net, `StartBoth` forks the request into `SLOW_INFLIGHT`,
-`FAST_INFLIGHT`, and `TIMER_PENDING`. `CommitSlow` fires as soon as
-`SLOW_DONE` lands, gated by `inhibitor(RESPONSE_SENT)`;
-`CommitFastOnTimeout` requires `FAST_DONE` and `TIMER_EXPIRED` under the
-same inhibitor. The at-most-once invariant `PlaceBound(RESPONSE, 1)` is
-visible in the diagram and SMT-checkable. `OnBargeInOrNewTurn` resets
-every race place plus `RESPONSE_SENT` in one firing. The third tier is
-one more transition under the same inhibitor with a longer timer; the
-invariant and the cancellation are unchanged because both are
-properties of the topology. This case is backed by
-`PatternA_SpeculativeRaceDemoTest`.
+`FAST_INFLIGHT`, and `TIMER_PENDING`, and seeds one `RESPONSE_PERMIT`.
+`CommitSlow` fires as soon as `SLOW_DONE` lands and takes the permit;
+`CommitFastOnTimeout` needs `FAST_DONE`, `TIMER_EXPIRED` and the same
+permit. The at-most-once invariant `PlaceBound(RESPONSE, 1)` is visible
+in the diagram and SMT-checkable. `OnBargeInOrNewTurn` resets every race
+place, the permit included, in one firing. The third tier is one more
+transition consuming the same permit with a longer timer; the invariant
+and the cancellation are unchanged because both are properties of the
+topology.
+
+The permit is load-bearing. Guarding each commit with an inhibitor on a
+`RESPONSE_SENT` marker instead looks equivalent and is not: an
+inhibitor reads the marking as of the start of an orchestrator pass,
+so two commits that become ready in the same pass both fire. This case
+is backed by `PatternA_SpeculativeRaceDemoTest`, which first used the
+inhibitor form and replays that double commit as a regression test.
 
 <p align="center">
   <img src="docs/diagrams/svg/speculative-race.svg"
-       alt="StartBoth forks REQUEST into SLOW_INFLIGHT, FAST_INFLIGHT, and TIMER_PENDING; TimerFires after 2s produces TIMER_EXPIRED; CommitSlow and CommitFastOnTimeout race against the RESPONSE_SENT inhibitor; OnBargeInOrNewTurn resets the entire race on USER_INTERRUPT"
+       alt="StartBoth forks REQUEST into SLOW_INFLIGHT, FAST_INFLIGHT, and TIMER_PENDING; TimerFires after 2s produces TIMER_EXPIRED; CommitSlow and CommitFastOnTimeout compete for one RESPONSE_PERMIT that StartBoth seeds; OnBargeInOrNewTurn resets the entire race, permit included, on USER_INTERRUPT"
        width="1000">
 </p>
 
@@ -253,7 +259,8 @@ in-flight recovery.
 
 In the net, each mode is one arc: an inhibitor on `MODEL_ACTIVE` gates
 recovery, a read arc on `VOICE_ACTIVITY_OPEN` gates barge-in dispatch,
-`CHUNK_BUDGET` bounds concurrent chunk emission, and reset arcs on the
+each chunk enters through its own `CHUNK` env-place injection and leaves
+through one emit transition in arrival order, and reset arcs on the
 new-utterance transition wipe in-flight state. They compose because
 they are all properties of the marking. `VoiceSessionDemoTest` composes
 the four into one long-lived per-session net; Z3 proves it deadlock-free
@@ -491,7 +498,7 @@ composition primitives together with `SubnetDef.fromNet(...)`.
 | `LlmAgentSubnet`        | `USER_IN`     | `EVENT_OUT`, `TRANSFER`        | Its own `BuildPrompt` plus `LlmStep`, `Router` and `ToolDispatch`, with a reask-budget feedback loop that structurally bounds the autonomous tool loop. Each re-ask replays the invocation's conversation from an in-net `CONVERSATION` place |
 | `PersistStateSubnet`    | `LEGACY_SESSION_WRITE` | terminal | Single transition draining `StateDelta` to `BaseSessionService.appendEvent`, bounded by an action timeout (`persistTimeout`, default 5 s). Race-free by construction: one writer transition in the entire net |
 | `TransferRouterSubnet`  | `TRANSFER`    | `target/<name>*`, `target/_unknown`, `EVENT_OUT` | `Out.xor` over compile-time-known target places. A hallucinated name routes to a typed error Event, not an NPE |
-| `LlmStreamingStepSubnet` *(experimental)* | `LLM_REQUEST` | `LLM_RESPONSE`, `EVENT_OUT` | SSE counterpart of `LlmStep`: each model chunk becomes a partial `Event` through a `CHUNK` env place, under a chunk budget; the merged response continues to `LLM_RESPONSE` |
+| `LlmStreamingStepSubnet` *(experimental)* | `LLM_REQUEST` | `LLM_RESPONSE`, `EVENT_OUT` | SSE counterpart of `LlmStep`: each model chunk becomes a partial `Event` through a `CHUNK` env place, emitted in arrival order; the merged response continues to `LLM_RESPONSE` |
 | `StreamingLlmAgentSubnet` *(experimental)* | `USER_IN` | `EVENT_OUT`, `TRANSFER` | `LlmAgentSubnet` over `LlmStreamingStep`. Wire it with `StreamingLlmAgentSubnet.runnerFactory(...)`, which gives each session its own executor handle |
 
 The canonical composition is `LlmAgentSubnet`: prompt build, LLM call,
@@ -543,19 +550,21 @@ vocabulary lacks a primitive (first-wins, K-of-N, path switching), and
 each is roughly 40 to 50 LOC of `PetriNet.builder()` user code. Each is
 paired with an ADK-only foil test that locks in the broken behaviour.
 
-- **Speculative race with structural cancellation.** `Place<Void>
-  RACE_WON` plus per-branch commit inhibitors; the first result wins and
-  losers structurally cannot commit. Z3 proves `PlaceBound(EVENT_OUT, 1)`
-  per turn. `PatternA_SpeculativeRaceDemoTest` /
-  `PatternA_AdkOnlyFoilTest`.
+- **Speculative race with structural cancellation.** One `RACE_PERMIT`
+  token per turn that every commit consumes; the first result takes it,
+  and losers structurally cannot commit. A `RACE_WON` marker cancels
+  branches that have not started and drains late results. Z3 proves
+  `PlaceBound(RACE_WON, 1)` and `PlaceBound(EVENT_OUT, 1)` per turn.
+  `PatternA_SpeculativeRaceDemoTest` / `PatternA_AdkOnlyFoilTest`.
 - **Late-join / K-of-N quorum.** `Arc.In.exactly(K, RESULT)` fires the
   instant K branches return; late arrivals drain to a typed `DISCARDED`
   sink. Runtime is bounded by the K-th-fastest branch, not the slowest.
   `PatternB_QuorumDemoTest` / `PatternB_AdkOnlyFoilTest`.
 - **Optimistic commit with structural fallback.** Cheap and slow paths
-  run concurrently; an XOR validation transition routes to the
-  cheap-commit or slow-commit path via inhibitors on a shared
-  `COMMITTED` mutex. `PatternC_OptimisticCommitDemoTest` /
+  run concurrently; an XOR validation transition enables exactly one of
+  the cheap-commit and slow-commit paths, and a `COMMITTED` marker
+  cancels the slow path once either commits. Z3 proves
+  `PlaceBound(COMMITTED, 1)` per turn. `PatternC_OptimisticCommitDemoTest` /
   `PatternC_AdkOnlyFoilTest`.
 
 All six tests live under
@@ -771,12 +780,35 @@ rather than quietly turning into `Unknown`.
 
 | What is proved | Net | Test |
 |---|---|---|
-| Each stock subnet is deadlock-free and turns k inputs into exactly k outcomes (`LlmStep`, `Router`, `ToolDispatch`, `TransferRouter`); `PersistState` takes every write | each subnet alone, via `SubnetDef.verify` with `arrivals(k, k)` | `StockSubnetProofsTest` |
-| The reask budget never stacks across user inputs (commitment 6) | `LlmAgentSubnet` | `StockSubnetProofsTest` |
-| The chunk budget never stacks | `LlmStreamingStepSubnet`; the voice demo net | `LlmStreamingStepSubnetTest`, `VoiceSessionDemoTest` |
-| Deadlock-free, and at most one egress event per turn (`eventOutBounded`) | multi-agent demo net | `MultiAgentDemoTest` |
+| Each stock subnet is deadlock-free and turns k inputs into exactly k outcomes (`LlmStep`, `Router`, `ToolDispatch`, `TransferRouter`, and the composed `LlmAgent`: one answer, fallback or transfer per user input); `PersistState` takes every write | each subnet alone, via `SubnetDef.verify` with `arrivals(k, k)` | `StockSubnetProofsTest` |
+| The reask budget never stacks across user inputs (commitment 6) | `LlmAgentSubnet`, two arrivals | `StockSubnetProofsTest` |
+| Deadlock-free with the chunk stream open: every request is taken and every chunk drains to an event or the merged response | `LlmStreamingStepSubnet`, two requests | `LlmStreamingStepSubnetTest` |
+| Deadlock-free; at most one egress event per turn (`eventOutBounded`) | multi-agent demo net | `MultiAgentDemoTest` |
 | Deadlock-free | voice demo net | `VoiceSessionDemoTest` |
-| One winner per turn (one race commit; one quorum synthesis; one optimistic commit, validation verdicts mutually exclusive), deadlock-free | the three pattern demos | `Pattern{A,B,C}_*DemoTest` |
+| One winner per turn: one race commit and one race event; one quorum synthesis and one quorum event; one optimistic commit, with mutually exclusive validation verdicts. Each net is deadlock-free | the three pattern demos, one turn | `Pattern{A,B,C}_*DemoTest` |
+| The race permit never stacks across turns | Pattern A, two arrivals | `PatternA_SpeculativeRaceDemoTest` |
+
+Each row's properties are proved one `verify()` call at a time, through
+the test helper `SmtProofs` or libpetri's `VerificationHarness`.
+`SmtVerifier.property(p)` replaces the property rather than adding one, so
+a chain of `.property(...)` calls checks only the last.
+
+Two proofs assume atomic firing: the reask budget and the race permit.
+Every other proof runs with libpetri 8.0's in-flight split, which
+verifies a transition as a start step and a completion step whenever
+another transition tests its output with an inhibitor, reset or drain,
+because the executor fires other transitions in between. A synchronous
+action does not close that gap: its outputs land at the end of the
+firing pass, and an inhibitor or reset earlier in the pass does not see
+them. For the two exceptions the assumption is exact. Without it, the
+only counterexample starts the seed transition again while an earlier
+firing of it is in flight, which the Java executor never does (libpetri
+CONC-002), and libpetri's report says so.
+
+The pattern bounds are per turn. The demos do not tag branch results
+with the turn that started them, so a turn that starts while the
+previous one is still committing can see that commit land after its
+reset. Only the permit bound is claimed across turns.
 
 Budget bounds are stated in seeds. libpetri has no weighted output arc,
 so a seed transition that writes N permits is modelled as writing one,

@@ -28,7 +28,7 @@ import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
-import org.libpetri.adk.verify.AdkNetInvariants;
+import org.libpetri.adk.verify.SmtProofs;
 import org.libpetri.smt.SmtProperty;
 import org.libpetri.smt.SmtVerifier;
 
@@ -64,8 +64,9 @@ import org.libpetri.smt.SmtVerifier;
  * <h2>Topology</h2>
  * <pre>
  *   [USER_IN]       --T_StartBoth--> AND(CHEAP_TRIGGER, SLOW_TRIGGER)
- *                                    reset(COMMITTED, VALIDATION_*,
- *                                          CHEAP_DONE, SLOW_DONE)
+ *                                    reset(COMMITTED, VALIDATION_*, *_TRIGGER,
+ *                                          CHEAP_DONE, SLOW_DONE, CHEAP_PENDING,
+ *                                          SLOW_DISCARDED)
  *   [CHEAP_TRIGGER] --T_RunCheap-->  [CHEAP_DONE]
  *   [SLOW_TRIGGER]  --T_RunSlow-->   [SLOW_DONE]   (inhibitor COMMITTED)
  *
@@ -90,6 +91,15 @@ import org.libpetri.smt.SmtVerifier;
  *       respective downstream guards.</li>
  *   <li>{@code deadlockFree} with all sink places declared.</li>
  * </ul>
+ *
+ * <p>The XOR, not {@code inhibitor(COMMITTED)}, is what keeps this at one
+ * commit. An inhibitor reads the marking as of the start of an orchestrator
+ * pass, so two commits enabled in the same pass would both fire (Pattern A
+ * lost its bound that way). Here only one commit is ever enabled in a turn:
+ * {@code T_Validate} picks one branch, and the only other candidate, a
+ * second {@code SLOW_DONE}, would reach the same {@code T_CommitSlow}, which
+ * the executor never starts again while it is in flight. Each property is
+ * proved on its own, without {@code assumeAtomicFiring}.
  */
 class PatternC_OptimisticCommitDemoTest {
 
@@ -190,34 +200,33 @@ class PatternC_OptimisticCommitDemoTest {
                 /*passThreshold*/ 50,
                 Duration.ofMillis(30),
                 Duration.ofMillis(200)));
-        var result = SmtVerifier.forNet(net)
-                .initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
-                .sinkPlaces(
-                        AdkColours.EVENT_OUT,
-                        COMMITTED,
-                        SLOW_DISCARDED,
-                        VALIDATION_PASSED,
-                        VALIDATION_FAILED,
-                        CHEAP_PENDING)
-                // Strict deadlock-freedom (libpetri 5.0+) reads a resting
-                // token on a non-sink place as a stranding. SLOW_TRIGGER is
-                // stranded by design once the cheap path commits: Opt_RunSlow
-                // is inhibited by COMMITTED, which is the cancellation. Excuse
-                // it only under that marker, so a SLOW_TRIGGER left behind
-                // without a commit would still be reported.
-                .sinkPlacesWhen(COMMITTED, SLOW_TRIGGER)
-                .property(SmtProperty.placeBound(COMMITTED, 1))
-                .property(SmtProperty.mutualExclusion(
-                        VALIDATION_PASSED, VALIDATION_FAILED))
-                .property(SmtProperty.deadlockFree())
-                .verify();
-        // libpetri validates every Proven (an IC3 certificate or a closed
-        // state-space enumeration) and replays every counterexample, so a
-        // verdict it cannot back comes back Unknown. Assert the strong form: this
-        // project claims a proof here, and isViolated()==false alone would
-        // also pass on Unknown, letting the claim rot silently.
-        assertThat(result.isProven()).isTrue();
-        assertThat(result.isViolated()).isFalse();
+        // One verify() per property: SmtVerifier.property() replaces rather
+        // than adds, so a chain would check only the last one. No
+        // assumeAtomicFiring: these hold with every commit split into start
+        // and completion (VER-004).
+        SmtProofs.assertEachProven(net,
+                v -> v.initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
+                        .sinkPlaces(
+                                AdkColours.EVENT_OUT,
+                                COMMITTED,
+                                SLOW_DISCARDED,
+                                VALIDATION_PASSED,
+                                VALIDATION_FAILED,
+                                CHEAP_PENDING)
+                        // Strict deadlock-freedom (libpetri 5.0+) reads a resting
+                        // token on a non-sink place as a stranding. SLOW_TRIGGER is
+                        // stranded by design once the cheap path commits: Opt_RunSlow
+                        // is inhibited by COMMITTED, which is the cancellation. Excuse
+                        // it only under that marker, so a SLOW_TRIGGER left behind
+                        // without a commit would still be reported.
+                        .sinkPlacesWhen(COMMITTED, SLOW_TRIGGER),
+                Map.of(
+                        "one commit per turn: placeBound(COMMITTED, 1)",
+                        SmtProperty.placeBound(COMMITTED, 1),
+                        "validation verdicts exclusive: mutualExclusion(PASSED, FAILED)",
+                        SmtProperty.mutualExclusion(VALIDATION_PASSED, VALIDATION_FAILED),
+                        "deadlockFree",
+                        SmtProperty.deadlockFree()));
     }
 
     // ============================================================
@@ -237,7 +246,11 @@ class PatternC_OptimisticCommitDemoTest {
 
                 .transition(Transition.builder(T_START_BOTH)
                         .inputs(Arc.In.one(AdkColours.USER_IN))
+                        // Triggers too: a turn the cheap path won can leave
+                        // SLOW_TRIGGER behind, and a long-lived session would
+                        // otherwise run every stale one on the next turn.
                         .resets(COMMITTED, VALIDATION_PASSED, VALIDATION_FAILED,
+                                CHEAP_TRIGGER, SLOW_TRIGGER,
                                 CHEAP_DONE, SLOW_DONE, CHEAP_PENDING, SLOW_DISCARDED)
                         .outputs(Arc.Out.and(CHEAP_TRIGGER, SLOW_TRIGGER))
                         .build())

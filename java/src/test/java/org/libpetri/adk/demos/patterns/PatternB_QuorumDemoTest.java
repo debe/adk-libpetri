@@ -29,6 +29,7 @@ import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
+import org.libpetri.adk.verify.SmtProofs;
 import org.libpetri.smt.SmtProperty;
 import org.libpetri.smt.SmtVerifier;
 
@@ -184,28 +185,26 @@ class PatternB_QuorumDemoTest {
                 Duration.ofMillis(90),
                 Duration.ofMillis(400),
                 Duration.ofMillis(800))));
-        var result = SmtVerifier.forNet(net)
-                .initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
-                .sinkPlaces(
-                        AdkColours.EVENT_OUT,
-                        QUORUM_MET,
-                        DISCARDED,
-                        // RESULT can hold up to N-K leftover tokens until
-                        // the absorber drains them; declaring it as a sink
-                        // lets the deadlock-free check ignore the natural
-                        // post-quorum tail.
-                        RESULT)
-                .property(SmtProperty.placeBound(QUORUM_MET, 1))
-                .property(SmtProperty.placeBound(AdkColours.EVENT_OUT, 1))
-                .property(SmtProperty.deadlockFree())
-                .verify();
-        // libpetri validates every Proven (an IC3 certificate or a closed
-        // state-space enumeration) and replays every counterexample, so a
-        // verdict it cannot back comes back Unknown. Assert the strong form: this
-        // project claims a proof here, and isViolated()==false alone would
-        // also pass on Unknown, letting the claim rot silently.
-        assertThat(result.isProven()).isTrue();
-        assertThat(result.isViolated()).isFalse();
+        // One verify() per property: SmtVerifier.property() replaces rather
+        // than adds, so a chain would check only the last one.
+        SmtProofs.assertEachProven(net,
+                v -> v.initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
+                        .sinkPlaces(
+                                AdkColours.EVENT_OUT,
+                                QUORUM_MET,
+                                DISCARDED,
+                                // RESULT can hold up to N-K leftover tokens until
+                                // the absorber drains them; declaring it as a sink
+                                // lets the deadlock-free check ignore the natural
+                                // post-quorum tail.
+                                RESULT),
+                Map.of(
+                        "one synthesis per turn: placeBound(QUORUM_MET, 1)",
+                        SmtProperty.placeBound(QUORUM_MET, 1),
+                        "one egress event per turn: placeBound(EVENT_OUT, 1)",
+                        SmtProperty.placeBound(AdkColours.EVENT_OUT, 1),
+                        "deadlockFree",
+                        SmtProperty.deadlockFree()));
     }
 
     // ============================================================

@@ -86,28 +86,58 @@ unconditionally and hide a real stranding mid-turn. Each one is declared with
 while the marker that explains it holds a token: `RACE_WON`, `COMMITTED`, or
 the place the turn ended in.
 
-### 8.0: in-flight splitting (VER-004). No proof changed.
+### 8.0: in-flight splitting (VER-004). Two claims were false.
 
 Transitions whose outputs another transition tests with an inhibitor, reset
 or drain are now verified as start and complete steps. That covers every
 commit and branch transition in Patterns A and C, and
 `LlmAgent_BuildPrompt`. This was the change most likely to falsify a mutex
 claim, because two inhibitor-guarded commits could both start before either
-deposited. It did not: `placeBound(RACE_WON, 1)`, `placeBound(EVENT_OUT, 1)`
-and `placeBound(COMMITTED, 1)` are still Proven under the split, so the
-permit-place rewrite we had prepared was unnecessary. We did not set
-`assumeAtomicFiring(true)`; it would have hidden exactly the race the split
-checks for.
+deposited.
+
+The first pass of this upgrade recorded that no proof changed. That was
+wrong, and the tests could not have shown it. Every multi-property test
+chained `.property(...)` calls on one `SmtVerifier`, and
+`SmtVerifier.property(p)` replaces the property rather than adding one, so
+each test checked only its last property, which was `deadlockFree()` in
+most of them. Checked one `verify()` at a time:
+
+| Claim | Verdict alone | Outcome |
+|---|---|---|
+| Pattern A `placeBound(RACE_WON, 1)`, `placeBound(EVENT_OUT, 1)` | Violated | A real bug, not a modelling artefact. `inhibitor(RACE_WON)` reads the marking as of the start of an orchestrator pass and a commit deposits at its end (EXEC-003 AC5), so two branch results ready in one pass both commit on `BitmapNetExecutor`: `RACE_WON` and `EVENT_OUT` reach 2. Fixed structurally: `StartRace` seeds one `RACE_PERMIT` and every commit consumes it. Both bounds now prove without `assumeAtomicFiring`, and a regression test replays the double-commit marking. |
+| Pattern C `placeBound(COMMITTED, 1)`, `mutualExclusion(VALIDATION_PASSED, VALIDATION_FAILED)` | Proven | The XOR on validation, not the inhibitor, is what excludes a second commit: only one commit is ever enabled in a turn. |
+| Pattern B `placeBound(QUORUM_MET, 1)`, `placeBound(EVENT_OUT, 1)` | Proven | One synthesis transition, which the executor never restarts while in flight (CONC-002). |
+| Voice `CHUNK_BUDGET` bound | Violated | The budget bounded nothing: `EmitChunk` returned the permit it took, and overlapping requests reached K+1 at runtime. Removed from `LlmStreamingStepSubnet` and `StreamingLlmAgentSubnet`. The streaming step's own proof seeded no request and held even at bound 0; it is replaced by a seeded deadlock-freedom proof with a starved-emit mutant that must come back Violated. |
+| Multi-agent `deadlockFree()` | Proven | Unchanged. |
+
+Every SMT test now proves one property per `verify()` call, through the
+`SmtProofs` test helper or a `VerificationHarness` (which does accumulate),
+and asserts `isProven()` per property.
+
+Two proofs set `assumeAtomicFiring(true)`: the reask budget and the Pattern A
+race permit, each across two arrivals. The assumption is exact for both, but
+not for the reason first given (that a completed future's outputs land in
+the same step; they land at the end of the pass). Without it, the only
+counterexample starts the seed transition again while an earlier firing is in
+flight. libpetri's report flags that (CONC-002), and the Java executor never
+does it. Modelling the rule directly, with a token the transition takes at
+start and returns at completion, both bounds prove with the split in place
+(checked once with a throwaway model, not part of the build).
+Every other proof runs with the split. The Pattern A commit bounds are
+claimed per turn only: across overlapping turns a commit still in flight
+when the next turn starts lands after that turn's reset, and the demo does
+not tag results with their turn.
 
 ### Everything else: no fallout
 
-- `VoiceSessionDemoTest` and `PatternB_QuorumDemoTest` stay Proven unchanged.
+- `PatternB_QuorumDemoTest` stays Proven, now property by property. The voice
+  net stays deadlock-free.
 - No class implements `PetriNetExecutor` (6.1 added methods). No switch over
   `TerminationReason` (7.0 added `TERMINAL`) or `SmtProperty` (6.0 added
   `QuiescentCount`). No record patterns on `SmtVerificationResult`.
 - The 5.0 Xor output validation and the 8.0 build-time arc checks rejected
   nothing in the stock subnets.
-- 213 tests, 0 skipped, with `REQUIRE_Z3=1`.
+- 239 tests, 0 skipped, with `REQUIRE_Z3=1`.
 
 ## Consequences
 
@@ -115,6 +145,9 @@ checks for.
   The adk-libpetri runtime does not.
 - Our deadlock-freedom claims are now strictly stronger: they assert that
   nothing is left behind unexplained, not just that a sink was reached.
+- A proof is only as good as the property it actually checks. One property
+  per `verify()` call is now the rule, and a new proof should be shown to
+  fail on a variant that breaks it before it is trusted.
 
 ## Follow-up
 
@@ -135,5 +168,6 @@ The items this ADR first deferred were taken up in the same release:
 
 Unchanged from [ADR 0002](0002-adk-version-compat.md). Add one step: run the
 SMT suite with `REQUIRE_Z3=1` and, for any proof that flips, print the
-`SmtVerificationResult`. libpetri's report names the stranded places and
+`SmtVerificationResult`. A flip in a mutex or bound proof is worth replaying
+on `BitmapNetExecutor`, as Pattern A's was. libpetri's report names the stranded places and
 gives a confirmed trace, which is faster than reasoning from the CHANGELOG.

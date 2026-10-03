@@ -31,8 +31,37 @@ existed.
   optimistic-commit and multi-agent demo proofs now declare their by-design
   leftovers (cancelled triggers, an unspent reask budget) with
   `sinkPlacesWhen(marker, ...)`, which excuses them only while the
-  explaining marker holds. Every mutex and bound claim still proves under
-  libpetri 8.0's in-flight splitting.
+  explaining marker holds.
+- **Fix: proof tests checked only their last property.** Every test that
+  chained `.property(...)` calls on one `SmtVerifier` (the multi-agent,
+  voice and three pattern demos) verified only the last one, because
+  `SmtVerifier.property(p)` replaces the property rather than adding one.
+  The bounds in front of `deadlockFree()` were never checked, and three of
+  them did not hold: both speculative-race bounds and the voice net's chunk
+  budget. Each property now gets its own `verify()`
+  call through the new `SmtProofs` test helper, and each asserts
+  `isProven()` on its own.
+- **Fix: the speculative-race demo could commit twice.** Its commits
+  excluded each other with `inhibitor(RACE_WON)`, but an inhibitor reads
+  the marking as of the start of an orchestrator pass, and a commit's
+  deposit lands at the end of it. Two branch results ready in the same pass
+  both committed, so the turn emitted two events. Each commit now consumes
+  the turn's single `RACE_PERMIT`, a regression test replays the
+  double-commit marking, and the one-commit and one-event bounds prove
+  without `assumeAtomicFiring`. `StartRace` also resets the triggers that
+  cancelled branches leave behind, and the optimistic-commit demo resets
+  its triggers the same way. The optimistic-commit demo never had the
+  double commit, because its validation XOR enables only one commit per
+  turn. The README's speculative-race case and diagram now show the permit.
+- **The streaming chunk budget is gone.** `CHUNK_BUDGET` bounded nothing:
+  `EmitChunk` returned the permit it took, emission is serial anyway (the
+  action is synchronous and the Java executor never restarts a transition
+  in flight), and overlapping requests pushed the place to K+1. Its proof
+  passed only because nothing seeded a request. `LlmStreamingStepSubnet`
+  now has two transitions, `LlmCallStream` (which takes `LLM_REQUEST`
+  directly) and `EmitChunk`. Its proof is now deadlock-freedom with two
+  requests and the chunk stream open, checked against a variant with a
+  starved emit that must come back Violated.
 - **Fix: re-asks carry the whole invocation.** `LlmAgentSubnet`'s re-ask
   (shared by `StreamingLlmAgentSubnet`) sent only the function responses,
   which Gemini rejects because it pairs each response with the preceding
@@ -51,10 +80,15 @@ existed.
   reaped it and stranded the write. It is now an action timeout,
   `Config.persistTimeout` (default 5 s).
 - **Proofs match the README.** `StockSubnetProofsTest` proves each stock
-  subnet alone (`SubnetDef.verify`, `arrivals(k, k)`); the reask budget is
-  proved not to stack across inputs (design commitment 6); `eventOutBounded`
-  is proved on the multi-agent net. Budget bounds are stated in seeds,
-  since libpetri models an N-permit seed as one token.
+  subnet alone (`SubnetDef.verify`, `arrivals(k, k)`), and the composed
+  `LlmAgentSubnet` turns every user input into exactly one answer,
+  fallback or transfer; the reask budget is proved not to stack across
+  inputs (design commitment 6); `eventOutBounded` is proved on the
+  multi-agent net. Budget bounds are stated in seeds, since libpetri
+  models an N-permit seed as one token. Two proofs, the reask budget and
+  the race permit, assume atomic firing; the README says why that is
+  exact on the Java executor. Every other proof runs with libpetri 8.0's
+  in-flight split.
 - **Wiring helpers.** `SubnetActions.merge` and `bindComposed` bind a
   composed net's maps in one checked call. `PetriAgent.builder(...)`, with
   the owner extractor optional under `strongOwned()` (new
@@ -85,6 +119,11 @@ existed.
   carries a `Timing.deadline`.
 - `AdkNetInvariants.noFireAfterEndInvocation` is removed; use
   `SmtProperty.mutualExclusion(AdkColours.END_INVOCATION, place)`.
+- *(experimental)* `LlmStreamingStepSubnet` drops `Places.CHUNK_BUDGET`,
+  `Places.LLM_REQUEST_INTERNAL`, `Transitions.SEED_AND_START` and
+  `Config.chunkBudget` (the record component and the builder method);
+  `StreamingLlmAgentSubnet.Config` drops `chunkBudget` too. Remove the
+  `.chunkBudget(n)` call; nothing replaces it.
 
 
 ## Java 0.4.0 - 2026-08-21

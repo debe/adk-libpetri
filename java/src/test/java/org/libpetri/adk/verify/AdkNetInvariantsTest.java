@@ -253,7 +253,7 @@ class AdkNetInvariantsTest {
     }
 
     // ============================================================
-    //  SMT verification — requires Z3 native libs at runtime
+    //  SMT verification — requires a z3 binary at runtime
     // ============================================================
 
     @Test

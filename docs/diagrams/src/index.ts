@@ -149,9 +149,11 @@ function staleResultValidation(): void {
 // 3. Speculative race in composition: both paths fire from t=0;
 //    slow wins if it completes within the deadline; otherwise the
 //    fast result commits when TIMER_EXPIRED lands. At-most-once
-//    enforced by inhibitor(RESPONSE_SENT). A user barge-in or new
-//    turn atomically cancels the in-flight race and re-arms the
-//    lock for the next round via reset arcs on every race place.
+//    enforced by a single RESPONSE_PERMIT that every commit consumes
+//    (an inhibitor reads the pass-start marking, so two commits ready
+//    in one pass would both pass it). A user barge-in or new turn
+//    atomically cancels the in-flight race, permit included, via reset
+//    arcs on every race place; StartBoth seeds a fresh permit.
 // ============================================================
 function speculativeRace(): void {
   const REQUEST = place<unknown>('REQUEST');
@@ -162,13 +164,14 @@ function speculativeRace(): void {
   const TIMER_PENDING = place<unknown>('TIMER_PENDING');
   const TIMER_EXPIRED = place<unknown>('TIMER_EXPIRED');
   const RESPONSE = place<unknown>('RESPONSE');
-  const RESPONSE_SENT = place<unknown>('RESPONSE_SENT');
+  const RESPONSE_PERMIT = place<unknown>('RESPONSE_PERMIT');
   const USER_INTERRUPT = place<unknown>('USER_INTERRUPT');
   const CANCELED = place<unknown>('CANCELED');
 
   const startBoth = Transition.builder('StartBoth')
     .inputs(one(REQUEST))
-    .outputs(and(outPlace(SLOW_INFLIGHT), outPlace(FAST_INFLIGHT), outPlace(TIMER_PENDING)))
+    .outputs(and(outPlace(SLOW_INFLIGHT), outPlace(FAST_INFLIGHT), outPlace(TIMER_PENDING), outPlace(RESPONSE_PERMIT)))
+    .reset(RESPONSE_PERMIT)
     .build();
 
   const timerFires = Transition.builder('TimerFires')
@@ -188,15 +191,13 @@ function speculativeRace(): void {
     .build();
 
   const commitSlow = Transition.builder('CommitSlow')
-    .inputs(one(SLOW_DONE))
-    .inhibitor(RESPONSE_SENT)
-    .outputs(and(outPlace(RESPONSE), outPlace(RESPONSE_SENT)))
+    .inputs(one(SLOW_DONE), one(RESPONSE_PERMIT))
+    .outputs(outPlace(RESPONSE))
     .build();
 
   const commitFastOnTimeout = Transition.builder('CommitFastOnTimeout')
-    .inputs(one(FAST_DONE), one(TIMER_EXPIRED))
-    .inhibitor(RESPONSE_SENT)
-    .outputs(and(outPlace(RESPONSE), outPlace(RESPONSE_SENT)))
+    .inputs(one(FAST_DONE), one(TIMER_EXPIRED), one(RESPONSE_PERMIT))
+    .outputs(outPlace(RESPONSE))
     .build();
 
   const onBargeIn = Transition.builder('OnBargeInOrNewTurn')
@@ -207,7 +208,7 @@ function speculativeRace(): void {
     .reset(FAST_DONE)
     .reset(TIMER_PENDING)
     .reset(TIMER_EXPIRED)
-    .reset(RESPONSE_SENT)
+    .reset(RESPONSE_PERMIT)
     .outputs(outPlace(CANCELED))
     .build();
 
@@ -270,20 +271,21 @@ function bidiComposition(): void {
   const EVENT_OUT = place<unknown>('EVENT_OUT');
 
   const LLM_STREAMING = place<unknown>('LLM_STREAMING');
-  const CHUNK_BUDGET = place<unknown>('CHUNK_BUDGET');
+  const CHUNK = place<unknown>('CHUNK');
   const NUDGE_SENT = place<unknown>('NUDGE_SENT');
   const RECONNECT_NEEDED = place<unknown>('RECONNECT_NEEDED');
   const BARGE_DISCARDED = place<unknown>('BARGE_DISCARDED');
 
   const beginStream = Transition.builder('BeginStream')
     .inputs(one(USER_IN))
-    .outputs(and(outPlace(LLM_STREAMING), outPlace(CHUNK_BUDGET), outPlace(CHUNK_BUDGET), outPlace(CHUNK_BUDGET)))
-    .reset(CHUNK_BUDGET)
+    .outputs(outPlace(LLM_STREAMING))
     .build();
 
+  // Each model chunk is injected into the CHUNK env place and emitted in
+  // arrival order, one per firing.
   const emitChunk = Transition.builder('EmitChunk')
-    .inputs(one(CHUNK_BUDGET))
-    .outputs(and(outPlace(CHUNK_BUDGET), outPlace(CHUNK_OUT)))
+    .inputs(one(CHUNK))
+    .outputs(outPlace(CHUNK_OUT))
     .read(LLM_STREAMING)
     .build();
 
@@ -327,7 +329,7 @@ function bidiComposition(): void {
     dotExport(
       net,
       baseConfig(
-        ['USER_IN', 'CHUNK_OUT', 'INTERRUPTED', 'VOICE_ACTIVITY_OPEN', 'MODEL_ACTIVE', 'RESPONSE_AWAITED', 'EVENT_OUT'],
+        ['USER_IN', 'CHUNK', 'CHUNK_OUT', 'INTERRUPTED', 'VOICE_ACTIVITY_OPEN', 'MODEL_ACTIVE', 'RESPONSE_AWAITED', 'EVENT_OUT'],
         'LR',
       ),
     ),
