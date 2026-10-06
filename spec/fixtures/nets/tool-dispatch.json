@@ -1,0 +1,44 @@
+{
+  "name": "ToolDispatch",
+  "places": [
+    {
+      "name": "toolCalls",
+      "type": "ToolCalls"
+    },
+    {
+      "name": "toolResults",
+      "type": "ToolResults"
+    }
+  ],
+  "ports": [
+    {
+      "direction": "in",
+      "name": "toolCalls",
+      "place": "toolCalls"
+    },
+    {
+      "direction": "out",
+      "name": "toolResults",
+      "place": "toolResults"
+    }
+  ],
+  "transitions": [
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "toolCalls"
+        }
+      ],
+      "match": null,
+      "name": "ToolDispatch_Dispatch",
+      "output": "toolResults",
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    }
+  ]
+}

@@ -1,43 +1,99 @@
 # docs/diagrams
 
-Diagram generation for the topologies embedded in the root README. The
-script builds each net via the `libpetri` npm package, exports it to DOT
-via `libpetri/export`, and renders the DOT to SVG via graphviz `dot`.
+Diagram generation for the net topologies embedded in the root README.
+
+## Provenance rule
+
+A diagram of a real net is exported from a net the tests build, never
+drawn by hand. There are three sources, and each writes its own files
+in `dot/`:
+
+1. **Java nets**: `ReadmeDiagramsTest`
+   (`java/src/test/java/org/libpetri/adk/docs/`) builds each net (the
+   whole net, or a view of named transitions from it), exports it with
+   libpetri's Java `DotExporter`, post-processes it and compares it with
+   the committed file. A drift fails `mvn verify`.
+2. **Python nets**: `python/tests/readme_diagrams/` compiles a sample
+   workflow from `python/tests/workflow/samples.py` with
+   `compile_workflow`, exports a view of it with libpetri-py's
+   `dot_export`, post-processes it to the same conventions and compares
+   it with the committed `workflow-*.dot`. A drift fails `pytest`.
+3. **Sketches**: `src/index.ts` builds a small net with the `libpetri`
+   npm package, applies the same conventions and writes
+   `dot/sketch-*.dot`. Sketches are not nets this project runs and are
+   not proved; the root README captions them *Illustrative*, and their
+   place names stay in UPPER_SNAKE prose form.
+
+All three sources post-process to the same conventions: each place's
+name sits inside the place (an ellipse, not a circle with an `xlabel`,
+which graphviz may park beside another node), mid-edge labels that
+repeat what the style or the target already says are dropped (`read`,
+XOR branch names), and seed markers (`●`, `●×K`), 12 pt edge labels, a
+white background and `pad` are added. In a view, a place that a
+transition outside the view also uses is drawn as a dotted grey cut
+place. The Java test and the sketches also drop the mid-edge `reset`
+label (`reset+out` stays), order each junction's branches
+(`ordering="out"`) and collapse a transition's reset arcs into one
+bundle note. The Java test can group a view into subnet clusters; inside
+a cluster the `<Subnet>_` prefix is dropped from labels. The Python
+helper (`_dot.py`) draws flat views without clusters and drops a reset
+arc to a place no transition produces. Each Java and Python export
+starts with a `// GENERATED` header naming its source; do not edit it,
+or a sketch DOT, by hand.
+
+Hand-drawn SVGs (the cover, the legend, the runner seam, ingress and
+egress, the BIDI halves, the repository layout) live in `docs/assets/`,
+not here.
 
 ## Regenerating
 
+Three steps, from the repository root:
+
 ```bash
-cd docs/diagrams
-npm install
-npm run build
+cd java && ./mvnw test -Dtest=ReadmeDiagramsTest -Dreadme.diagrams.write=true
+cd ../python && READMEDIAGRAMS_WRITE=1 pytest tests/readme_diagrams
+cd ../docs/diagrams && npm install && npm run build
 ```
 
-The `build` script writes DOT files to `dot/` and SVGs to `svg/`.
-Both directories are checked into the repository so a reader on
-GitHub sees the diagrams without running anything.
-
-## Topology source
-
-The TS topologies in `src/index.ts` mirror the Java subnet sources
-under `java/src/main/java/org/libpetri/adk/subnet/` and the voice demo
-subnets under `java/src/test/java/org/libpetri/adk/demos/voice/`. They
-are intended as readable diagrams, not as compile-equivalent ports.
-When the Java topology changes in a way that affects the diagram,
-edit `src/index.ts` and rerun `npm run build`.
+The first two steps rewrite the Java and Python exports in `dot/` (the
+Python step runs in the `python/` venv); skip the one whose port you
+did not touch. `npm run build` runs `sketches`
+(writes `dot/sketch-*.dot`) and then `render`, which runs graphviz
+`dot -Tsvg` over every `dot/*.dot` into `svg/`. Both directories are
+checked in, so a reader on GitHub sees the diagrams without running
+anything. When a diagram is removed, delete its `.dot` and its `.svg`.
 
 ## Required tools
 
-- Node.js 20 or later for the `tsx` runner.
-- graphviz `dot` on the path. On Debian or Ubuntu install with
-  `apt install graphviz`.
+- The golden checks need only Java and Maven, or Python with the
+  `python/` dev install; CI runs both without graphviz.
+- Node.js 20 or later for the `tsx` runner, and graphviz `dot` on the
+  path, are needed only to regenerate the SVGs locally. On Debian or
+  Ubuntu install graphviz with `apt install graphviz`.
 
 ## What gets rendered
 
-| File | Embedded in | What it shows |
+Section names are the root README's headings.
+
+| File | Source | Embedded in (root README) |
 |---|---|---|
-| `svg/llm-agent-subnet.svg`         | `README.md` (stock subnet catalog) | The canonical agent loop: StartTurn taking the turn permit, BuildPrompt, LlmStep, Router with `Out.xor`, ToolDispatch, the reask-budget loop over the conversation place, EmitAnswer/EmitTransfer returning the permit, and AbortTurn/DropAbort on `TURN_ABORT`. |
-| `svg/stateful-monitor.svg`         | `README.md` (stateful-monitor bullet) | Batch-scoped fan-in via a `COLLECTOR` token plus the cross-cutting interactions that make it load-bearing. `SpawnJobs`, three `Worker` transitions, and `CollectResult` form the merge loop. `OrthogonalRead` reads `COLLECTOR` via a read arc so other subnets can snapshot the in-flight batch atomically. `OnNewUserTurn` consumes `USER_NEW_TURN` and resets `COLLECTOR`, `JOB_A/B/C`, and `SEARCH_RESULT` in one transition firing. |
-| `svg/stale-result-validation.svg`  | `README.md` (stale-result bullet) | Two divergent commit sites (`ValidateToolResult` and `ValidateStreamChunk`) share the same `read(LATEST_GENERATION)` arc and XOR-route to a committed or discarded leaf. `BumpGeneration` consumes `USER_NEW_TURN` and applies `reset(LATEST_GENERATION)` plus an output, atomically invalidating every in-flight result. |
-| `svg/speculative-race.svg`         | `README.md` (speculative-race bullet) | Both `SlowInflight` and `FastInflight` start from t=0. `TimerFires` produces `TIMER_EXPIRED` after 2s. `StartBoth` also seeds one `RESPONSE_PERMIT`, which `CommitSlow` and `CommitFastOnTimeout` each consume, so at most one commits. `OnBargeInOrNewTurn` consumes `USER_INTERRUPT` and applies `reset` to every race place plus the permit, atomically cancelling the in-flight race. |
-| `svg/reask-budget.svg`             | `README.md` (bounding autonomous loops) | The reask-budget pattern isolated: priority plus inhibitor on a `Place<Void>`. |
-| `svg/bidi-composition.svg`         | `README.md` (voice and full-duplex failure modes) | The composed BIDI net: streaming chunk emission from the `CHUNK` env place, barge-in inhibitor and read pair, two-stage silence recovery. |
+| `workflow-router` | Python, `compile_workflow(samples.router())`, view: `Wf_Start`, `Wf_classify_Run`, `Wf_handle_bug_Run`, `Wf_handle_other_Run`, `Wf_EndTurnOutput` | From Workflow to net: from_workflow (Python, experimental) |
+| `workflow-back-edge-budget` | Python, `compile_workflow(samples.looping(), back_edge_budget={('counter', 'counter'): 3})`, view: `Wf_Start`, `Wf_counter_Run`, `Wf_Edge_counter_counter`, `Wf_Edge_counter_counter_Exhausted`, `Wf_finish_Run` | From Workflow to net: from_workflow (Python, experimental) |
+| `llm-agent-turn-shell` | Java view of `LlmAgentSubnet.DEF`: StartTurn, BuildPrompt, EmitAnswer, EmitTransfer, AbortTurn, DropAbort | G1 One turn at a time, and no stranded turn |
+| `reask-budget` | Java view of `LlmAgentSubnet.DEF`: BuildPrompt, ReAsk, ReAskExhaustedFallback, EmitAnswer | G2 Bounded autonomous loops (reask budget) |
+| `transfer-router` | Java, `TransferRouterSubnet.def` with `billing` and `tech_support` | G3 Typed fallbacks: no dead letters |
+| `speculative-race` | Java, `PatternA_SpeculativeRaceDemoTest.buildNet()` | G4 At most one commit per turn: race, optimistic commit, quorum |
+| `quorum` | Java, `PatternB_QuorumDemoTest.buildNet()` | G4 At most one commit per turn: race, optimistic commit, quorum |
+| `optimistic-commit` | Java, `PatternC_OptimisticCommitDemoTest.buildNet()` | G4 At most one commit per turn: race, optimistic commit, quorum (collapsed) |
+| `escalation-ladder` | Java, `LiveApiRecoverySubnet.def(Config.defaults())` composed into a net, timing shown, one cluster | G5 Escalation ladders: timed recovery as places |
+| `sketch-tiered-sla-ladder` | Sketch, `src/index.ts`, timing shown | G5 Escalation ladders: timed recovery as places (Illustrative) |
+| `vad-bargein` | Java, `VadSubnet.DEF` composed with `BargeInSubnet.DEF`, one cluster per subnet | G6 Full duplex: VAD, barge-in, chunk drop, ordering (experimental) |
+| `barge-in-chunk-drop` | Java, `VoiceSessionDemoTest.bargeInDropNet()` | G6 Full duplex: VAD, barge-in, chunk drop, ordering (experimental) |
+| `sketch-stale-result` | Sketch, `src/index.ts` | N1 Not yet guaranteed: staleness across turns (Illustrative) |
+| `sketch-fanout-monitor` | Sketch, `src/index.ts` | N2 Not yet guaranteed: variable-N fan-out (Illustrative) |
+| `llm-agent-inner-loop` | Java view of `LlmAgentSubnet.DEF`: BuildPrompt, the four `LlmStep` transitions, `Router_Route`, `ToolDispatch_Dispatch`, ReAsk, ReAskExhaustedFallback; `LlmStep` and `ToolDispatch` clusters | How it works › The canonical composition: LlmAgentSubnet |
+
+The legend at `docs/assets/diagram-legend.svg` documents the notation.
+If the post-processing conventions change (in `ReadmeDiagramsTest`,
+`python/tests/readme_diagrams/_dot.py` or `src/index.ts`), change all
+three and the legend with them.

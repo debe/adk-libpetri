@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 848" width="860" height="848" role="img" aria-labelledby="seam-title seam-desc">
+  <title id="seam-title">PetriAgent runner seam</title>
+  <desc id="seam-desc">Sequence of one turn-based invocation: the stock ADK Runner calls PetriAgent, which gets the session's PetriRunner from SessionExecutorRegistry (creating and starting it on the first call), subscribes to the net's egress and failure signal, injects the user message onto USER_IN and returns the event stream at once. Transitions fire, the EventStore chain receives every net event, and the turn's Event reaches the Runner through the returned stream. A transition that fails or times out errors the turn, and the once-per-runner subscription signals TURN_ABORT.</desc>
+  <!-- Intended display width: 860 px (1:1). Drawn from java/.../runner/PetriAgent.java
+       (runAsyncImpl, abortTurnsOnFailure, the factory wrapper in the constructor),
+       PetriRunner.java, EventStoreToFlowableBridge.java, SessionExecutorRegistry.java
+       (close/end/save), and python/src/adk_libpetri/runner/{petri_agent,turn,session_registry}.py.
+       White card, no dark-mode overrides: palette and arrow styles follow diagram-legend.svg
+       ("Component diagrams" row). Labels that cross a lifeline carry a halo in the
+       background colour so no text sits on a line. -->
+  <style>
+    svg { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .bg { fill: #ffffff; stroke: #d0d7de; }
+    .m { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; fill: #1f2328; }
+    .mg { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; fill: #59636e; }
+    .mb { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; font-weight: 600; fill: #1f2328; }
+    .mbs { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; font-weight: 600; fill: #1f2328; }
+    .t { font-size: 11.5px; fill: #1f2328; }
+    .c { font-size: 11px; fill: #59636e; }
+    .k { paint-order: stroke; stroke: #ffffff; stroke-width: 5px; stroke-linejoin: round; }
+    .ka { paint-order: stroke; stroke: #ffebe9; stroke-width: 5px; stroke-linejoin: round; }
+    .box { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1; }
+    .net { fill: #fff8e1; stroke: #b08800; stroke-width: 1.2; }
+    .life { stroke: #afb8c1; stroke-width: 1; stroke-dasharray: 4 4; }
+    .act { fill: #eaeef2; stroke: #8c959f; stroke-width: 0.8; }
+    .msg { stroke: #1f2328; stroke-width: 1.3; fill: none; }
+    .msghead { fill: #1f2328; }
+    .ret { stroke: #57606a; stroke-width: 1.2; fill: none; stroke-dasharray: 5 3; }
+    .rethead { fill: #57606a; }
+    .note { fill: #fff8c5; stroke: #d4a72c; stroke-width: 0.8; }
+    .key { fill: #cf222e; font-weight: 600; }
+    .alt { fill: none; stroke: #cf222e; stroke-width: 1.2; }
+    .altbg { fill: #ffebe9; }
+    .altlab { fill: #cf222e; }
+    .altt { font-size: 11.5px; font-weight: 600; fill: #ffffff; }
+    .foot { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
+  </style>
+  <defs>
+    <marker id="rs-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="msghead" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="rs-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="rethead" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0.5" y="0.5" width="859" height="847" rx="8"/>
+
+  <!-- lifelines -->
+  <line class="life" x1="88" y1="64" x2="88" y2="728"/>
+  <line class="life" x1="254" y1="64" x2="254" y2="728"/>
+  <line class="life" x1="430" y1="64" x2="430" y2="728"/>
+  <line class="life" x1="606" y1="64" x2="606" y2="728"/>
+  <line class="life" x1="772" y1="64" x2="772" y2="728"/>
+
+  <!-- headers -->
+  <rect class="box" x="16" y="16" width="144" height="48" rx="6"/>
+  <text class="mb" x="88" y="36" text-anchor="middle">ADK Runner</text>
+  <text class="c" x="88" y="54" text-anchor="middle">stock, unchanged</text>
+  <rect class="box" x="182" y="16" width="144" height="48" rx="6"/>
+  <text class="mb" x="254" y="36" text-anchor="middle">PetriAgent</text>
+  <text class="c" x="254" y="54" text-anchor="middle">a BaseAgent</text>
+  <rect class="box" x="346" y="16" width="168" height="48" rx="6"/>
+  <text class="mbs" x="430" y="36" text-anchor="middle">SessionExecutorRegistry</text>
+  <text class="c" x="430" y="54" text-anchor="middle">strongOwned · strong_owned</text>
+  <rect class="net" x="534" y="16" width="144" height="48" rx="6"/>
+  <text class="mb" x="606" y="36" text-anchor="middle">PetriRunner</text>
+  <text class="c" x="606" y="54" text-anchor="middle">one net per session</text>
+  <rect class="box" x="700" y="16" width="144" height="48" rx="6"/>
+  <text class="mb" x="772" y="36" text-anchor="middle">EventStore chain</text>
+  <text class="c" x="772" y="54" text-anchor="middle">bridge, then decorators</text>
+
+  <!-- activations -->
+  <rect class="act" x="249" y="96" width="10" height="366"/>
+  <rect class="act" x="425" y="154" width="10" height="156"/>
+  <rect class="act" x="601" y="416" width="10" height="122"/>
+
+  <!-- 1 runAsync -->
+  <line class="msg" x1="89" y1="104" x2="248" y2="104" marker-end="url(#rs-m)"/>
+  <text class="m" x="171" y="98" text-anchor="middle">runAsync(ctx)</text>
+  <text class="mg" x="171" y="120" text-anchor="middle">runAsyncImpl</text>
+  <text class="mg" x="171" y="134" text-anchor="middle">_run_async_impl</text>
+
+  <!-- 2 getOrCreate -->
+  <line class="msg" x1="259" y1="162" x2="424" y2="162" marker-end="url(#rs-m)"/>
+  <text class="m" x="342" y="156" text-anchor="middle">getOrCreate(key)</text>
+  <text class="mg" x="342" y="178" text-anchor="middle">aget_or_create(key)</text>
+
+  <!-- 3 factory start -->
+  <line class="msg" x1="435" y1="206" x2="600" y2="206" marker-end="url(#rs-m)"/>
+  <text class="m" x="518" y="200" text-anchor="middle">factory → start()</text>
+  <text class="c" x="518" y="222" text-anchor="middle">first call for the session only</text>
+
+  <!-- TURN_ABORT subscription, once per runner -->
+  <rect class="note" x="476" y="234" width="370" height="54" rx="4"/>
+  <text class="t" x="486" y="250">once per runner, if the net declares <tspan class="m">TURN_ABORT</tspan>:</text>
+  <text class="m" x="486" y="265">failureSignal → signal(TURN_ABORT)</text>
+  <text class="c" x="486" y="280">Java: in the factory wrapper · Python: after aget_or_create</text>
+
+  <!-- 4 return runner -->
+  <line class="ret" x1="425" y1="304" x2="260" y2="304" marker-end="url(#rs-d)"/>
+  <text class="m" x="342" y="298" text-anchor="middle">PetriRunner</text>
+
+  <!-- 5 subscribe -->
+  <line class="msg" x1="259" y1="338" x2="600" y2="338" marker-end="url(#rs-m)"/>
+  <text class="m k" x="268" y="332">subscribe adkEvents() + failureSignal()</text>
+  <rect class="note" x="264" y="346" width="582" height="54" rx="4"/>
+  <text class="t" x="274" y="362"><tspan class="key">before</tspan> the inject: the egress is hot, so a late subscriber would miss the turn.</text>
+  <text class="m" x="274" y="377">Java: filter(!partial).take(1) · SSE: takeUntil(!partial).replay().connect()</text>
+  <text class="m" x="274" y="392">Python: run_turn(…, sse=…)</text>
+
+  <!-- 6 inject -->
+  <line class="msg" x1="259" y1="424" x2="600" y2="424" marker-end="url(#rs-m)"/>
+  <text class="m k" x="430" y="418" text-anchor="middle">inject(USER_IN, userContent)</text>
+
+  <!-- 7 return the stream at once -->
+  <line class="ret" x1="249" y1="456" x2="94" y2="456" marker-end="url(#rs-d)"/>
+  <text class="m" x="171" y="450" text-anchor="middle">Flowable&lt;Event&gt;</text>
+  <text class="mg" x="171" y="472" text-anchor="middle">AsyncGenerator[Event]</text>
+  <text class="c" x="171" y="488" text-anchor="middle">returned at once;</text>
+  <text class="c" x="171" y="502" text-anchor="middle">events arrive through it</text>
+
+  <!-- 8 transitions fire -->
+  <rect class="note" x="499" y="472" width="214" height="22" rx="4"/>
+  <text class="m" x="606" y="487" text-anchor="middle">transitions fire → EVENT_OUT</text>
+
+  <!-- 9 append -->
+  <line class="msg" x1="611" y1="522" x2="766" y2="522" marker-end="url(#rs-m)"/>
+  <text class="m k" x="689" y="516" text-anchor="middle">append(NetEvent)</text>
+  <text class="c k" x="689" y="536" text-anchor="middle">every event, every transition</text>
+
+  <!-- 10 Event to the Runner through the returned stream -->
+  <line class="ret" x1="771" y1="568" x2="94" y2="568" marker-end="url(#rs-d)"/>
+  <text class="m k" x="430" y="562" text-anchor="middle">Event (EVENT_OUT token, via adkEvents())</text>
+  <text class="c k" x="430" y="584" text-anchor="middle">the bridge forwards EVENT_OUT only; invocationId stamped; the turn then completes</text>
+
+  <!-- alt: failure -->
+  <rect class="altbg" x="24" y="604" width="822" height="114" rx="4"/>
+  <rect class="alt" x="24" y="604" width="822" height="114" rx="4"/>
+  <path class="altlab" d="M24,608 a4,4 0 0 1 4,-4 h232 v14 l-8,8 h-228 z"/>
+  <text class="altt" x="32" y="619">alt  a transition fails or times out</text>
+  <line class="ret" x1="771" y1="650" x2="94" y2="650" marker-end="url(#rs-d)"/>
+  <text class="m ka" x="430" y="644" text-anchor="middle">failureSignal → the turn errors (TransitionFailure)</text>
+  <text class="c ka" x="430" y="666" text-anchor="middle">failureSignal() is control flow, not observability</text>
+  <rect class="note" x="436" y="680" width="404" height="24" rx="4"/>
+  <text class="t" x="446" y="696"><tspan class="m">signal(TURN_ABORT)</tspan> from the once-per-runner subscription</text>
+
+  <!-- footer -->
+  <rect class="foot" x="16" y="740" width="828" height="92" rx="6"/>
+  <text class="t" x="28" y="760">Session end: your hook calls <tspan class="m">registry.close(key)</tspan> (Python also <tspan class="m">await registry.aclose(key)</tspan>). With a checkpoint store it</text>
+  <text class="t" x="28" y="778">drains first, then saves the final marking, or removes the stale checkpoint if the drain does not finish. It returns</text>
+  <text class="t" x="28" y="796">once the runner has terminated. <tspan class="m">cleanerOwned() · finalizer_owned()</tspan> is the opt-in alternative and needs an owner extractor.</text>
+  <text class="c" x="28" y="818">Python: <tspan class="mg">_run_async_impl</tspan> is an async generator; it runs these steps as the Runner iterates it, and yields the events.</text>
+</svg>

@@ -28,6 +28,7 @@ import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
+import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.adk.verify.SmtProofs;
 import org.libpetri.smt.SmtProperty;
 import org.libpetri.smt.SmtVerifier;
@@ -101,7 +102,7 @@ import org.libpetri.smt.SmtVerifier;
  * the executor never starts again while it is in flight. Each property is
  * proved on its own, without {@code assumeAtomicFiring}.
  */
-class PatternC_OptimisticCommitDemoTest {
+public class PatternC_OptimisticCommitDemoTest {
 
     record BranchResult(String branchId, String text, int score) {}
 
@@ -152,7 +153,7 @@ class PatternC_OptimisticCommitDemoTest {
     @Test
     void cheap_path_commits_when_validation_passes_slow_discarded() throws Exception {
         // Validator passes iff score >= 50. Cheap produces score=100, so it passes.
-        var bound = buildNet().bindActions(buildBindings(
+        var bound = SubnetActions.bindComposed(buildNet(), buildBindings(
                 /*cheapScore*/ 100,
                 /*slowScore*/  100,
                 /*passThreshold*/ 50,
@@ -171,7 +172,7 @@ class PatternC_OptimisticCommitDemoTest {
     void slow_path_commits_when_validation_fails() throws Exception {
         // Validator passes iff score >= 50. Cheap produces score=10, fails.
         // Slow produces score=100 and commits via the structural fallback.
-        var bound = buildNet().bindActions(buildBindings(
+        var bound = SubnetActions.bindComposed(buildNet(), buildBindings(
                 /*cheapScore*/ 10,
                 /*slowScore*/  100,
                 /*passThreshold*/ 50,
@@ -194,7 +195,7 @@ class PatternC_OptimisticCommitDemoTest {
         // execution. Verify the bound net, the one that actually runs,
         // rather than an unbound skeleton that could never fire. The
         // actions are never invoked here; only the structure is encoded.
-        var net = buildNet().bindActions(buildBindings(
+        var net = SubnetActions.bindComposed(buildNet(), buildBindings(
                 /*cheapScore*/ 100,
                 /*slowScore*/  100,
                 /*passThreshold*/ 50,
@@ -233,7 +234,7 @@ class PatternC_OptimisticCommitDemoTest {
     //  Net construction
     // ============================================================
 
-    private static PetriNet buildNet() {
+    public static PetriNet buildNet() {
         return PetriNet.builder("optimistic-commit")
                 .place(AdkColours.USER_IN)
                 .place(AdkColours.EVENT_OUT)

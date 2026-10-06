@@ -90,8 +90,8 @@ other three, and two flagship cases are prose-only.** Proof surface as it stands
 | Speculative race (Pattern A) | yes | yes | `PlaceBound(EVENT_OUT, 1)` |
 | K-of-N quorum (Pattern B) | yes | yes | exactly-one-synthesis (Z3) |
 | Optimistic commit (Pattern C) | yes | yes | at-most-one-commits (Z3) |
-| README Case 1: fan-out batch state | no | no | none (SVG + prose) |
-| README Case 2: stale-result / generation | no | no | none (SVG + prose) |
+| README Case 1 (now N2): fan-out batch state | no | no | none (SVG + prose) |
+| README Case 2 (now N1): stale-result / generation | no | no | none (SVG + prose) |
 | Streaming (SSE) | yes | **no** | `CHUNK_BUDGET <= K` (Z3) |
 | Voice (BIDI) | yes | **no** | deadlock-free + bounded SCG (Z3) |
 
@@ -103,7 +103,7 @@ Honest reading:
   invariants but no ADK-only foil. The strongest real-world argument (ADK's
   `GeminiLlmConnection` drops the VAD / barge-in edges) is asserted in docs,
   never run.
-- **Prose + SVG only:** README Cases 1 and 2 have no `COLLECTOR` /
+- **Prose + SVG only:** README Cases 1 and 2 (now N2 and N1) have no `COLLECTOR` /
   `LATEST_GENERATION` net in the test tree.
 - **Two overclaims:** `MultiAgentDemoTest` narrates an `AgentTransfer` NPE in a
   comment but never runs stock `AgentTransfer` with a bad name; `PatternC`'s
@@ -179,7 +179,7 @@ clear, correct code):
       the reintroduced check-and-act window). A deterministic race demo is out of
       scope and would be flaky; the net closes the window by construction, proven
       by the paired at-most-one-commit Z3 property.
-- [x] **README Cases 1 and 2:** demoted to "illustrative" with a one-line honesty
+- [x] **README Cases 1 and 2 (now N2 and N1):** demoted to "illustrative" with a one-line honesty
       note pointing here; backing them with demo + foil + SMT remains open below.
 - [x] **Framing fixes (docs):** `patterns/package-info` restated as
       "escape-required + guarantees-forfeited"; the `elapsedMs` latency wins

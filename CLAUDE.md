@@ -14,9 +14,11 @@ consumes turn-based sessions through the `PetriAgent extends
 BaseAgent` adapter; Live/BIDI paths bridge via `BidiPetriAgent`
 over `LiveConnection`. There is no ADK source fork.
 
-The repo follows libpetri's multi-language layout (`java/`,
-eventually `typescript/`, `rust/`, `python/`). It is currently Java
-only. The layout is multi-language-ready for trivial port additions.
+The repo follows libpetri's multi-language layout: `java/` and `python/`
+(ADK Python 2.x, `adk_libpetri`), eventually `typescript/` and `rust/`. The
+Python port mirrors the Java runtime and adds `from_workflow`, which compiles
+an ADK 2 graph `Workflow` into a net. Shared contracts and the subnet
+structure fixtures both ports golden-check live in `spec/`.
 
 ## Build and test commands
 
@@ -36,16 +38,64 @@ verification (libpetri 4.0+) runs an external `z3` binary (4.8+, on
 `@EnabledIf("z3Available")` (delegating to `SmtVerifier.z3Available()`)
 so the build does not fail without it.
 
+### Python (`python/`)
+
+```bash
+cd python
+python3.12 -m venv .venv && . .venv/bin/activate && pip install -e '.[dev]'
+REQUIRE_Z3=1 pytest                      # full suite (Z3 gate on)
+pytest tests/workflow                    # from_workflow: structure, proofs, parity
+pytest -k foil                           # ADK-only foils (green-lock ADK behaviour)
+ruff check . && ruff format --check . && pyright
+```
+
+Python 3.11+, google-adk `~=2.11.0`, libpetri-py `>=7.2,<8`. `REQUIRE_Z3=1`
+makes `tests/test_z3_gate.py` fail without the `z3` binary. Never name a test
+directory `docs/` (the TypeDoc rule in `.gitignore` would hide it).
+
+### Cross-language fixtures (`spec/fixtures/nets/`)
+
+```bash
+cd java && ./mvnw test -Dtest=SpecFixturesTest -Dspec.fixtures.write=true
+```
+
+Java writes them; `SpecFixturesTest` and Python's `tests/conformance` both
+golden-check them. Change a stock subnet in both ports, regenerate, commit.
+
 ### Diagrams (`docs/diagrams/`)
 
 ```bash
-cd docs/diagrams
-npm install
-npm run build
+cd java && ./mvnw test -Dtest=ReadmeDiagramsTest -Dreadme.diagrams.write=true
+cd ../python && READMEDIAGRAMS_WRITE=1 pytest tests/readme_diagrams
+cd ../docs/diagrams && npm install && npm run build
 ```
 
-Regenerates the SVG diagrams embedded in the root README.
-Requires Node.js 20 or later and graphviz `dot`.
+Three steps. `ReadmeDiagramsTest` exports every Java-net diagram from
+the nets the tests run (whole nets or named-transition views) into
+`docs/diagrams/dot/`; without
+`-Dreadme.diagrams.write=true` it is a golden check, and a drifted DOT
+file fails `mvn verify`. `python/tests/readme_diagrams` does the same for
+the Python-net diagrams (the compiled-workflow `workflow-*.dot` views):
+with `READMEDIAGRAMS_WRITE=1` it writes them, otherwise a drifted DOT file
+fails `pytest`. `npm run build` then writes the illustrative
+`dot/sketch-*.dot` files from `src/index.ts` and renders every DOT file
+to SVG. Only that last step needs Node.js 20 or later and graphviz
+`dot`; CI needs neither. Hand-drawn SVGs live in `docs/assets/`. Keep
+every diagram except the cover a white card with no
+`prefers-color-scheme` block: inside `<img>` the media query follows the
+OS, not the GitHub theme.
+
+### ADK version bumps
+
+Follow the re-check procedure in
+[ADR 0002](docs/adr/0002-adk-version-compat.md). Also re-check, with
+`javap -c -p` on the new `google-adk` jar, the bytecode claims in
+[java/README.md's "ADK Java 1.10.1 behaviour the argument relies on"](java/README.md#adk-java-1101-behaviour-the-argument-relies-on),
+which no test pins: `ParallelAgent.runAsyncImpl` is
+`Flowable.merge(...).takeUntil(escalate)`; `InvocationContext.endInvocation`
+is a non-volatile field read only in `BaseAgent` and `BaseLlmFlow`; and
+`Functions` uses `concatMapEager`/`concatMapMaybe` and never reads
+`endInvocation`. Update the README's "ADK 1.10.1" mentions with them.
 
 ## Architecture
 
@@ -117,8 +167,12 @@ generated from [`docs/diagrams/`](docs/diagrams/).
   places modelled via `environmentMode(bounded(1))`. Without that the verifier returns
   `Unknown`, because a proof that ignores env places would be vacuous.
   Its silence-recovery timers run on `ManualClock`.
-  SCG bounded exploration lives next door in `LiveApiRecoverySubnetTest`
-  and confirms a finite reachable state space for the composed BIDI net.
+  SCG bounded exploration lives next door in `LiveApiRecoverySubnetTest`:
+  the composed BIDI net's state-class graph completes from one
+  `LLM_REQUEST` seed with `MODEL_QUIET` as a `bounded(1)` env place.
+  `LiveApiRecoverySubnet` cancels on activity: an answer
+  (`MODEL_ACTIVE`) consumes the pending rung, and the caller's injected
+  `MODEL_QUIET` clears `MODEL_ACTIVE` in-net.
 
 ## Load-bearing design principles
 
@@ -169,7 +223,9 @@ bug classes the design is meant to eliminate.
    structurally.** Use `Place<Void>` with a
    priority-and-inhibitor exhaustion-fallback transition (the
    reask-budget pattern). This is not a generic loop bound. It is
-   only for autonomous-runaway protection inside `LlmAgentSubnet`.
+   only for autonomous-runaway protection inside `LlmAgentSubnet`, and
+   (Python, ADR 0007) for a back edge of a compiled workflow that the
+   caller budgets explicitly via `back_edge_budget`.
 7. **Stock subnets are convenience templates, not the framework.**
    Users compose their own subnets directly via
    `PetriNet.builder().compose()` plus `SubnetDef.fromNet(...)`.
@@ -211,18 +267,54 @@ bug classes the design is meant to eliminate.
   synchronous test patterns. Long-lived BIDI tests use `runAsync`
   plus drain.
 
+## Python port (`python/src/adk_libpetri/`)
+
+Same packages as Java (`colours`, `bridge`, `subnet`, `runner`, `verify`),
+plus `workflow/` (`compile_workflow`, `verify_workflow`, `PetriWorkflow`).
+Read [ADR 0006](docs/adr/0006-python-port-and-adk-python-compat.md) before
+structural changes. Python-specific rules:
+
+- **Stock subnets are `NetSpec`s** (`_spec.py`): frozen `TransitionSpec`s
+  over typed `Place`s under the Java names. `NetSpec.compose` is flat and
+  fuses places by name and type; `NetSpec.build(actions)` rejects missing,
+  unknown or doubly bound actions. Use `lp_actions(...)` only when binding
+  through libpetri's own APIs.
+- **Actions have no asyncio loop** (Tokio threads). Await every ADK coroutine
+  through `on_loop(coro)` (or `on_loop(coro, loop=...)` for the invocation's
+  loop); plain `asyncio.sleep(x > 0)` raises inside an action.
+- **One `OrchestratorLoop` per process**: libpetri captures one loop for
+  running executors. Runners always start on it, never on a request's loop.
+- **libpetri-py may re-enter an async transition** while an earlier firing is
+  in flight (Java never does). Ordering-sensitive actions are sync; shared
+  side effects are serialised (see `PersistState`).
+- **A compiled workflow is a `BaseNode`** (`PetriWorkflow`), not a
+  `BaseAgent`: ADK 2.11 runs a `BaseAgent` root on its legacy path, which has
+  no node `Context` to run child nodes with.
+- **Timed tests run on `lp.SteppedClock`** (Java's `ManualClock`):
+  `.clock(c).deadline_tolerance(timedelta(0))` on the runner builder, then
+  `asettle_after(action)` / `advance_ms`. One clock per run. Action timeouts
+  (`timeout(...)` outputs) are not virtualised, so keep those real and small.
+- Frozen dataclasses for colours, `Literal`/`Union` + `match` for sum types,
+  keyword `Config` dataclasses; builders only for `PetriRunner`/`PetriAgent`.
+
 ## Multi-language readiness
 
-When porting to TypeScript, Rust, or Python, mirror the Java module
-layout under a sibling top-level subdir (`typescript/`, `rust/`,
-`python/`). Each language adapter calls into the corresponding
-libpetri language port. Cross-language specs (if any) live in
-`spec/`.
+A further port (TypeScript, Rust) mirrors this layout under a sibling
+top-level subdir, calls into the matching libpetri port, and golden-checks
+`spec/fixtures/nets`.
 
 ## Versioning and release
 
 Each language has its own version, tagged with the language prefix
-(for example `java/v0.4.0`). Java is currently the only one.
+(`java/v0.4.0`, `python/v0.1.0`).
+
+**Python**: PyPI `adk-libpetri`, published by `scripts/release-python.sh
+[--dry-run] <version>` (stamps `pyproject.toml` and `__version__`, commits
+`release: python <version>`, builds, `twine check`s, tests the installed wheel
+from outside `python/`, uploads, tags `python/v<version>`, creates the GitHub
+release from the `## Python <version> - YYYY-MM-DD` CHANGELOG section). Local
+publishing only, as for Java. Bump google-adk with ADR 0006's re-check
+procedure.
 
 **Versioning is 0.x.** A minor may break API. The turn-based path is the
 settled part; `@Experimental` surfaces (SSE, BIDI/live) may change in any

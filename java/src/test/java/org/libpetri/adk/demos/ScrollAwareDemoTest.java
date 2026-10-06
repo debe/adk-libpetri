@@ -26,6 +26,7 @@ import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
 import org.libpetri.adk.runner.SessionKey;
+import org.libpetri.adk.subnet.SubnetActions;
 import com.google.adk.events.Event;
 
 /**
@@ -101,7 +102,7 @@ class ScrollAwareDemoTest {
         // ============================================================
         // 1. Build the scroll-aware net.
         // ============================================================
-        var net = PetriNet.builder("scroll-aware")
+        var structure = PetriNet.builder("scroll-aware")
                 .place(AdkColours.USER_IN)
                 .place(AdkColours.EVENT_OUT)
                 .place(SCROLL_IN)
@@ -115,10 +116,10 @@ class ScrollAwareDemoTest {
                         .read(SCROLL_COUNT)
                         .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
                         .build())
-                .build()
-                .bindActions(Map.of(
-                        T_RECORD_SCROLL, recordScrollAction(),
-                        T_ECHO,          echoAction()));
+                .build();
+        var net = SubnetActions.bindComposed(structure, Map.of(
+                T_RECORD_SCROLL, recordScrollAction(),
+                T_ECHO,          echoAction()));
 
         // ============================================================
         // 2. Wire the ADK-integrated runner with TWO env places.

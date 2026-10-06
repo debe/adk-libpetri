@@ -58,3 +58,16 @@ jacoco*.html
 
 .serena/
 .tokensave
+
+# The TypeDoc rule above would hide the Java diagrams test package
+!java/src/test/java/org/libpetri/adk/docs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv*/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+python/spikes/
+python/dist/

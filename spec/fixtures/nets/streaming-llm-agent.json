@@ -1,0 +1,393 @@
+{
+  "name": "StreamingLlmAgent",
+  "places": [
+    {
+      "name": "LlmAgent_answer",
+      "type": "Event"
+    },
+    {
+      "name": "LlmAgent_conversation",
+      "type": "Conversation"
+    },
+    {
+      "name": "LlmAgent_handoff",
+      "type": "TransferTarget"
+    },
+    {
+      "name": "LlmAgent_reaskBudget",
+      "type": "Void"
+    },
+    {
+      "name": "LlmAgent_turnActive",
+      "type": "Void"
+    },
+    {
+      "name": "LlmAgent_turnInput",
+      "type": "Content"
+    },
+    {
+      "name": "LlmStreamingStep_chunk",
+      "type": "LlmResponseChunk"
+    },
+    {
+      "name": "eventOut",
+      "type": "Event"
+    },
+    {
+      "name": "llmRequest",
+      "type": "LlmRequest"
+    },
+    {
+      "name": "llmResponse",
+      "type": "LlmResponse"
+    },
+    {
+      "name": "toolCalls",
+      "type": "ToolCalls"
+    },
+    {
+      "name": "toolResults",
+      "type": "ToolResults"
+    },
+    {
+      "name": "transfer",
+      "type": "TransferTarget"
+    },
+    {
+      "name": "turnAbort",
+      "type": "Void"
+    },
+    {
+      "name": "turnPermit",
+      "type": "Void"
+    },
+    {
+      "name": "userIn",
+      "type": "Content"
+    }
+  ],
+  "ports": [
+    {
+      "direction": "out",
+      "name": "eventOut",
+      "place": "eventOut"
+    },
+    {
+      "direction": "out",
+      "name": "transfer",
+      "place": "transfer"
+    },
+    {
+      "direction": "in",
+      "name": "turnAbort",
+      "place": "turnAbort"
+    },
+    {
+      "direction": "in",
+      "name": "userIn",
+      "place": "userIn"
+    }
+  ],
+  "transitions": [
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmAgent_turnActive"
+        },
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "turnAbort"
+        }
+      ],
+      "match": null,
+      "name": "LlmAgent_AbortTurn",
+      "output": "turnPermit",
+      "priority": 30,
+      "reads": [],
+      "resets": [
+        "LlmAgent_answer",
+        "LlmAgent_conversation",
+        "LlmAgent_handoff",
+        "LlmAgent_reaskBudget",
+        "LlmAgent_turnInput",
+        "LlmStreamingStep_chunk",
+        "llmRequest",
+        "llmResponse",
+        "toolCalls",
+        "toolResults"
+      ],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmAgent_turnInput"
+        }
+      ],
+      "match": null,
+      "name": "LlmAgent_BuildPrompt",
+      "output": {
+        "and": [
+          "llmRequest",
+          "LlmAgent_reaskBudget",
+          "LlmAgent_conversation"
+        ]
+      },
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "turnAbort"
+        }
+      ],
+      "match": null,
+      "name": "LlmAgent_DropAbort",
+      "output": null,
+      "priority": 30,
+      "reads": [
+        "turnPermit"
+      ],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmAgent_answer"
+        },
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmAgent_conversation"
+        },
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmAgent_turnActive"
+        }
+      ],
+      "match": null,
+      "name": "LlmAgent_EmitAnswer",
+      "output": {
+        "and": [
+          "eventOut",
+          "turnPermit"
+        ]
+      },
+      "priority": 0,
+      "reads": [],
+      "resets": [
+        "LlmAgent_reaskBudget"
+      ],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmAgent_conversation"
+        },
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmAgent_handoff"
+        },
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmAgent_turnActive"
+        }
+      ],
+      "match": null,
+      "name": "LlmAgent_EmitTransfer",
+      "output": {
+        "and": [
+          "transfer",
+          "turnPermit"
+        ]
+      },
+      "priority": 0,
+      "reads": [],
+      "resets": [
+        "LlmAgent_reaskBudget"
+      ],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmAgent_conversation"
+        },
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmAgent_reaskBudget"
+        },
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "toolResults"
+        }
+      ],
+      "match": null,
+      "name": "LlmAgent_ReAsk",
+      "output": {
+        "and": [
+          "llmRequest",
+          "LlmAgent_conversation"
+        ]
+      },
+      "priority": 10,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [
+        "LlmAgent_reaskBudget"
+      ],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "toolResults"
+        }
+      ],
+      "match": null,
+      "name": "LlmAgent_ReAskExhaustedFallback",
+      "output": "LlmAgent_answer",
+      "priority": -10,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "turnPermit"
+        },
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "userIn"
+        }
+      ],
+      "match": null,
+      "name": "LlmAgent_StartTurn",
+      "output": {
+        "and": [
+          "LlmAgent_turnActive",
+          "LlmAgent_turnInput"
+        ]
+      },
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmStreamingStep_chunk"
+        }
+      ],
+      "match": null,
+      "name": "LlmStreamingStep_EmitChunk",
+      "output": {
+        "xor": [
+          "eventOut",
+          "llmResponse"
+        ]
+      },
+      "priority": 20,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "llmRequest"
+        }
+      ],
+      "match": null,
+      "name": "LlmStreamingStep_LlmCallStream",
+      "output": null,
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "llmResponse"
+        }
+      ],
+      "match": null,
+      "name": "Router_Route",
+      "output": {
+        "xor": [
+          "toolCalls",
+          "LlmAgent_handoff",
+          "LlmAgent_answer"
+        ]
+      },
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "toolCalls"
+        }
+      ],
+      "match": null,
+      "name": "ToolDispatch_Dispatch",
+      "output": "toolResults",
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    }
+  ]
+}

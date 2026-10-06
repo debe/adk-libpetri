@@ -1,0 +1,54 @@
+digraph SketchStaleResult {
+    rankdir=TB;
+    nodesep=0.3;
+    ranksep=0.75;
+    forcelabels="true";
+    overlap="false";
+    fontname="Helvetica,Arial,sans-serif";
+    outputorder="edgesfirst";
+    compound="true";
+    bgcolor="white";
+    pad="0.15";
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=12];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=12];
+
+    p_USER_NEW_TURN [label="USER_NEW_TURN", shape="ellipse", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_LATEST_GENERATION [label="LATEST_GENERATION ●", shape="ellipse", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_TOOL_RESULT_gen_ [label="TOOL_RESULT{gen}", shape="ellipse", style="filled", fillcolor="#d4edda", color="#28a745", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_COMMITTED_TOOL_RESULT [label="COMMITTED_TOOL_RESULT", shape="ellipse", style="filled", fillcolor="#cce5ff", color="#004085", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03", peripheries=2];
+    p_DISCARDED [label="DISCARDED", shape="ellipse", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_CHUNK_gen_ [label="CHUNK{gen}", shape="ellipse", style="filled", fillcolor="#d4edda", color="#28a745", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_COMMITTED_CHUNK [label="COMMITTED_CHUNK", shape="ellipse", style="filled", fillcolor="#cce5ff", color="#004085", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03", peripheries=2];
+    p_PLACEHOLDER_gen_ [label="PLACEHOLDER{gen}", shape="ellipse", style="filled", fillcolor="#d4edda", color="#28a745", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_COMMITTED_PLACEHOLDER [label="COMMITTED_PLACEHOLDER", shape="ellipse", style="filled", fillcolor="#cce5ff", color="#004085", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03", peripheries=2];
+    p_DISCARD_LOG [label="DISCARD_LOG", shape="ellipse", style="filled", fillcolor="#cce5ff", color="#004085", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03", peripheries=2];
+    t_BumpGeneration [label="BumpGeneration", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_CommitToolResult [label="CommitToolResult", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_CommitChunk [label="CommitChunk", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_CommitPlaceholder [label="CommitPlaceholder", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_DrainDiscarded [label="DrainDiscarded", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    j_CommitToolResult__xor_0 [label="✕", shape="diamond", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1, height=0.3, width=0.3, fixedsize="true", fontsize=14, ordering="out"];
+    j_CommitChunk__xor_0 [label="✕", shape="diamond", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1, height=0.3, width=0.3, fixedsize="true", fontsize=14, ordering="out"];
+    j_CommitPlaceholder__xor_0 [label="✕", shape="diamond", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1, height=0.3, width=0.3, fixedsize="true", fontsize=14, ordering="out"];
+
+    p_USER_NEW_TURN -> t_BumpGeneration [color="#333333", style="solid", arrowhead="normal"];
+    p_LATEST_GENERATION -> t_BumpGeneration [color="#333333", style="solid", arrowhead="normal"];
+    t_BumpGeneration -> p_LATEST_GENERATION [color="#333333", style="solid", arrowhead="normal"];
+    p_TOOL_RESULT_gen_ -> t_CommitToolResult [color="#333333", style="solid", arrowhead="normal"];
+    t_CommitToolResult -> j_CommitToolResult__xor_0 [color="#333333", style="solid", arrowhead="normal"];
+    j_CommitToolResult__xor_0 -> p_COMMITTED_TOOL_RESULT [color="#333333", style="solid", arrowhead="normal"];
+    j_CommitToolResult__xor_0 -> p_DISCARDED [color="#333333", style="solid", arrowhead="normal"];
+    p_LATEST_GENERATION -> t_CommitToolResult [color="#6c757d", style="dashed", arrowhead="normal"];
+    p_CHUNK_gen_ -> t_CommitChunk [color="#333333", style="solid", arrowhead="normal"];
+    t_CommitChunk -> j_CommitChunk__xor_0 [color="#333333", style="solid", arrowhead="normal"];
+    j_CommitChunk__xor_0 -> p_COMMITTED_CHUNK [color="#333333", style="solid", arrowhead="normal"];
+    j_CommitChunk__xor_0 -> p_DISCARDED [color="#333333", style="solid", arrowhead="normal"];
+    p_LATEST_GENERATION -> t_CommitChunk [color="#6c757d", style="dashed", arrowhead="normal"];
+    p_PLACEHOLDER_gen_ -> t_CommitPlaceholder [color="#333333", style="solid", arrowhead="normal"];
+    t_CommitPlaceholder -> j_CommitPlaceholder__xor_0 [color="#333333", style="solid", arrowhead="normal"];
+    j_CommitPlaceholder__xor_0 -> p_COMMITTED_PLACEHOLDER [color="#333333", style="solid", arrowhead="normal"];
+    j_CommitPlaceholder__xor_0 -> p_DISCARDED [color="#333333", style="solid", arrowhead="normal"];
+    p_LATEST_GENERATION -> t_CommitPlaceholder [color="#6c757d", style="dashed", arrowhead="normal"];
+    p_DISCARDED -> t_DrainDiscarded [color="#333333", style="solid", arrowhead="normal"];
+    t_DrainDiscarded -> p_DISCARD_LOG [color="#333333", style="solid", arrowhead="normal"];
+}

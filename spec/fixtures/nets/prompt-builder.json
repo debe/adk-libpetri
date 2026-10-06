@@ -1,0 +1,44 @@
+{
+  "name": "PromptBuilder",
+  "places": [
+    {
+      "name": "llmRequest",
+      "type": "LlmRequest"
+    },
+    {
+      "name": "userIn",
+      "type": "Content"
+    }
+  ],
+  "ports": [
+    {
+      "direction": "out",
+      "name": "llmRequest",
+      "place": "llmRequest"
+    },
+    {
+      "direction": "in",
+      "name": "userIn",
+      "place": "userIn"
+    }
+  ],
+  "transitions": [
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "userIn"
+        }
+      ],
+      "match": null,
+      "name": "PromptBuilder_BuildPrompt",
+      "output": "llmRequest",
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    }
+  ]
+}

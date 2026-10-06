@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -23,6 +24,7 @@ import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
 import org.libpetri.core.Token;
 import org.libpetri.event.EventStore;
+import org.libpetri.analysis.EnvironmentAnalysisMode;
 import org.libpetri.analysis.MarkingState;
 import org.libpetri.analysis.StateClassGraph;
 import org.libpetri.adk.colours.AdkColours;
@@ -94,6 +96,93 @@ class LiveApiRecoverySubnetTest {
     }
 
     // ============================================================
+    //  Cancel on activity: the model answering consumes the rung it
+    //  lands on, and MODEL_QUIET clears MODEL_ACTIVE in-net, so the
+    //  ladder restarts on the caller's next RESPONSE_AWAITED.
+    // ============================================================
+
+    @Test
+    void model_answered_then_silence_then_fresh_response_awaited_nudges_after_3s() throws Exception {
+        var defaults = LiveApiRecoverySubnet.Config.defaults();
+        var fixture = drive(defaults, (executor, clock) -> {
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
+            clock.advanceAndSettle(Duration.ofSeconds(1));
+            // The model answers: the awaited rung is cancelled, not suspended.
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_ACTIVE));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED)).isFalse();
+            clock.advanceAndSettle(Duration.ofSeconds(1));
+            // The model goes quiet, then the caller awaits the next reply.
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_QUIET));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.MODEL_ACTIVE)).isFalse();
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
+
+            clock.advanceAndSettle(Duration.ofMillis(2_999));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.NUDGE_NEEDED)).isFalse();
+            clock.advanceAndSettle(Duration.ofMillis(1));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.NUDGE_NEEDED)).isTrue();
+
+            // The nudge works: the model answers inside the reconnect window,
+            // and AnsweredLate cancels the second rung.
+            clock.advanceAndSettle(Duration.ofSeconds(1));
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_ACTIVE));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.RECOVERY_PENDING)).isFalse();
+            clock.advanceAndSettle(Duration.ofSeconds(10));
+        });
+
+        assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.NUDGE_NEEDED)).hasSize(1);
+        assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.RECOVERY_PENDING)).isEmpty();
+        assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.RECONNECT_NEEDED)).isEmpty();
+    }
+
+    @Test
+    void stale_response_awaited_after_a_reply_never_nudges() throws Exception {
+        var fixture = drive(FAST, (executor, clock) -> {
+            // The reply is already under way when a stale RESPONSE_AWAITED lands.
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_ACTIVE));
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED)).isFalse();
+            // Even after the model goes quiet, nothing is left to escalate.
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_QUIET));
+            clock.advanceAndSettle(Duration.ofSeconds(10));
+        });
+
+        assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.NUDGE_NEEDED)).isEmpty();
+        assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.RECOVERY_PENDING)).isEmpty();
+        assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.RECONNECT_NEEDED)).isEmpty();
+    }
+
+    @Test
+    void model_quiet_clears_model_active() throws Exception {
+        var fixture = drive(FAST, (executor, clock) -> {
+            // Stacked activity injections clear in one ModelQuiet firing.
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_ACTIVE));
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_ACTIVE));
+            assertThat(executor.marking().peekTokens(LiveApiRecoverySubnet.Places.MODEL_ACTIVE))
+                    .hasSize(2);
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_QUIET));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.MODEL_ACTIVE)).isFalse();
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.MODEL_QUIET)).isFalse();
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.QUIET_IGNORED)).isFalse();
+
+            // Further MODEL_QUIETs with the model not active are sunk, not
+            // stranded, and the sink holds at most one token.
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_QUIET));
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.MODEL_QUIET));
+            assertThat(marked(executor, LiveApiRecoverySubnet.Places.MODEL_QUIET)).isFalse();
+
+            // With MODEL_ACTIVE cleared, both timers run again.
+            clock.settle(() -> inject(executor, LiveApiRecoverySubnet.Places.RESPONSE_AWAITED));
+            clock.advanceAndSettle(Duration.ofMillis(80));
+            clock.advanceAndSettle(Duration.ofMillis(80));
+        });
+
+        assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.MODEL_ACTIVE)).isEmpty();
+        assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.QUIET_IGNORED)).hasSize(1);
+        assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.NUDGE_NEEDED)).hasSize(1);
+        assertThat(fixture.tokensAt(LiveApiRecoverySubnet.Places.RECONNECT_NEEDED)).hasSize(1);
+    }
+
+    // ============================================================
     //  Composed BIDI voice-net structural check — the three voice
     //  subnets (streaming + barge-in + recovery) together must yield
     //  a bounded reachable state space. SCG construction terminates
@@ -126,7 +215,13 @@ class LiveApiRecoverySubnetTest {
                 .tokens(AdkColours.LLM_REQUEST, 1)
                 .build();
 
-        var scg = StateClassGraph.build(net, initial, 256);
+        // MODEL_QUIET is the only environment place modelled here, refilled
+        // to at most one resident token forever (bounded(1)). Its consumers
+        // are ModelQuiet and IgnoreQuiet, so the exploration covers a
+        // quiet signal arriving at any point of the seeded turn.
+        var scg = StateClassGraph.build(net, initial, 256,
+                Set.<EnvironmentPlace<?>>of(env(LiveApiRecoverySubnet.Places.MODEL_QUIET)),
+                EnvironmentAnalysisMode.bounded(1));
 
         assertThat(scg.size()).isGreaterThan(0);
         // isComplete(), not size() <= 256. The cap is build()'s own argument, so
@@ -173,17 +268,22 @@ class LiveApiRecoverySubnetTest {
     }
 
     @Test
-    void def_declares_two_transitions_and_four_ports() {
+    void def_declares_six_transitions_and_six_ports() {
         var def = LiveApiRecoverySubnet.def(LiveApiRecoverySubnet.Config.defaults());
         var transitions = def.body().transitions().stream()
                 .map(t -> t.name()).sorted().toList();
         assertThat(transitions).containsExactly(
+                LiveApiRecoverySubnet.Transitions.ANSWERED,
+                LiveApiRecoverySubnet.Transitions.ANSWERED_LATE,
+                LiveApiRecoverySubnet.Transitions.IGNORE_QUIET,
+                LiveApiRecoverySubnet.Transitions.MODEL_QUIET,
                 LiveApiRecoverySubnet.Transitions.NUDGE,
                 LiveApiRecoverySubnet.Transitions.RECOVER);
 
         var ports = def.iface().ports().stream().map(p -> p.name()).sorted().toList();
         assertThat(ports).containsExactly(
-                "modelActive", "nudgeNeeded", "reconnectNeeded", "responseAwaited");
+                "modelActive", "modelQuiet", "nudgeNeeded", "quietIgnored",
+                "reconnectNeeded", "responseAwaited");
     }
 
     // ============================================================
@@ -221,7 +321,8 @@ class LiveApiRecoverySubnetTest {
         var executor = BitmapNetExecutor.builder(net, Map.of())
                 .environmentPlaces(
                         env(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED),
-                        env(LiveApiRecoverySubnet.Places.MODEL_ACTIVE))
+                        env(LiveApiRecoverySubnet.Places.MODEL_ACTIVE),
+                        env(LiveApiRecoverySubnet.Places.MODEL_QUIET))
                 .eventStore(EventStore.inMemory())
                 .environment(clock)
                 .deadlineTolerance(Duration.ZERO)

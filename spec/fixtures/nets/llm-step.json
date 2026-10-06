@@ -1,0 +1,117 @@
+{
+  "name": "LlmStep",
+  "places": [
+    {
+      "name": "LlmStep_llmError",
+      "type": "LlmError"
+    },
+    {
+      "name": "LlmStep_rawResponse",
+      "type": "LlmResponse"
+    },
+    {
+      "name": "LlmStep_readyToCall",
+      "type": "LlmRequest"
+    },
+    {
+      "name": "llmRequest",
+      "type": "LlmRequest"
+    },
+    {
+      "name": "llmResponse",
+      "type": "LlmResponse"
+    }
+  ],
+  "ports": [
+    {
+      "direction": "in",
+      "name": "llmRequest",
+      "place": "llmRequest"
+    },
+    {
+      "direction": "out",
+      "name": "llmResponse",
+      "place": "llmResponse"
+    }
+  ],
+  "transitions": [
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmStep_rawResponse"
+        }
+      ],
+      "match": null,
+      "name": "LlmStep_AfterModel",
+      "output": "llmResponse",
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "llmRequest"
+        }
+      ],
+      "match": null,
+      "name": "LlmStep_BeforeModel",
+      "output": {
+        "xor": [
+          "LlmStep_readyToCall",
+          "llmResponse"
+        ]
+      },
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmStep_readyToCall"
+        }
+      ],
+      "match": null,
+      "name": "LlmStep_LlmCall",
+      "output": {
+        "xor": [
+          "LlmStep_rawResponse",
+          "LlmStep_llmError"
+        ]
+      },
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmStep_llmError"
+        }
+      ],
+      "match": null,
+      "name": "LlmStep_OnModelError",
+      "output": "llmResponse",
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    }
+  ]
+}

@@ -1,4 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-labelledby="cover-title">
+  <title id="cover-title">adk-libpetri: stock ADK surfaces joined to a libpetri net through PetriAgent (a BaseAgent, Java and Python) and PetriWorkflow (a BaseNode, Python)</title>
+  <!-- Intended display width: 720 px (scale 0.6; smallest text 19 px, about 11.4 px displayed).
+       A dark card by design in both colour schemes. No colour-scheme media query: inside an img element
+       the media query follows the OS, not the GitHub theme. -->
+  <style>
+    svg { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .frame { stroke: #2c4168; }
+  </style>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0a1124"/>
@@ -39,7 +48,7 @@
   <!-- background -->
   <rect width="1200" height="630" fill="url(#bg)"/>
   <rect width="1200" height="630" fill="url(#centerGlow)"/>
-  <rect x="8" y="8" width="1184" height="614" rx="18" fill="none" stroke="#22324f" stroke-width="1.5"/>
+  <rect class="frame" x="8" y="8" width="1184" height="614" rx="18" fill="none" stroke-width="1.5"/>
 
   <!-- 'both worlds' venn behind the diagram -->
   <g>
@@ -53,37 +62,42 @@
 
   <!-- title -->
   <text x="600" y="98" text-anchor="middle" font-size="62" font-weight="700" fill="#f4f8ff" letter-spacing="0.5">The Best of Both Worlds</text>
-  <text x="600" y="143" text-anchor="middle" font-size="23" font-weight="400" fill="#9fb6d8">A Coloured Petri-net orchestration core for Google's ADK</text>
+  <text x="600" y="143" text-anchor="middle" font-size="23" font-weight="400" fill="#9fb6d8">A Coloured Time Petri-net orchestration core for Google's ADK (Java and Python)</text>
 
   <!-- section labels -->
-  <text x="287" y="232" text-anchor="middle" font-size="16" font-weight="600" fill="#7dd3fc" letter-spacing="3.5">GOOGLE ADK ECOSYSTEM</text>
-  <text x="880" y="232" text-anchor="middle" font-size="16" font-weight="600" fill="#fcd34d" letter-spacing="3.5">LIBPETRI RUNTIME</text>
+  <text x="216" y="228" text-anchor="middle" font-size="19" font-weight="600" fill="#7dd3fc" letter-spacing="3">GOOGLE ADK</text>
+  <text x="880" y="228" text-anchor="middle" font-size="19" font-weight="600" fill="#fcd34d" letter-spacing="3">LIBPETRI RUNTIME</text>
 
-  <!-- left world: ADK ecosystem mesh -->
-  <g stroke="#3aa0e0" stroke-opacity="0.30" stroke-width="1.5">
-    <line x1="202" y1="310" x2="372" y2="310"/>
-    <line x1="202" y1="384" x2="372" y2="384"/>
-    <line x1="202" y1="334" x2="202" y2="360"/>
-    <line x1="372" y1="334" x2="372" y2="360"/>
-    <line x1="372" y1="372" x2="452" y2="372"/>
+  <!-- left world: the ADK surfaces the net plugs into, unchanged -->
+  <g stroke="#3aa0e0" stroke-opacity="0.30" stroke-width="1.5" fill="none">
+    <path d="M384,264 C 404,264 400,379 420,379"/>
+    <path d="M384,310 C 404,310 400,379 420,379"/>
+    <path d="M384,356 C 404,356 400,379 420,379"/>
+    <path d="M384,402 C 404,402 400,379 420,379"/>
+    <path d="M384,448 C 404,448 400,379 420,379"/>
+    <path d="M384,494 C 404,494 400,379 420,379"/>
   </g>
-  <g font-size="18" font-weight="600" fill="#cfe6fb" text-anchor="middle">
-    <rect x="126" y="286" width="152" height="48" rx="11" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
-    <text x="202" y="316">Vertex AI</text>
-    <rect x="296" y="286" width="152" height="48" rx="11" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
-    <text x="372" y="316">Cloud Run</text>
-    <rect x="126" y="360" width="152" height="48" rx="11" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
-    <text x="202" y="390">A2A</text>
-    <rect x="296" y="360" width="152" height="48" rx="11" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
-    <text x="372" y="390">OpenTelemetry</text>
+  <g class="chiptext" font-size="20" font-weight="600" fill="#cfe6fb" text-anchor="middle">
+    <rect x="48" y="246" width="336" height="36" rx="10" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
+    <text x="216" y="271">Runner / InMemoryRunner</text>
+    <rect x="48" y="292" width="336" height="36" rx="10" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
+    <text x="216" y="317">BaseSessionService</text>
+    <rect x="48" y="338" width="336" height="36" rx="10" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
+    <text x="216" y="363">BaseTool</text>
+    <rect x="48" y="384" width="336" height="36" rx="10" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
+    <text x="216" y="409">OpenTelemetry (EventStore)</text>
+    <rect x="48" y="430" width="336" height="36" rx="10" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
+    <text x="216" y="455">Live / BIDI (LiveConnection)</text>
+    <rect x="48" y="476" width="336" height="36" rx="10" fill="url(#chip)" stroke="#2f6ea8" stroke-width="1.5"/>
+    <text x="216" y="501">Workflow graph (ADK 2, Python)</text>
   </g>
-  <text x="287" y="488" text-anchor="middle" font-size="15" fill="#7089ad">deploy · observe · interoperate</text>
+  <text x="216" y="540" text-anchor="middle" font-size="19" fill="#8aa2c4">stock ADK, unchanged</text>
 
   <!-- fusion connector with a token crossing the seam -->
-  <path d="M452,372 C 560,372 540,386 733,386" fill="none" stroke="#fcd34d" stroke-opacity="0.35" stroke-width="2" stroke-dasharray="2 7" stroke-linecap="round"/>
-  <path d="M452,372 C 560,372 540,386 733,386" fill="none" stroke="#fcd34d" stroke-opacity="0.55" stroke-width="2.5" marker-end="url(#arrowA)"/>
-  <circle cx="600" cy="375" r="16" fill="url(#token)" filter="url(#tokenGlow)"/>
-  <circle cx="600" cy="375" r="9.5" fill="url(#token)"/>
+  <path d="M420,379 C 560,379 540,386 733,386" fill="none" stroke="#fcd34d" stroke-opacity="0.35" stroke-width="2" stroke-dasharray="2 7" stroke-linecap="round"/>
+  <path d="M420,379 C 560,379 540,386 733,386" fill="none" stroke="#fcd34d" stroke-opacity="0.55" stroke-width="2.5" marker-end="url(#arrowA)"/>
+  <circle cx="600" cy="381" r="16" fill="url(#token)" filter="url(#tokenGlow)"/>
+  <circle cx="600" cy="381" r="9.5" fill="url(#token)"/>
 
   <!-- right world: a Petri net -->
   <g stroke="#9fc6e8" stroke-width="2.6" fill="none">
@@ -99,9 +113,19 @@
   <circle cx="946" cy="430" r="27" fill="#0e1c34" stroke="#9fc6e8" stroke-width="2.6"/>
   <!-- token resting in the first place -->
   <circle cx="760" cy="386" r="11" fill="url(#token)"/>
-  <text x="880" y="488" text-anchor="middle" font-size="15" fill="#7089ad">places · transitions · tokens</text>
+  <text x="880" y="540" text-anchor="middle" font-size="19" fill="#8aa2c4">places · transitions · tokens</text>
+
+  <!-- the seam -->
+  <g class="mono" font-size="22" font-weight="600" fill="#fde68a" text-anchor="end">
+    <text x="636" y="572">PetriAgent : BaseAgent</text>
+    <text x="636" y="600">PetriWorkflow : BaseNode</text>
+  </g>
+  <g font-size="19" fill="#c9b37a">
+    <text x="652" y="572">Java · Python</text>
+    <text x="652" y="600">Python</text>
+  </g>
 
   <!-- footer -->
-  <text x="60" y="598" font-size="19" font-weight="700" fill="#7089ad" letter-spacing="0.5">adk-libpetri</text>
-  <text x="1140" y="598" text-anchor="end" font-size="17" fill="#7089ad">an experiment, not a product</text>
+  <text x="60" y="600" font-size="19" font-weight="700" fill="#8aa2c4" letter-spacing="0.5">adk-libpetri</text>
+  <text x="1140" y="600" text-anchor="end" font-size="19" fill="#8aa2c4">an experiment, not a product</text>
 </svg>

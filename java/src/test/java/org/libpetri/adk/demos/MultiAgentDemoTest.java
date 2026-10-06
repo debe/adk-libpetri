@@ -270,9 +270,12 @@ class MultiAgentDemoTest {
     @Test
     void hallucinated_agent_name_surfaces_as_typed_error_event_not_npe() throws Exception {
         // Same shape as above, but the planner emits a transfer to an
-        // UNKNOWN agent name. ADK's stock AgentTransfer would NPE; our
-        // TransferRouterSubnet routes to UNKNOWN_TARGET → T_EmitUnknownError
-        // produces an Event to EVENT_OUT. PetriAgent's take(1) sees it.
+        // UNKNOWN agent name. ADK's findAgent returns Optional.empty() and
+        // AgentTransfer records the string unvalidated, so the failure is
+        // untyped downstream (see TransferUnknownTargetAdkFoilTest); our
+        // TransferRouterSubnet routes to UNKNOWN_TARGET →
+        // TransferRouter_EmitUnknownError produces a typed error Event on
+        // EVENT_OUT. PetriAgent's take(1) sees it.
         //
         // Note: the planner's reask budget must absorb the loop iteration.
         // The LlmAgent emits the transfer → Router routes to TRANSFER →

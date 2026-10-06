@@ -1,0 +1,57 @@
+digraph SketchFanoutMonitor {
+    rankdir=TB;
+    nodesep=0.3;
+    ranksep=0.75;
+    forcelabels="true";
+    overlap="false";
+    fontname="Helvetica,Arial,sans-serif";
+    outputorder="edgesfirst";
+    compound="true";
+    bgcolor="white";
+    pad="0.15";
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=12];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=12];
+
+    p_SEARCH_REQUEST [label="SEARCH_REQUEST", shape="ellipse", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_BATCH_PERMIT [label="BATCH_PERMIT ●", shape="ellipse", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_JOB [label="JOB", shape="ellipse", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_JOB_PENDING [label="JOB_PENDING", shape="ellipse", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_BATCH_OPEN [label="BATCH_OPEN", shape="ellipse", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_COLLECTOR [label="COLLECTOR", shape="ellipse", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_RESULT [label="RESULT", shape="ellipse", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_OBSERVE [label="OBSERVE", shape="ellipse", style="filled,dashed", fillcolor="#f8d7da", color="#721c24", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_SNAPSHOT [label="SNAPSHOT", shape="ellipse", style="filled", fillcolor="#cce5ff", color="#004085", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03", peripheries=2];
+    p_SELECTION_READY [label="SELECTION_READY", shape="ellipse", style="filled", fillcolor="#cce5ff", color="#004085", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03", peripheries=2];
+    t_Spawn [label="Spawn", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_Worker [label="Worker", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_Collect [label="Collect", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_OrthogonalRead [label="OrthogonalRead", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    t_Finish [label="Finish prio=-10", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
+    j_Spawn__and_0 [label="✚", shape="diamond", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1, height=0.3, width=0.3, fixedsize="true", fontsize=14, ordering="out"];
+    j_Finish__and_0 [label="✚", shape="diamond", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1, height=0.3, width=0.3, fixedsize="true", fontsize=14, ordering="out"];
+
+    p_SEARCH_REQUEST -> t_Spawn [color="#333333", style="solid", arrowhead="normal"];
+    p_BATCH_PERMIT -> t_Spawn [color="#333333", style="solid", arrowhead="normal"];
+    t_Spawn -> j_Spawn__and_0 [color="#333333", style="solid", arrowhead="normal"];
+    j_Spawn__and_0 -> p_JOB [color="#333333", style="solid", arrowhead="normal"];
+    j_Spawn__and_0 -> p_JOB_PENDING [color="#333333", style="solid", arrowhead="normal"];
+    j_Spawn__and_0 -> p_BATCH_OPEN [color="#333333", style="solid", arrowhead="normal"];
+    j_Spawn__and_0 -> p_COLLECTOR [color="#333333", style="solid", arrowhead="normal"];
+    p_JOB -> t_Worker [color="#333333", style="solid", arrowhead="normal"];
+    t_Worker -> p_RESULT [color="#333333", style="solid", arrowhead="normal"];
+    p_RESULT -> t_Collect [color="#333333", style="solid", arrowhead="normal"];
+    p_JOB_PENDING -> t_Collect [color="#333333", style="solid", arrowhead="normal"];
+    p_COLLECTOR -> t_Collect [color="#333333", style="solid", arrowhead="normal"];
+    t_Collect -> p_COLLECTOR [color="#333333", style="solid", arrowhead="normal"];
+    p_OBSERVE -> t_OrthogonalRead [color="#333333", style="solid", arrowhead="normal"];
+    t_OrthogonalRead -> p_SNAPSHOT [color="#333333", style="solid", arrowhead="normal"];
+    p_COLLECTOR -> t_OrthogonalRead [color="#6c757d", style="dashed", arrowhead="normal"];
+    p_BATCH_OPEN -> t_Finish [color="#333333", style="solid", arrowhead="normal"];
+    p_COLLECTOR -> t_Finish [color="#333333", style="solid", arrowhead="normal"];
+    t_Finish -> j_Finish__and_0 [color="#333333", style="solid", arrowhead="normal"];
+    j_Finish__and_0 -> p_SELECTION_READY [color="#333333", style="solid", arrowhead="normal"];
+    j_Finish__and_0 -> p_BATCH_PERMIT [color="#333333", style="solid", arrowhead="normal"];
+    p_JOB_PENDING -> t_Finish [color="#dc3545", style="solid", arrowhead="odot"];
+    n_Spawn_emits [label="action emits N×JOB + N×JOB_PENDING", shape="note", style="filled", fillcolor="#ffffff", color="#888888", fontsize=12];
+    n_Spawn_emits -> t_Spawn [color="#888888", style="dashed", arrowhead="none"];
+}

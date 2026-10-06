@@ -1,0 +1,79 @@
+{
+  "name": "LlmStreamingStep",
+  "places": [
+    {
+      "name": "LlmStreamingStep_chunk",
+      "type": "LlmResponseChunk"
+    },
+    {
+      "name": "eventOut",
+      "type": "Event"
+    },
+    {
+      "name": "llmRequest",
+      "type": "LlmRequest"
+    },
+    {
+      "name": "llmResponse",
+      "type": "LlmResponse"
+    }
+  ],
+  "ports": [
+    {
+      "direction": "out",
+      "name": "eventOut",
+      "place": "eventOut"
+    },
+    {
+      "direction": "in",
+      "name": "llmRequest",
+      "place": "llmRequest"
+    },
+    {
+      "direction": "out",
+      "name": "llmResponse",
+      "place": "llmResponse"
+    }
+  ],
+  "transitions": [
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "LlmStreamingStep_chunk"
+        }
+      ],
+      "match": null,
+      "name": "LlmStreamingStep_EmitChunk",
+      "output": {
+        "xor": [
+          "eventOut",
+          "llmResponse"
+        ]
+      },
+      "priority": 20,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "llmRequest"
+        }
+      ],
+      "match": null,
+      "name": "LlmStreamingStep_LlmCallStream",
+      "output": null,
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    }
+  ]
+}

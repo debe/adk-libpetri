@@ -1,0 +1,280 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 584" width="860" height="584" role="img" aria-labelledby="legend-title legend-desc">
+  <title id="legend-title">Diagram legend</title>
+  <desc id="legend-desc">How the net diagrams in this README draw places (ellipses carrying their names), transitions, junctions, clusters and arcs, and how the component diagrams draw library components, the session net, caller code, calls and returns. Colours match the libpetri DOT exporter.</desc>
+  <!-- Intended display width: 860 px (1:1). Colours follow libpetri spec/petri-net-styles.json;
+       names-inside-places, cut, seed and reset-bundle conventions are the ReadmeDiagramsTest
+       post-processing. No dark-mode overrides on purpose: every exported diagram is a white
+       card, so the legend stays one too and its swatches match what they explain. -->
+  <style>
+    svg { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .bg { fill: #ffffff; stroke: #d0d7de; }
+    .h { font-size: 13px; font-weight: 600; fill: #1f2328; }
+    .pname { font-size: 11.5px; fill: #1f2328; }
+    .name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; fill: #1f2328; }
+    .cap { font-size: 11.5px; fill: #59636e; }
+    .rule { stroke: #d8dee4; stroke-width: 1; }
+    .pl { fill: #ffffff; stroke: #333333; stroke-width: 1.5; }
+    .env { fill: #f8d7da; stroke: #721c24; stroke-width: 2; stroke-dasharray: 4 2.5; }
+    .start { fill: #d4edda; stroke: #28a745; stroke-width: 2; }
+    .end { fill: #cce5ff; stroke: #004085; stroke-width: 2; }
+    .endring { fill: none; stroke: #004085; stroke-width: 2; }
+    .term { fill: #d6d8db; stroke: #1b1e21; stroke-width: 3; }
+    .termring { fill: none; stroke: #1b1e21; stroke-width: 3; }
+    .cut { fill: #f6f8fa; stroke: #8c959f; stroke-width: 2; stroke-dasharray: 0.5 3.5; stroke-linecap: round; }
+        .tr { fill: #fff3cd; stroke: #856404; stroke-width: 1; }
+    .trtext { font-size: 11.5px; fill: #1f2328; }
+    .jn { fill: #ffffff; stroke: #333333; stroke-width: 1; }
+    .glyph { font-size: 13px; fill: #1f2328; }
+    .cluster { fill: #fafafa; stroke: #555555; stroke-width: 1.5; stroke-dasharray: 5 3; }
+    .note { fill: #fff4e6; stroke: #fd7e14; stroke-width: 1.2; }
+    .notefold { fill: none; stroke: #fd7e14; stroke-width: 1.2; }
+    .e { stroke: #333333; stroke-width: 1.2; fill: none; }
+    .ah { fill: #333333; }
+    .inh { stroke: #dc3545; stroke-width: 1.2; fill: none; }
+    .inhhead { fill: none; stroke: #dc3545; stroke-width: 1.2; }
+    .rd { stroke: #6c757d; stroke-width: 1.2; fill: none; stroke-dasharray: 5 3; }
+    .rdhead { fill: #6c757d; }
+    .rs { stroke: #fd7e14; stroke-width: 2.4; fill: none; }
+    .rshead { fill: #fd7e14; }
+    .elabel { font-size: 11px; fill: #1f2328; }
+    .notetext { font-size: 11px; fill: #1f2328; }
+    .cnote { fill: #ffffff; stroke: #888888; stroke-width: 1.2; }
+    .cnotefold { fill: none; stroke: #888888; stroke-width: 1.2; }
+    .cline { stroke: #888888; stroke-width: 1.2; stroke-dasharray: 4 3; }
+    .box { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1; }
+    .net { fill: #fff8e1; stroke: #b08800; stroke-width: 1.2; }
+    .obs { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1; }
+    .btext { font-size: 11.5px; fill: #1f2328; }
+    .msg { stroke: #1f2328; stroke-width: 1.3; fill: none; }
+    .msghead { fill: #1f2328; }
+    .ret { stroke: #57606a; stroke-width: 1.2; fill: none; stroke-dasharray: 5 3; }
+    .rethead { fill: #57606a; }
+  </style>
+  <defs>
+    <marker id="lg-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="lg-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="rdhead" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="lg-o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path class="rshead" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="lg-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="msghead" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="lg-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="rethead" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="lg-i" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto"><circle class="inhhead" cx="6" cy="6" r="4.5"/></marker>
+  </defs>
+
+  <rect class="bg" x="0.5" y="0.5" width="859" height="583" rx="8"/>
+
+  <!-- ============ Places ============ -->
+  <text class="h" x="20" y="28">Places</text>
+
+  <g transform="translate(56,62)">
+    <ellipse class="pl" rx="42" ry="13"/>
+    <text class="pname" y="4" text-anchor="middle">place</text>
+    <text class="cap" y="44" text-anchor="middle">in-net place;</text>
+    <text class="cap" y="58" text-anchor="middle">name inside it</text>
+  </g>
+  <g transform="translate(156,62)">
+    <ellipse class="env" rx="42" ry="13"/>
+    <text class="pname" y="4" text-anchor="middle">userIn</text>
+    <text class="cap" y="44" text-anchor="middle">environment:</text>
+    <text class="cap" y="58" text-anchor="middle">injected from</text>
+    <text class="cap" y="72" text-anchor="middle">outside the net</text>
+  </g>
+  <g transform="translate(256,62)">
+    <ellipse class="start" rx="42" ry="13"/>
+    <text class="pname" y="4" text-anchor="middle">start</text>
+    <text class="cap" y="44" text-anchor="middle">no producer</text>
+    <text class="cap" y="58" text-anchor="middle">in this diagram</text>
+  </g>
+  <g transform="translate(356,62)">
+    <ellipse class="end" rx="42" ry="13"/>
+    <ellipse class="endring" rx="38" ry="9.5"/>
+    <text class="pname" y="4" text-anchor="middle">end</text>
+    <text class="cap" y="44" text-anchor="middle">no consumer</text>
+    <text class="cap" y="58" text-anchor="middle">in this diagram</text>
+  </g>
+  <g transform="translate(456,62)">
+    <ellipse class="term" rx="42" ry="13"/>
+    <ellipse class="termring" rx="38" ry="9.5"/>
+    <text class="pname" y="4" text-anchor="middle">terminal</text>
+    <text class="cap" y="44" text-anchor="middle">declared</text>
+    <text class="cap" y="58" text-anchor="middle">terminal place</text>
+    <text class="cap" y="72" text-anchor="middle">of the net</text>
+  </g>
+  <g transform="translate(556,62)">
+    <ellipse class="cut" rx="42" ry="13"/>
+    <text class="pname" y="4" text-anchor="middle">cut</text>
+    <text class="cap" y="44" text-anchor="middle">continues</text>
+    <text class="cap" y="58" text-anchor="middle">outside this view</text>
+  </g>
+  <g transform="translate(662,62)">
+    <ellipse class="pl" rx="48" ry="13"/>
+    <text class="pname" y="4" text-anchor="middle">turnPermit ●</text>
+    <text class="cap" y="44" text-anchor="middle">● one token</text>
+    <text class="cap" y="58" text-anchor="middle">at start</text>
+  </g>
+  <g transform="translate(782,62)">
+    <ellipse class="pl" rx="60" ry="13"/>
+    <text class="pname" y="4" text-anchor="middle">reaskBudget ●×K</text>
+    <text class="cap" y="44" text-anchor="middle">●×K filled K at a time</text>
+    <text class="cap" y="58" text-anchor="middle">by one firing</text>
+  </g>
+
+  <line class="rule" x1="20" y1="146" x2="840" y2="146"/>
+
+  <!-- ============ Transitions, junctions, clusters ============ -->
+  <text class="h" x="20" y="172">Transitions, junctions, subnets</text>
+
+  <!-- priority -->
+  <g transform="translate(20,186)">
+    <rect class="tr" x="0" y="0" width="176" height="28"/>
+    <text class="trtext" x="88" y="18" text-anchor="middle">LlmAgent_ReAsk prio=10</text>
+    <text class="cap" x="0" y="48">transition. prio=N: among enabled</text>
+    <text class="cap" x="0" y="62">ones, higher fires first (default 0,</text>
+    <text class="cap" x="0" y="76">not shown)</text>
+  </g>
+  <!-- timing -->
+  <g transform="translate(222,186)">
+    <rect class="tr" x="0" y="0" width="226" height="28"/>
+    <text class="trtext" x="113" y="18" text-anchor="middle">LiveApiRecovery_Nudge [3000, ∞]ms</text>
+    <text class="cap" x="0" y="48">[earliest, latest]ms firing window after</text>
+    <text class="cap" x="0" y="62">enabling: here a 3 s delay, no deadline.</text>
+    <text class="cap" x="0" y="76">Shown only on timed diagrams.</text>
+  </g>
+  <!-- AND -->
+  <g transform="translate(476,186)">
+    <rect class="tr" x="0" y="4" width="34" height="20"/>
+    <line class="e" x1="34" y1="14" x2="47" y2="14" marker-end="url(#lg-a)"/>
+    <path class="jn" d="M57,4 L67,14 L57,24 L47,14 z"/>
+    <text class="glyph" x="57" y="18.5" text-anchor="middle">✚</text>
+    <path class="e" d="M67,14 L82,4" marker-end="url(#lg-a)"/>
+    <path class="e" d="M67,14 L82,24" marker-end="url(#lg-a)"/>
+    <ellipse class="pl" cx="90" cy="1" rx="9" ry="6"/>
+    <ellipse class="pl" cx="90" cy="27" rx="9" ry="6"/>
+    <text class="cap" x="0" y="48">AND: one token</text>
+    <text class="cap" x="0" y="62">to every branch</text>
+  </g>
+  <!-- XOR -->
+  <g transform="translate(588,186)">
+    <rect class="tr" x="0" y="4" width="34" height="20"/>
+    <line class="e" x1="34" y1="14" x2="47" y2="14" marker-end="url(#lg-a)"/>
+    <path class="jn" d="M57,4 L67,14 L57,24 L47,14 z"/>
+    <text class="glyph" x="57" y="18.5" text-anchor="middle">✕</text>
+    <path class="e" d="M67,14 L82,4" marker-end="url(#lg-a)"/>
+    <path class="e" d="M67,14 L82,24" marker-end="url(#lg-a)"/>
+    <ellipse class="pl" cx="90" cy="1" rx="9" ry="6"/>
+    <ellipse class="pl" cx="90" cy="27" rx="9" ry="6"/>
+    <text class="cap" x="0" y="48">XOR: exactly one</text>
+    <text class="cap" x="0" y="62">branch</text>
+  </g>
+  <!-- cluster -->
+  <g transform="translate(696,186)">
+    <rect class="cluster" x="0" y="0" width="144" height="30" rx="6"/>
+    <text class="name" x="72" y="19" text-anchor="middle">Vad</text>
+    <text class="cap" x="0" y="48">subnet cluster: places and</text>
+    <text class="cap" x="0" y="62">transitions of one subnet.</text>
+    <text class="cap" x="0" y="76">Inside it the subnet prefix</text>
+    <text class="cap" x="0" y="90">(Vad_) is omitted.</text>
+  </g>
+
+  <line class="rule" x1="20" y1="292" x2="840" y2="292"/>
+
+  <!-- ============ Arcs ============ -->
+  <text class="h" x="20" y="318">Arcs</text>
+
+  <!-- input / output -->
+  <g transform="translate(20,336)">
+    <ellipse class="pl" cx="8" cy="14" rx="10" ry="7"/>
+    <line class="e" x1="16" y1="14" x2="54" y2="14" marker-end="url(#lg-a)"/>
+    <rect class="tr" x="56" y="4" width="22" height="20"/>
+    <line class="e" x1="78" y1="14" x2="104" y2="14" marker-end="url(#lg-a)"/>
+    <ellipse class="pl" cx="114" cy="14" rx="10" ry="7"/>
+    <text class="cap" x="0" y="46">input / output:</text>
+    <text class="cap" x="0" y="60">consume, produce</text>
+  </g>
+  <!-- cardinality -->
+  <g transform="translate(166,336)">
+    <ellipse class="pl" cx="8" cy="14" rx="10" ry="7"/>
+    <line class="e" x1="16" y1="14" x2="76" y2="14" marker-end="url(#lg-a)"/>
+    <text class="elabel" x="42" y="9" text-anchor="middle">×3</text>
+    <rect class="tr" x="78" y="4" width="22" height="20"/>
+    <text class="cap" x="0" y="46">×N takes exactly N;</text>
+    <text class="cap" x="0" y="60">* takes all; ≥N at</text>
+    <text class="cap" x="0" y="74">least N</text>
+  </g>
+  <!-- inhibitor -->
+  <g transform="translate(300,336)">
+    <ellipse class="pl" cx="8" cy="14" rx="10" ry="7"/>
+    <line class="inh" x1="16" y1="14" x2="78" y2="14" marker-end="url(#lg-i)"/>
+    <rect class="tr" x="80" y="4" width="22" height="20"/>
+    <text class="cap" x="0" y="46">inhibitor: enabled</text>
+    <text class="cap" x="0" y="60">only while the place</text>
+    <text class="cap" x="0" y="74">is empty</text>
+  </g>
+  <!-- read -->
+  <g transform="translate(436,336)">
+    <ellipse class="pl" cx="8" cy="14" rx="10" ry="7"/>
+    <line class="rd" x1="16" y1="14" x2="76" y2="14" marker-end="url(#lg-r)"/>
+    <rect class="tr" x="78" y="4" width="22" height="20"/>
+    <text class="cap" x="0" y="46">read (grey dashed):</text>
+    <text class="cap" x="0" y="60">needs a token, does</text>
+    <text class="cap" x="0" y="74">not consume it</text>
+  </g>
+  <!-- reset -->
+  <g transform="translate(562,336)">
+    <rect class="tr" x="0" y="4" width="22" height="20"/>
+    <line class="rs" x1="22" y1="14" x2="80" y2="14" marker-end="url(#lg-o)"/>
+    <ellipse class="pl" cx="90" cy="14" rx="10" ry="7"/>
+    <text class="cap" x="0" y="46">reset, unlabelled:</text>
+    <text class="cap" x="0" y="60">firing empties it;</text>
+    <text class="cap" x="0" y="74">"reset+out" refills it</text>
+  </g>
+  <!-- reset bundle -->
+  <g transform="translate(700,336)">
+    <rect class="tr" x="0" y="4" width="22" height="20"/>
+    <line class="rs" x1="22" y1="14" x2="38" y2="14" marker-end="url(#lg-o)"/>
+    <path class="note" d="M44,2 L130,2 L140,12 L140,26 L44,26 z"/>
+    <path class="notefold" d="M130,2 L130,12 L140,12"/>
+    <text class="notetext" x="90" y="18" text-anchor="middle">reset: +7 places</text>
+    <text class="cap" x="0" y="46">bundle: N more reset</text>
+    <text class="cap" x="0" y="60">places, counted from</text>
+    <text class="cap" x="0" y="74">the real transition</text>
+  </g>
+  <line class="rule" x1="20" y1="424" x2="840" y2="424"/>
+
+  <!-- ============ Component diagrams ============ -->
+  <text class="h" x="20" y="450">Component diagrams</text>
+  <g transform="translate(20,464)">
+    <rect class="box" x="0" y="0" width="130" height="28" rx="6"/>
+    <text class="btext" x="65" y="18" text-anchor="middle">component</text>
+    <text class="cap" x="0" y="48">ADK or library component</text>
+  </g>
+  <g transform="translate(190,464)">
+    <rect class="net" x="0" y="0" width="130" height="28" rx="6"/>
+    <text class="btext" x="65" y="18" text-anchor="middle">session net</text>
+    <text class="cap" x="0" y="48">the session net (PetriRunner)</text>
+  </g>
+  <g transform="translate(372,464)">
+    <rect class="obs" x="0" y="0" width="130" height="28" rx="6"/>
+    <text class="btext" x="65" y="18" text-anchor="middle">your code</text>
+    <text class="cap" x="0" y="48">your code / observer</text>
+  </g>
+  <g transform="translate(540,464)">
+    <line class="msg" x1="0" y1="14" x2="118" y2="14" marker-end="url(#lg-m)"/>
+    <text class="cap" x="0" y="48">call or data flow</text>
+  </g>
+  <g transform="translate(700,464)">
+    <line class="ret" x1="0" y1="14" x2="118" y2="14" marker-end="url(#lg-d)"/>
+    <text class="cap" x="0" y="48">return</text>
+  </g>
+  <line class="rule" x1="20" y1="528" x2="840" y2="528"/>
+
+  <!-- ============ Sketch comments ============ -->
+  <g transform="translate(20,542)">
+    <path class="cnote" d="M0,0 L106,0 L116,10 L116,26 L0,26 z"/>
+    <path class="cnotefold" d="M106,0 L106,10 L116,10"/>
+    <text class="notetext" x="56" y="17" text-anchor="middle">comment</text>
+    <line class="cline" x1="116" y1="13" x2="150" y2="13"/>
+    <rect class="tr" x="150" y="3" width="22" height="20"/>
+    <text class="cap" x="190" y="9">A grey dashed note on an <tspan font-style="italic">Illustrative</tspan> sketch is a comment on the sketch, not net structure.</text>
+    <text class="cap" x="190" y="24">Timed sketches show firing windows like the exported nets.</text>
+  </g>
+
+</svg>

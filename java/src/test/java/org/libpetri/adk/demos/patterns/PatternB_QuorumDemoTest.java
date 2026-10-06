@@ -29,6 +29,7 @@ import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
+import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.adk.verify.SmtProofs;
 import org.libpetri.smt.SmtProperty;
 import org.libpetri.smt.SmtVerifier;
@@ -73,7 +74,7 @@ import org.libpetri.smt.SmtVerifier;
  *       {@code PlaceBound(EVENT_OUT, 1)}.</li>
  * </ul>
  */
-class PatternB_QuorumDemoTest {
+public class PatternB_QuorumDemoTest {
 
     record BranchResult(String branchId, String text) {}
 
@@ -125,7 +126,7 @@ class PatternB_QuorumDemoTest {
                 Duration.ofMillis(400),
                 Duration.ofMillis(800));
 
-        var bound = buildNet().bindActions(buildBindings(delays));
+        var bound = SubnetActions.bindComposed(buildNet(), buildBindings(delays));
 
         var registry = SessionExecutorRegistry.strongOwned();
         var agent = PetriAgent.builder("quorum_agent", registry,
@@ -181,7 +182,7 @@ class PatternB_QuorumDemoTest {
         // execution. Verify the bound net, the one that actually runs,
         // rather than an unbound skeleton that could never fire. The
         // actions are never invoked here; only the structure is encoded.
-        var net = buildNet().bindActions(buildBindings(List.of(
+        var net = SubnetActions.bindComposed(buildNet(), buildBindings(List.of(
                 Duration.ofMillis(30),
                 Duration.ofMillis(60),
                 Duration.ofMillis(90),
@@ -213,7 +214,7 @@ class PatternB_QuorumDemoTest {
     //  Net construction
     // ============================================================
 
-    private static PetriNet buildNet() {
+    public static PetriNet buildNet() {
         var builder = PetriNet.builder("kofn-quorum")
                 .place(AdkColours.USER_IN)
                 .place(AdkColours.EVENT_OUT)

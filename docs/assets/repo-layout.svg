@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 388" width="860" height="388" role="img" aria-labelledby="layout-title layout-desc">
+  <title id="layout-title">Repository layout</title>
+  <desc id="layout-desc">The java and python ports sit beside the language-neutral spec directory. Java's SpecFixturesTest writes spec/fixtures/nets with -Dspec.fixtures.write=true and golden-checks it otherwise; Python's tests/conformance golden-checks the same nine stock-subnet fixtures. typescript and rust are planned ports with no directory yet. Change a stock subnet in both ports, regenerate, commit.</desc>
+  <!-- Intended display width: 860 px (1:1). Styles follow docs/assets/diagram-legend.svg
+       (component boxes: grey = port, yellow = spec; solid = writes, dashed = golden check).
+       Facts: java/pom.xml (0.4.0, release 25, google-adk 1.10.1, libpetri 8.0.0),
+       python/pyproject.toml (0.1.0, >=3.11, google-adk~=2.11.0, libpetri>=7.2,<8),
+       java/src/test/.../spec/SpecFixturesTest.java, python/tests/conformance/test_net_fixtures.py,
+       spec/fixtures/nets/*.json. Neither artifact is published yet and no tag exists. -->
+  <style>
+    svg { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .bg { fill: #ffffff; stroke: #d0d7de; }
+    .h { font-size: 13px; font-weight: 600; fill: #1f2328; }
+    .dir { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 700; fill: #1f2328; }
+    .name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; fill: #1f2328; }
+    .btext { font-size: 11.5px; fill: #1f2328; }
+    .cap { font-size: 11.5px; fill: #59636e; }
+    .box { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1; }
+    .net { fill: #fff8e1; stroke: #b08800; stroke-width: 1.2; }
+    .badge { fill: #ffffff; stroke: #8c959f; stroke-width: 1; }
+    .reserved { fill: #ffffff; stroke: #8c959f; stroke-width: 1.5; stroke-dasharray: 0.5 3.5; stroke-linecap: round; }
+    .msg { stroke: #1f2328; stroke-width: 1.3; fill: none; }
+    .msghead { fill: #1f2328; }
+    .ret { stroke: #57606a; stroke-width: 1.2; fill: none; stroke-dasharray: 5 3; }
+    .rethead { fill: #57606a; }
+  </style>
+  <defs>
+    <marker id="rl-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="msghead" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="rl-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="rethead" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0.5" y="0.5" width="859" height="387" rx="8"/>
+  <text class="h" x="20" y="28">Two ports, one structural spec</text>
+
+  <!-- java/ -->
+  <rect class="box" x="20" y="44" width="390" height="96" rx="6"/>
+  <text class="dir" x="34" y="66">java/</text>
+  <rect class="badge" x="284" y="52" width="114" height="20" rx="10"/>
+  <text class="name" x="341" y="66" text-anchor="middle">tag java/v…</text>
+  <text class="btext" x="34" y="88"><tspan class="name">org.libpetri:adk-libpetri</tspan> 0.4.0 (not yet published)</text>
+  <text class="btext" x="34" y="106">Java 25 · ADK Java 1.10.1 · libpetri 8.0.0</text>
+  <text class="name" x="34" y="126">colours · bridge · subnet · runner · verify</text>
+
+  <!-- python/ -->
+  <rect class="box" x="450" y="44" width="390" height="96" rx="6"/>
+  <text class="dir" x="464" y="66">python/</text>
+  <rect class="badge" x="700" y="52" width="128" height="20" rx="10"/>
+  <text class="name" x="764" y="66" text-anchor="middle">tag python/v…</text>
+  <text class="btext" x="464" y="88"><tspan class="name">adk-libpetri</tspan> 0.1.0 (not yet on PyPI)</text>
+  <text class="btext" x="464" y="106">Python 3.11+ · ADK Python 2.11 · libpetri-py ≥7.2,&lt;8</text>
+  <text class="btext" x="464" y="126">same packages, plus <tspan class="name">workflow/</tspan> (from_workflow)</text>
+
+  <!-- arrows between the ports and spec/ -->
+  <line class="msg" x1="60" y1="140" x2="60" y2="198" marker-end="url(#rl-m)"/>
+  <text class="name" x="70" y="166">SpecFixturesTest</text>
+  <text class="cap" x="70" y="183"><tspan class="name">-Dspec.fixtures.write=true</tspan> writes</text>
+
+  <line class="ret" x1="360" y1="200" x2="360" y2="142" marker-end="url(#rl-d)"/>
+  <text class="name" x="370" y="166">SpecFixturesTest</text>
+  <text class="cap" x="370" y="183">golden check</text>
+
+  <line class="ret" x1="600" y1="200" x2="600" y2="142" marker-end="url(#rl-d)"/>
+  <text class="name" x="610" y="166">tests/conformance</text>
+  <text class="cap" x="610" y="183">golden check</text>
+
+  <!-- spec/ -->
+  <rect class="net" x="20" y="200" width="820" height="108" rx="6"/>
+  <text class="dir" x="34" y="222">spec/</text>
+  <text class="btext" x="34" y="244"><tspan class="name">00-index.md … 07-workflow.md</tspan>: the language-neutral contracts · <tspan class="name">coverage-matrix.md</tspan>: requirement → Java test → Python test</text>
+  <text class="btext" x="34" y="264"><tspan class="name">fixtures/nets/*.json</tspan>: the structure of the 9 stock subnets</text>
+  <text class="name" x="34" y="283">llm-agent · llm-step · llm-streaming-step · persist-state · prompt-builder</text>
+  <text class="name" x="34" y="299">router · streaming-llm-agent · tool-dispatch · transfer-router</text>
+
+  <!-- reserved ports and caption -->
+  <rect class="reserved" x="20" y="332" width="150" height="34" rx="6"/>
+  <text class="name" x="95" y="353" text-anchor="middle">typescript/</text>
+  <rect class="reserved" x="186" y="332" width="150" height="34" rx="6"/>
+  <text class="name" x="261" y="353" text-anchor="middle">rust/</text>
+  <text class="cap" x="356" y="339">Planned ports; no directory yet.</text>
+  <text class="cap" x="356" y="355">Each port calls its own libpetri port and golden-checks spec/fixtures/nets.</text>
+  <text class="cap" x="356" y="371">Change a stock subnet in both ports, regenerate, commit.</text>
+</svg>

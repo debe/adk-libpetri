@@ -1,0 +1,94 @@
+{
+  "name": "TransferRouter",
+  "places": [
+    {
+      "name": "TransferRouter_target/Sales",
+      "type": "TransferTarget"
+    },
+    {
+      "name": "TransferRouter_target/Support",
+      "type": "TransferTarget"
+    },
+    {
+      "name": "TransferRouter_target/_unknown",
+      "type": "TransferTarget"
+    },
+    {
+      "name": "eventOut",
+      "type": "Event"
+    },
+    {
+      "name": "transfer",
+      "type": "TransferTarget"
+    }
+  ],
+  "ports": [
+    {
+      "direction": "out",
+      "name": "eventOut",
+      "place": "eventOut"
+    },
+    {
+      "direction": "out",
+      "name": "target/Sales",
+      "place": "TransferRouter_target/Sales"
+    },
+    {
+      "direction": "out",
+      "name": "target/Support",
+      "place": "TransferRouter_target/Support"
+    },
+    {
+      "direction": "out",
+      "name": "target/_unknown",
+      "place": "TransferRouter_target/_unknown"
+    },
+    {
+      "direction": "in",
+      "name": "transfer",
+      "place": "transfer"
+    }
+  ],
+  "transitions": [
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "transfer"
+        }
+      ],
+      "match": null,
+      "name": "TransferRouter_Demux",
+      "output": {
+        "xor": [
+          "TransferRouter_target/Sales",
+          "TransferRouter_target/Support",
+          "TransferRouter_target/_unknown"
+        ]
+      },
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    },
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "TransferRouter_target/_unknown"
+        }
+      ],
+      "match": null,
+      "name": "TransferRouter_EmitUnknownError",
+      "output": "eventOut",
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    }
+  ]
+}

@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 604" width="860" height="604" role="img" aria-labelledby="io-title io-desc">
+  <title id="io-title">Ingress and egress</title>
+  <desc id="io-desc">Every external signal enters a session net through its own typed environment place, by runner.inject or runner.signal: userIn, turnAbort, the streaming chunk place, scrollIn, the voice-activity places and any place you declare. The only way out is the eventOut place. The event-store bridge turns eventOut tokens into the hot adkEvents stream that PetriAgent or PetriWorkflow hands to the ADK Runner, and turns transition failures and timeouts into the failure signal, which fails the turn in flight and signals turnAbort. Every net event also flows down the EventStore decorator chain for observability.</desc>
+  <!-- Intended display width: 860 px (1:1). White card, no dark-mode overrides, like diagram-legend.svg.
+       Sources: AdkColours / adk_libpetri.colours (USER_IN, TURN_ABORT, EVENT_OUT); LlmStreamingStepSubnet.Places.CHUNK
+       and llm_streaming_step.Places.CHUNK; ScrollAwareDemoTest / test_scroll_aware_demo SCROLL_IN; VadSubnet /
+       vad_subnet Places.SPEECH_STARTED; PetriRunner.Builder.start (TURN_ABORT auto-declared, bridge outermost);
+       EventStoreToFlowableBridge.append / EventStoreToStreamBridge; PetriAgent.abortTurnsOnFailure and
+       runner/turn.py abort_turns_on_failure; libpetri-py >= 7.2 Python EventStore protocol. -->
+  <style>
+    svg { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .bg { fill: #ffffff; stroke: #d0d7de; }
+    .h { font-size: 13px; font-weight: 600; fill: #1f2328; }
+    .pname { font-size: 11.5px; fill: #1f2328; }
+    .m { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; fill: #1f2328; }
+    .ms { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; fill: #1f2328; }
+    .t { font-size: 11.5px; fill: #1f2328; }
+    .cap { font-size: 11px; fill: #59636e; }
+    .capr { font-size: 11px; fill: #a40e26; }
+    .env { fill: #f8d7da; stroke: #721c24; stroke-width: 2; stroke-dasharray: 4 2.5; }
+    .end { fill: #cce5ff; stroke: #004085; stroke-width: 2; }
+    .endring { fill: none; stroke: #004085; stroke-width: 2; }
+    .tr { fill: #fff3cd; stroke: #856404; stroke-width: 1; }
+    .net { fill: #fff8e1; stroke: #b08800; stroke-width: 1.2; }
+    .box { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1; }
+    .obs { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1; }
+    .fail { fill: #ffebe9; stroke: #cf222e; stroke-width: 1.2; }
+    .grp { fill: none; stroke: #8c959f; stroke-width: 1.2; stroke-dasharray: 5 3; }
+    .e { stroke: #333333; stroke-width: 1.2; fill: none; }
+    .er { stroke: #cf222e; stroke-width: 1.4; fill: none; }
+    .ah { fill: #333333; }
+    .ahr { fill: #cf222e; }
+    .foot { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
+  </style>
+  <defs>
+    <marker id="io-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="io-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="ahr" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+  <rect class="bg" x="0.5" y="0.5" width="859" height="603" rx="8"/>
+
+  <!-- ============ Ingress ============ -->
+  <text class="h" x="16" y="28">Ingress: one typed env place per signal</text>
+  <text class="cap" x="16" y="45">runner.inject(place, token) or runner.signal(place), from any thread; same names in both ports</text>
+  <text class="cap" x="16" y="60">constant: type (Java · Python); a Void place is Place[None] in Python</text>
+
+  <!-- net frame -->
+  <rect class="net" x="276" y="72" width="332" height="406" rx="10"/>
+  <text class="h" x="442" y="92" text-anchor="middle">one net per session (PetriRunner)</text>
+  <text class="cap" x="483" y="108" text-anchor="middle">transitions</text>
+  <rect class="tr" x="476" y="116" width="14" height="304"/>
+
+  <text class="m" x="16" y="136">USER_IN: Content</text>
+  <text class="cap" x="16" y="151">PetriAgent / PetriWorkflow, once per turn</text>
+  <path class="e" d="M260,132 L286,132" marker-end="url(#io-a)"/>
+  <ellipse class="env" cx="326" cy="132" rx="38" ry="13"/>
+  <text class="pname" x="326" y="136" text-anchor="middle">userIn</text>
+  <path class="e" d="M366,132 L474,132" marker-end="url(#io-a)"/>
+  <text class="m" x="16" y="179">TURN_ABORT: Void · None</text>
+  <text class="cap" x="16" y="194">PetriAgent / PetriWorkflow, on every</text>
+  <text class="cap" x="16" y="208">failure (auto-declared when present)</text>
+  <path class="e" d="M260,175 L286,175" marker-end="url(#io-a)"/>
+  <ellipse class="env" cx="332" cy="175" rx="44" ry="13"/>
+  <text class="pname" x="332" y="179" text-anchor="middle">turnAbort</text>
+  <path class="e" d="M378,175 L474,175" marker-end="url(#io-a)"/>
+  <text class="m" x="16" y="236">CHUNK: LlmResponseChunk</text>
+  <text class="cap" x="16" y="251">LlmStreamingStep, once per SSE partial</text>
+  <path class="e" d="M260,232 L286,232" marker-end="url(#io-a)"/>
+  <ellipse class="env" cx="370" cy="232" rx="82" ry="13"/>
+  <text class="pname" x="370" y="236" text-anchor="middle">LlmStreamingStep_chunk</text>
+  <path class="e" d="M454,232 L474,232" marker-end="url(#io-a)"/>
+  <text class="m" x="16" y="279">SCROLL_IN: Scroll</text>
+  <text class="cap" x="16" y="294">a UI thread (ScrollAware demo)</text>
+  <path class="e" d="M260,275 L286,275" marker-end="url(#io-a)"/>
+  <ellipse class="env" cx="326" cy="275" rx="38" ry="13"/>
+  <text class="pname" x="326" y="279" text-anchor="middle">scrollIn</text>
+  <path class="e" d="M366,275 L474,275" marker-end="url(#io-a)"/>
+  <text class="m" x="16" y="322">SPEECH_STARTED …: Void · None</text>
+  <text class="cap" x="16" y="337">voice edges. Java: VadTapGemini or</text>
+  <text class="cap" x="16" y="351">SyncGeminiLiveConnection. Python:</text>
+  <text class="cap" x="16" y="365">GenaiLiveConnection (ADK 2.11 also</text>
+  <text class="cap" x="16" y="379">keeps Event.voice_activity)</text>
+  <path class="e" d="M260,318 L286,318" marker-end="url(#io-a)"/>
+  <ellipse class="env" cx="360" cy="318" rx="72" ry="13"/>
+  <text class="pname" x="360" y="322" text-anchor="middle">Vad_speechStarted …</text>
+  <path class="e" d="M434,318 L474,318" marker-end="url(#io-a)"/>
+  <text class="m" x="16" y="407">YOUR_PLACE: Place&lt;T&gt; · Place[T]</text>
+  <text class="cap" x="16" y="422">builder.environmentPlace(p) in Java,</text>
+  <text class="cap" x="16" y="436">environment_place(p) in Python</text>
+  <path class="e" d="M260,403 L286,403" marker-end="url(#io-a)"/>
+  <ellipse class="env" cx="334" cy="403" rx="46" ry="13"/>
+  <text class="pname" x="334" y="407" text-anchor="middle">yourPlace</text>
+  <path class="e" d="M382,403 L474,403" marker-end="url(#io-a)"/>
+
+  <!-- eventOut -->
+  <path class="e" d="M490,268 L514,268" marker-end="url(#io-a)"/>
+  <ellipse class="end" cx="556" cy="268" rx="40" ry="13"/>
+  <ellipse class="endring" cx="556" cy="268" rx="36" ry="9.5"/>
+  <text class="pname" x="556" y="272" text-anchor="middle">eventOut</text>
+  <text class="ms" x="556" y="298" text-anchor="middle">EVENT_OUT</text>
+  <text class="cap" x="556" y="313" text-anchor="middle">type Event;</text>
+  <text class="cap" x="556" y="327" text-anchor="middle">the only way out</text>
+  <text class="cap" x="442" y="452" text-anchor="middle">the marking is the state;</text>
+  <text class="cap" x="442" y="466" text-anchor="middle">no method calls into transitions</text>
+
+  <!-- ============ Egress ============ -->
+  <text class="h" x="624" y="28">Egress and observation</text>
+
+  <rect class="box" x="624" y="72" width="222" height="44" rx="6"/>
+  <text class="m" x="735" y="90" text-anchor="middle">PetriAgent / PetriWorkflow</text>
+  <text class="t" x="735" y="107" text-anchor="middle">→ ADK Runner</text>
+
+  <path class="e" d="M735,148 L735,118" marker-end="url(#io-a)"/>
+  <rect class="box" x="624" y="150" width="222" height="58" rx="6"/>
+  <text class="ms" x="735" y="167" text-anchor="middle">adkEvents(): Flowable&lt;Event&gt;</text>
+  <text class="ms" x="735" y="182" text-anchor="middle">adk_events(): HotStream[Event]</text>
+  <text class="cap" x="735" y="198" text-anchor="middle">hot; subscribe before inject</text>
+
+  <path class="e" d="M735,238 L735,210" marker-end="url(#io-a)"/>
+  <text class="cap" x="743" y="228">eventOut tokens</text>
+
+  <path class="e" d="M596,268 L622,268" marker-end="url(#io-a)"/>
+  <rect class="box" x="624" y="240" width="222" height="56" rx="6"/>
+  <text class="ms" x="735" y="258" text-anchor="middle">EventStoreToFlowableBridge</text>
+  <text class="ms" x="735" y="273" text-anchor="middle">EventStoreToStreamBridge</text>
+  <text class="cap" x="735" y="289" text-anchor="middle">outermost EventStore of the runner</text>
+
+  <!-- failure signal -->
+  <path class="er" d="M644,296 L644,523 L610,523" marker-end="url(#io-r)"/>
+  <rect class="fail" x="276" y="494" width="332" height="58" rx="6"/>
+  <text class="ms" x="442" y="513" text-anchor="middle">failureSignal() · failure_signal()</text>
+  <text class="capr" x="442" y="529" text-anchor="middle">on TransitionFailed or TransitionTimedOut:</text>
+  <text class="capr" x="442" y="544" text-anchor="middle">fails the turn in flight, signals TURN_ABORT</text>
+
+  <!-- decorator chain -->
+  <path class="e" d="M753,296 L753,346" marker-end="url(#io-a)"/>
+  <text class="cap" x="761" y="316">every NetEvent</text>
+  <rect class="grp" x="660" y="326" width="186" height="200" rx="6"/>
+  <rect class="obs" x="676" y="348" width="158" height="28" rx="6"/>
+  <text class="ms" x="753" y="366" text-anchor="middle">OtelEventStore</text>
+  <path class="e" d="M753,376 L753,390" marker-end="url(#io-a)"/>
+  <rect class="obs" x="676" y="392" width="158" height="28" rx="6"/>
+  <text class="ms" x="753" y="410" text-anchor="middle">EventStore.logging()</text>
+  <path class="e" d="M753,420 L753,434" marker-end="url(#io-a)"/>
+  <rect class="obs" x="676" y="436" width="158" height="28" rx="6"/>
+  <text class="ms" x="753" y="454" text-anchor="middle">downstream EventStore</text>
+  <text class="cap" x="753" y="484" text-anchor="middle">decorator chain, for example.</text>
+  <text class="cap" x="753" y="499" text-anchor="middle">Same chain in both ports.</text>
+
+  <rect class="foot" x="10" y="556" width="840" height="38" rx="6"/>
+  <text class="t" x="24" y="580">No <tspan class="m">observe(Place)</tspan>. Design commitments: interaction is env-place injection only; observability goes through the EventStore chain.</text>
+</svg>

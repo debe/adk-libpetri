@@ -100,7 +100,7 @@ import org.libpetri.smt.SmtVerifier;
  *       subnet without bypassing the env-place contract.</li>
  * </ol>
  */
-class VoiceSessionDemoTest {
+public class VoiceSessionDemoTest {
 
     private static final LiveApiRecoverySubnet.Config FAST_RECOVERY =
             new LiveApiRecoverySubnet.Config(Duration.ofMillis(80), Duration.ofMillis(80));
@@ -584,8 +584,12 @@ class VoiceSessionDemoTest {
     private static final Place<Void> BIDI_CHUNKS_DROPPED =
             Place.of("bidiDemo_chunksDropped", Void.class);
 
-    @Test
-    void barge_in_structurally_drops_the_queued_model_chunks() throws Exception {
+    /**
+     * The barge-in chunk-drop net, unbound: stock {@link BargeInSubnet} plus
+     * {@code Bidi_EmitChunk} and {@code Bidi_DropQueuedTurn}. Public so the
+     * README diagram generator exports the same net this test runs.
+     */
+    public static PetriNet bargeInDropNet() {
         // ============================================================
         //  Net: stock BargeIn decides whether an interrupt is a real
         //  barge-in, and the drop transition hangs off its verdict.
@@ -607,12 +611,17 @@ class VoiceSessionDemoTest {
                 .outputs(Arc.Out.place(BIDI_CHUNKS_DROPPED))
                 .build();
 
-        var net = PetriNet.builder("barge-in-drop")
+        return PetriNet.builder("barge-in-drop")
                 .compose(BargeInSubnet.DEF)
                 .place(BIDI_CHUNKS_DROPPED)
                 .transition(emitChunk)
                 .transition(dropQueuedTurn)
                 .build();
+    }
+
+    @Test
+    void barge_in_structurally_drops_the_queued_model_chunks() throws Exception {
+        var net = bargeInDropNet();
 
         Map<String, TransitionAction> bindings = new LinkedHashMap<>();
         bindings.put("Bidi_EmitChunk", ctx -> {
@@ -722,17 +731,17 @@ class VoiceSessionDemoTest {
                 .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
                 .build();
 
-        var net = PetriNet.builder("reset-arc-demo")
+        var structure = PetriNet.builder("reset-arc-demo")
                 .place(AdkColours.USER_IN)
                 .place(AdkColours.EVENT_OUT)
                 .place(UTTERANCE_IN)
                 .place(CURRENT_INTENT)
                 .transition(onNewUtterance)
                 .transition(echoIntent)
-                .build()
-                .bindActions(Map.of(
-                        T_ON_NEW_UTTERANCE, onNewUtteranceAction(),
-                        T_ECHO_INTENT,      echoIntentAction()));
+                .build();
+        var net = SubnetActions.bindComposed(structure, Map.of(
+                T_ON_NEW_UTTERANCE, onNewUtteranceAction(),
+                T_ECHO_INTENT,      echoIntentAction()));
 
         // ============================================================
         //  ADK wiring — two typed env places, one ADK runner.
@@ -855,6 +864,7 @@ class VoiceSessionDemoTest {
         var voiceOpenEnv      = EnvironmentPlace.of(BargeInSubnet.Places.VOICE_ACTIVITY_OPEN);
         var responseAwaitedEnv = EnvironmentPlace.of(LiveApiRecoverySubnet.Places.RESPONSE_AWAITED);
         var modelActiveEnv    = EnvironmentPlace.of(LiveApiRecoverySubnet.Places.MODEL_ACTIVE);
+        var modelQuietEnv     = EnvironmentPlace.of(LiveApiRecoverySubnet.Places.MODEL_QUIET);
 
         // One property, so one verify(). This used to chain a CHUNK_BUDGET
         // bound in front of deadlockFree(); SmtVerifier.property() replaces
@@ -863,7 +873,7 @@ class VoiceSessionDemoTest {
         SmtProofs.assertEachProven(net,
                 v -> v.initialMarking(b -> b.tokens(AdkColours.USER_IN, 1))
                         .environmentPlaces(userInEnv, chunkEnv, interruptedEnv, voiceOpenEnv,
-                                           responseAwaitedEnv, modelActiveEnv)
+                                           responseAwaitedEnv, modelActiveEnv, modelQuietEnv)
                         .environmentMode(EnvironmentAnalysisMode.bounded(1))
                         .sinkPlaces(
                                 AdkColours.EVENT_OUT,
@@ -871,7 +881,8 @@ class VoiceSessionDemoTest {
                                 BargeInSubnet.Places.BARGE_IN_SENT,
                                 BargeInSubnet.Places.INTERRUPT_DISCARDED,
                                 LiveApiRecoverySubnet.Places.NUDGE_NEEDED,
-                                LiveApiRecoverySubnet.Places.RECONNECT_NEEDED),
+                                LiveApiRecoverySubnet.Places.RECONNECT_NEEDED,
+                                LiveApiRecoverySubnet.Places.QUIET_IGNORED),
                 Map.of("deadlockFree", SmtProperty.deadlockFree()));
     }
 

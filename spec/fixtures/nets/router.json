@@ -1,0 +1,68 @@
+{
+  "name": "Router",
+  "places": [
+    {
+      "name": "eventOut",
+      "type": "Event"
+    },
+    {
+      "name": "llmResponse",
+      "type": "LlmResponse"
+    },
+    {
+      "name": "toolCalls",
+      "type": "ToolCalls"
+    },
+    {
+      "name": "transfer",
+      "type": "TransferTarget"
+    }
+  ],
+  "ports": [
+    {
+      "direction": "out",
+      "name": "eventOut",
+      "place": "eventOut"
+    },
+    {
+      "direction": "in",
+      "name": "llmResponse",
+      "place": "llmResponse"
+    },
+    {
+      "direction": "out",
+      "name": "toolCalls",
+      "place": "toolCalls"
+    },
+    {
+      "direction": "out",
+      "name": "transfer",
+      "place": "transfer"
+    }
+  ],
+  "transitions": [
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "llmResponse"
+        }
+      ],
+      "match": null,
+      "name": "Router_Route",
+      "output": {
+        "xor": [
+          "toolCalls",
+          "transfer",
+          "eventOut"
+        ]
+      },
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    }
+  ]
+}

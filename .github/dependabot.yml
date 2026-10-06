@@ -12,6 +12,17 @@ updates:
       # The protobuf floor is deliberate (see the pom and README): it tracks
       # what ADK's transitives were compiled against, not the latest release.
       - dependency-name: com.google.protobuf:*
+  - package-ecosystem: pip
+    directory: /python
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      # google-adk is pinned to a patch range on purpose: from_workflow
+      # reproduces Workflow scheduling internals (ADR 0006). Minor bumps go
+      # through the ADR's re-check procedure by hand.
+      - dependency-name: google-adk
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

@@ -28,8 +28,8 @@
  *
  * <h2>The three patterns</h2>
  * <ul>
- *   <li><b>Pattern A — Speculative race</b> with structural
- *       cancellation via {@code Place<Void> RACE_WON} inhibitor.</li>
+ *   <li><b>Pattern A — Speculative race</b> with an at-most-once
+ *       commit via a consumed {@code RACE_PERMIT}.</li>
  *   <li><b>Pattern B — Late-join / K-of-N quorum</b> via
  *       {@code Arc.In.exactly(K, RESULT)} cardinality input arc.</li>
  *   <li><b>Pattern C — Optimistic commit with fallback</b> via XOR

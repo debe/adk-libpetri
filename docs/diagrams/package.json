@@ -3,9 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Diagram-generation scripts that build the canonical adk-libpetri net topologies via the libpetri npm package and render them to SVG via graphviz.",
+  "description": "Renders the README diagrams: illustrative sketches built via the libpetri npm package (dot/sketch-*.dot), plus every DOT file in dot/ (including those exported by Java's ReadmeDiagramsTest and Python's tests/readme_diagrams), to SVG via graphviz.",
   "scripts": {
-    "build": "tsx src/index.ts && for f in dot/*.dot; do dot -Tsvg \"$f\" -o \"svg/$(basename \"$f\" .dot).svg\"; done"
+    "sketches": "tsx src/index.ts",
+    "render": "mkdir -p svg && for f in dot/*.dot; do dot -Tsvg \"$f\" -o \"svg/$(basename \"$f\" .dot).svg\" || exit 1; done",
+    "build": "npm run sketches && npm run render"
   },
   "dependencies": {
     "libpetri": "^2.5.0"

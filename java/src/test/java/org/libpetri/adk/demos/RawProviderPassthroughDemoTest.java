@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 import org.libpetri.adk.colours.AdkColours;
+import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.core.Arc;
 import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
@@ -76,15 +77,15 @@ class RawProviderPassthroughDemoTest {
 
     @Test
     void raw_request_is_routed_through_a_user_transition_to_a_raw_event() {
-        var net = PetriNet.builder("raw-passthrough")
+        var structure = PetriNet.builder("raw-passthrough")
                 .place(VAD_FRAME)
                 .place(VAD_RESULT)
                 .transition(Transition.builder("T_CallRaw")
                         .inputs(Arc.In.one(VAD_FRAME))
                         .outputs(Arc.Out.place(VAD_RESULT))
                         .build())
-                .build()
-                .bindActions(Map.of("T_CallRaw", callRawAction()));
+                .build();
+        var net = SubnetActions.bindComposed(structure, Map.of("T_CallRaw", callRawAction()));
 
         var initial = new LinkedHashMap<Place<?>, List<Token<?>>>();
         initial.put(VAD_FRAME, List.of(

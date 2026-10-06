@@ -53,3 +53,40 @@ jobs:
       # HTML surfaced only at release time, inside -Prelease.
       - name: Javadoc
         run: ./mvnw -B -q javadoc:javadoc
+
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.13']
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: python/pyproject.toml
+
+      # Same gate as the Java job: without z3 every requires_z3 test skips
+      # silently. REQUIRE_Z3 makes tests/test_z3_gate.py fail instead.
+      - name: Install z3
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q z3
+          z3 --version
+
+      - run: pip install -e '.[dev]'
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pyright
+      # tests/conformance golden-checks every stock subnet against the Java
+      # nets in spec/fixtures/nets, which the Java job golden-checks too.
+      - run: pytest
+        env:
+          REQUIRE_Z3: '1'

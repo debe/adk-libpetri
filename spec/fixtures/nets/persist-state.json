@@ -1,0 +1,35 @@
+{
+  "name": "PersistState",
+  "places": [
+    {
+      "name": "legacySessionWrite",
+      "type": "LegacySessionWrite"
+    }
+  ],
+  "ports": [
+    {
+      "direction": "in",
+      "name": "legacySessionWrite",
+      "place": "legacySessionWrite"
+    }
+  ],
+  "transitions": [
+    {
+      "inhibitors": [],
+      "inputs": [
+        {
+          "count": 1,
+          "kind": "one",
+          "place": "legacySessionWrite"
+        }
+      ],
+      "match": null,
+      "name": "PersistState_Persist",
+      "output": null,
+      "priority": 0,
+      "reads": [],
+      "resets": [],
+      "timing": null
+    }
+  ]
+}

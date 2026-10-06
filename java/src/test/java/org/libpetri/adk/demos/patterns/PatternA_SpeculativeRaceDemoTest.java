@@ -31,6 +31,7 @@ import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.runner.PetriAgent;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.adk.runner.SessionExecutorRegistry;
+import org.libpetri.adk.subnet.SubnetActions;
 import org.libpetri.adk.verify.SmtProofs;
 import org.libpetri.runtime.BitmapNetExecutor;
 import org.libpetri.smt.SmtProperty;
@@ -42,18 +43,21 @@ import org.libpetri.smt.SmtVerifier;
  * <p>Three branches dispatch concurrently on one {@code USER_IN}. The first
  * one to deposit a result token commits to {@code EVENT_OUT}. Committing
  * consumes the turn's single {@code RACE_PERMIT} token, so no other commit
- * can fire, and produces a token on {@code RACE_WON}, which structurally
- * cancels the losers (via inhibitor arc) and opens their discard path.
- * Late results drain to a sink — they cannot commit.
+ * can fire, and produces a token on {@code RACE_WON}, which opens the
+ * losers' discard path. The net does not dispose the losers: their actions
+ * run to completion and their results drain to {@code RACE_DISCARDED}. They
+ * cannot commit.
  *
  * <h2>Why this exists</h2>
- * <p>Stock ADK {@code ParallelAgent} is a barrier-join: it waits for every
- * sub-agent to emit before completing. There is no "first-wins" agent type
- * and no path to structural cancellation — the only way to express
- * speculative racing in plain ADK is to escape the agent tree entirely
- * with an {@code Flowable.merge(...).firstElement()} inside a custom
- * {@code BaseAgent}. See {@code PatternA_AdkOnlyFoilTest} for the paired
- * counter-example.
+ * <p>Stock ADK {@code ParallelAgent.runAsyncImpl} is
+ * {@code Flowable.merge(branches).takeUntil(escalate)} (ADK 1.10.1): the
+ * first branch to escalate ends the merge and disposes the rest. That is
+ * first-escalation-wins. It does not give a preference order, a K-of-N
+ * commit without a check-and-act counter in {@code session.state}, or a
+ * provable at-most-once commit that composes with a turn permit and abort.
+ * A custom {@code BaseAgent} with {@code Flowable.merge(...).firstElement()}
+ * gets first-wins and disposes the losers; see
+ * {@code PatternA_AdkOnlyFoilTest} for that paired counter-example.
  *
  * <h2>Topology</h2>
  * <pre>
@@ -101,7 +105,7 @@ import org.libpetri.smt.SmtVerifier;
  * how the branch actions are implemented. Each is proved on its own, without
  * {@code assumeAtomicFiring}.
  */
-class PatternA_SpeculativeRaceDemoTest {
+public class PatternA_SpeculativeRaceDemoTest {
 
     /** Test-local typed colour for branch results. */
     record BranchResult(String branchId, String text) {}
@@ -156,7 +160,7 @@ class PatternA_SpeculativeRaceDemoTest {
     @Test
     void fastest_branch_commits_first_and_losers_are_structurally_cancelled() throws Exception {
         var net = buildNet();
-        var bound = net.bindActions(buildBindings(
+        var bound = SubnetActions.bindComposed(net, buildBindings(
                 Duration.ofMillis(20),   // fast
                 Duration.ofMillis(120),  // medium
                 Duration.ofMillis(300)));// slow
@@ -200,7 +204,7 @@ class PatternA_SpeculativeRaceDemoTest {
      */
     @Test
     void two_results_ready_in_one_pass_commit_exactly_once() {
-        var net = buildNet().bindActions(buildBindings(
+        var net = SubnetActions.bindComposed(buildNet(), buildBindings(
                 Duration.ofMillis(20), Duration.ofMillis(120), Duration.ofMillis(300)));
         Map<Place<?>, List<Token<?>>> initial = Map.of(
                 BRANCH_A_DONE, List.of(Token.of(new BranchResult("fast", "answer from fast"))),
@@ -276,7 +280,7 @@ class PatternA_SpeculativeRaceDemoTest {
      * by the verifier; only the structure is encoded.
      */
     private static PetriNet boundNet() {
-        return buildNet().bindActions(buildBindings(
+        return SubnetActions.bindComposed(buildNet(), buildBindings(
                 Duration.ofMillis(20),
                 Duration.ofMillis(120),
                 Duration.ofMillis(300)));
@@ -286,7 +290,7 @@ class PatternA_SpeculativeRaceDemoTest {
     //  Net construction
     // ============================================================
 
-    private static PetriNet buildNet() {
+    public static PetriNet buildNet() {
         return PetriNet.builder("speculative-race")
                 .place(AdkColours.USER_IN)
                 .place(AdkColours.EVENT_OUT)

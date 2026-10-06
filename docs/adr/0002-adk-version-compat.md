@@ -186,7 +186,8 @@ Cheap, ordered, and stops early when nothing on our surface moved.
    with "The touched surface" above. Files outside it need no reading.
 2. **Re-resolve the transitive floors.** `./mvnw dependency:tree` and confirm
    the resolved `google-genai` and `protobuf-java` versions. protobuf must stay
-   at or above ADK's own pin (gencode contract; see the README section). ADK
+   at or above ADK's own pin (gencode contract; see
+   [java/README.md](../../java/README.md#protobuf-version-floor)). ADK
    1.7.0 pins `4.33.5`, which is why we do too.
 3. **Read the diffs for behaviour, not signatures.** A signature-compatible
    change to *when* something happens (this release: `doOnNext` ->

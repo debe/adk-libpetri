@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 668" width="860" height="668" role="img" aria-labelledby="bidi-title bidi-desc">
+  <title id="bidi-title">BIDI halves</title>
+  <desc id="bidi-desc">The bridge (Java BidiPetriAgent.bridge, Python bidi_petri_agent.bridge) pumps LiveRequestQueue requests into a LiveConnection, hands each raw server message to the caller's onServerMessage callback, which injects content and signals into the session runner, and returns the runner's egress, adkEvents, to the ADK Runner. Below, the ways to get voice-activity edges: Java VadTapGemini, Java SyncGeminiLiveConnection, and in Python stock ADK's Event.voice_activity or GenaiLiveConnection.</desc>
+  <!-- Intended display width: 860 px (1:1). White card, no dark-mode overrides: the palette and
+       arc styles follow docs/assets/diagram-legend.svg ("Component diagrams" row).
+       Drawn from java/.../runner/BidiPetriAgent.java (bridge), LiveConnection.java,
+       PetriAgent.runLiveImpl; python/src/adk_libpetri/runner/bidi_petri_agent.py (bridge),
+       live_connection.py, petri_agent.py (_run_live_impl); the exemplars
+       java/src/test/.../demos/VadTapGemini.java, SyncGeminiLiveConnection.java and
+       python/tests/demos/voice/genai_live_connection.py; and the foil
+       python/tests/demos/test_voice_vad_edge_adk_foil.py. -->
+  <style>
+    svg { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .bg { fill: #ffffff; stroke: #d0d7de; stroke-width: 1; }
+    .m { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; fill: #1f2328; }
+    .mb { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; font-weight: 600; fill: #1f2328; }
+    .h { font-size: 13px; font-weight: 600; fill: #1f2328; }
+    .t { font-size: 11.5px; fill: #1f2328; }
+    .c { font-size: 11.5px; fill: #59636e; }
+    .tag { font-size: 11.5px; font-weight: 600; fill: #59636e; }
+    .box { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1; }
+    .net { fill: #fff8e1; stroke: #b08800; stroke-width: 1.2; }
+    .obs { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1; }
+    .frame { fill: none; stroke: #8c959f; stroke-width: 1.2; stroke-dasharray: 6 4; }
+    .card { fill: #ffffff; stroke: #d0d7de; stroke-width: 1; }
+    .msg { stroke: #1f2328; stroke-width: 1.3; fill: none; }
+    .msghead { fill: #1f2328; }
+  </style>
+  <defs>
+    <marker id="bd-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="msghead" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0.5" y="0.5" width="859" height="667" rx="8"/>
+
+  <text class="h" x="16" y="28">runLiveImpl with a live config: the two halves of one live session</text>
+  <text class="tag" x="496" y="28">@Experimental</text>
+
+  <!-- ===== bridge frame ===== -->
+  <rect class="frame" x="140" y="48" width="500" height="244" rx="8"/>
+  <text class="m" x="156" y="68">bridge(inbound, connection, runner, onServerMessage)</text>
+  <text class="c" x="156" y="85">Java: BidiPetriAgent.bridge → Flowable&lt;Event&gt;</text>
+  <text class="c" x="156" y="100">Python: bidi_petri_agent.bridge → AsyncGenerator[Event]</text>
+
+  <!-- ADK Runner -->
+  <rect class="box" x="16" y="116" width="112" height="170" rx="6"/>
+  <text class="mb" x="72" y="160" text-anchor="middle">ADK Runner</text>
+  <text class="m" x="72" y="178" text-anchor="middle">runLive(...)</text>
+  <text class="m" x="72" y="193" text-anchor="middle">run_live(...)</text>
+  <text class="c" x="72" y="212" text-anchor="middle">via PetriAgent</text>
+  <text class="m" x="72" y="230" text-anchor="middle">runLiveImpl</text>
+  <text class="m" x="72" y="245" text-anchor="middle">_run_live_impl</text>
+
+  <!-- LiveRequestQueue -->
+  <rect class="box" x="160" y="116" width="150" height="56" rx="6"/>
+  <text class="m" x="235" y="132" text-anchor="middle">LiveRequestQueue</text>
+  <text class="c" x="235" y="148" text-anchor="middle">ctx.liveRequestQueue()</text>
+  <text class="c" x="235" y="163" text-anchor="middle">ctx.live_request_queue</text>
+  <path class="msg" d="M128,136 L158,136" marker-end="url(#bd-a)"/>
+
+  <!-- LiveConnection -->
+  <rect class="box" x="656" y="116" width="188" height="176" rx="6"/>
+  <text class="mb" x="750" y="138" text-anchor="middle">LiveConnection</text>
+  <text class="c" x="750" y="156" text-anchor="middle">Java: BaseLlmConnection</text>
+  <text class="c" x="750" y="171" text-anchor="middle">plus rawReceive()</text>
+  <text class="c" x="750" y="189" text-anchor="middle">Python: a Protocol with</text>
+  <text class="c" x="750" y="204" text-anchor="middle">send_content, send_realtime,</text>
+  <text class="c" x="750" y="219" text-anchor="middle">raw_receive, close</text>
+  <text class="c" x="750" y="240" text-anchor="middle">yours to implement, e.g.</text>
+  <text class="c" x="750" y="255" text-anchor="middle">SyncGeminiLiveConnection,</text>
+  <text class="c" x="750" y="270" text-anchor="middle">GenaiLiveConnection</text>
+
+  <!-- input pump -->
+  <path class="msg" d="M310,136 L654,136" marker-end="url(#bd-a)"/>
+  <text class="c" x="324" y="129">input pump</text>
+  <text class="m" x="324" y="154">blob → sendRealtime · send_realtime</text>
+  <text class="m" x="324" y="169">content → sendContent · send_content</text>
+  <text class="m" x="324" y="184">shouldClose · close → close</text>
+
+  <!-- output pump -->
+  <rect class="obs" x="380" y="204" width="140" height="70" rx="6"/>
+  <text class="m" x="450" y="220" text-anchor="middle">onServerMessage</text>
+  <text class="m" x="450" y="235" text-anchor="middle">on_server_message</text>
+  <text class="m" x="450" y="250" text-anchor="middle">(msg, runner)</text>
+  <text class="c" x="450" y="266" text-anchor="middle">your callback</text>
+  <path class="msg" d="M656,250 L522,250" marker-end="url(#bd-a)"/>
+  <text class="m" x="580" y="228" text-anchor="middle">rawReceive()</text>
+  <text class="m" x="580" y="243" text-anchor="middle">raw_receive()</text>
+  <text class="c" x="156" y="232">Server frames go only to the</text>
+  <text class="c" x="156" y="247">callback; the bridge maps none</text>
+  <text class="c" x="156" y="262">to an Event.</text>
+
+  <!-- PetriRunner, a parameter of the bridge, outside the frame -->
+  <rect class="net" x="200" y="330" width="260" height="48" rx="6"/>
+  <text class="mb" x="330" y="349" text-anchor="middle">PetriRunner</text>
+  <text class="c" x="330" y="366" text-anchor="middle">the session net authors every Event</text>
+  <path class="msg" d="M400,274 L400,328" marker-end="url(#bd-a)"/>
+  <text class="m" x="394" y="316" text-anchor="end">inject(...)</text>
+  <path class="msg" d="M444,274 L444,328" marker-end="url(#bd-a)"/>
+  <text class="m" x="450" y="316">signal(...)</text>
+  <path class="msg" d="M200,354 L72,354 L72,288" marker-end="url(#bd-a)"/>
+  <text class="m" x="84" y="332">adkEvents()</text>
+  <text class="m" x="84" y="347">adk_events()</text>
+
+  <text class="c" x="16" y="404">Teardown: when the egress ends or is cancelled, both ports stop the pumps and close the connection. A raw-receive error fails the stream.</text>
+  <text class="c" x="16" y="420">Without a live config, runLiveImpl · _run_live_impl returns the runner's adkEvents() · adk_events() alone: egress only.</text>
+
+  <!-- ===== voice-activity edges ===== -->
+  <text class="h" x="16" y="456">Getting voice-activity edges</text>
+
+  <rect class="card" x="16" y="470" width="266" height="182" rx="8"/>
+  <text class="mb" x="30" y="492">Java · VadTapGemini</text>
+  <text class="c" x="30" y="509">extends Gemini · preferred since ADK 1.9</text>
+  <text class="t" x="30" y="532">Keeps ADK's own GeminiLlmConnection.</text>
+  <text class="t" x="30" y="549">Overrides connectLiveTransport and</text>
+  <text class="t" x="30" y="566">wraps the transport: receive tees each</text>
+  <text class="t" x="30" y="583">message through voiceSignals to</text>
+  <text class="m" x="30" y="600">onSignal → runner.signal(...)</text>
+  <text class="t" x="30" y="621">Not a LiveConnection, so it is not</text>
+  <text class="t" x="30" y="638">used with bridge.</text>
+
+  <rect class="card" x="297" y="470" width="266" height="182" rx="8"/>
+  <text class="mb" x="311" y="492">Java · SyncGeminiLiveConnection</text>
+  <text class="c" x="311" y="509">implements LiveConnection · full control</text>
+  <text class="t" x="311" y="532">Reads genai's client.async.live directly.</text>
+  <text class="t" x="311" y="549">rawReceive() keeps every server</text>
+  <text class="t" x="311" y="566">message. In onServerMessage:</text>
+  <text class="m" x="311" y="583">voiceSignals(msg)</text>
+  <text class="m" x="325" y="600">→ r.signal(...)</text>
+  <text class="t" x="311" y="621">Plugs into bridge above.</text>
+
+  <rect class="card" x="578" y="470" width="266" height="182" rx="8"/>
+  <text class="mb" x="592" y="492">Python · stock ADK</text>
+  <text class="c" x="592" y="509">or GenaiLiveConnection for full control</text>
+  <text class="t" x="592" y="532">ADK Python 2.11 keeps the edges: its</text>
+  <text class="t" x="592" y="549">live flow yields them on</text>
+  <text class="m" x="592" y="566">Event.voice_activity</text>
+  <text class="t" x="592" y="583">to the run_live caller (a foil test</text>
+  <text class="t" x="592" y="600">locks it). No VadTapGemini port.</text>
+  <text class="t" x="592" y="621">GenaiLiveConnection (tests/demos/voice)</text>
+  <text class="t" x="592" y="638">is the full-control route for bridge.</text>
+</svg>

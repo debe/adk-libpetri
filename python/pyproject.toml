@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "adk-libpetri"
+version = "0.1.0"
+description = "Coloured Time Petri Net orchestration core for Google ADK (Python), built on libpetri"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [{ name = "Dennis Berger" }]
+keywords = ["adk", "petri-net", "agents", "orchestration", "libpetri", "z3"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+dependencies = [
+    "libpetri>=7.2,<8",
+    "google-adk~=2.11.0",
+    "opentelemetry-api>=1.30",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-timeout>=2.3",
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+    "respx>=0.21",
+    "opentelemetry-sdk>=1.30",
+]
+
+[project.urls]
+Homepage = "https://github.com/debe/adk-libpetri"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/adk_libpetri"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 60
+markers = [
+    "live: needs a real GOOGLE_API_KEY; skipped unless ADK_LIBPETRI_LIVE=1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["spikes"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
