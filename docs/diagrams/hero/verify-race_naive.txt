@@ -1,0 +1,9 @@
+VIOLATED one answer per turn  [place_bound]
+  fires: Race_Start -> Race_RunA -> Race_Commit -> Race_RunB -> Race_Commit -> complete:Race_Commit -> complete:Race_Commit
+  markings:
+    …
+    5: {inflight:Race_Commit: 2}
+    …
+    7: {eventOut: 2, won: 2}
+PROVEN   deadlock_free  [deadlock_free]
+1 proven, 1 violated, 0 unknown

@@ -1,23 +1,29 @@
 agent_class: adk_libpetri.net.PetriNet
-name: race_broken
+name: race_naive
 nodes: [[.agent.fast], [.agent.slow]]
 places:
   triggerA: {}
   triggerB: {}
   done: {type: str}
-  permit: {}
   won: {}
   late: {type: str}
 transitions:
-  Race_Start: {in: [userIn], out: {and: [triggerA, triggerB, permit]}}
-  Race_RunA:  {in: [triggerA], out: done, inhibit: [won], node: fast}
-  Race_RunB:  {in: [triggerB], out: done, inhibit: [won], node: slow}
+  Race_Start:
+    in: [userIn]
+    out: {and: [triggerA, triggerB]}
+  Race_RunA: {in: [triggerA], out: done, inhibit: [won], node: fast}
+  Race_RunB: {in: [triggerB], out: done, inhibit: [won], node: slow}
   Race_Commit:
     in: [done]
+    inhibit: [won]
     out: {and: [eventOut, won]}
     priority: 10
     action: emit
-  Race_Drop:  {in: [done], out: late, read: [won], priority: -10}
+  Race_Drop:
+    in: [done]
+    out: late
+    read: [won]
+    priority: -10
 prove:
   options:
     initial_marking: {userIn: 1}

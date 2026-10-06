@@ -60,8 +60,8 @@ Python step runs in the `python/` venv); skip the one whose port you
 did not touch. `npm run build` runs `sketches`
 (writes `dot/sketch-*.dot`), then `render`, which runs graphviz
 `dot -Tsvg` over every `dot/*.dot` into `svg/`, then `hero`, which
-composes `svg/hero.svg` from the hero blueprint, its rendered net and the
-`adk-libpetri verify` output the Python step wrote to `hero/`. Both directories are
+composes `svg/hero.svg` from the two hero blueprints, their rendered nets and
+the `adk-libpetri verify` output the Python step wrote to `hero/`. Both directories are
 checked in, so a reader on GitHub sees the diagrams without running
 anything. When a diagram is removed, delete its `.dot` and its `.svg`.
 
@@ -79,8 +79,8 @@ Section names are the root README's headings.
 
 | File | Source | Embedded in (root README) |
 |---|---|---|
-| `hero` | `src/hero.ts`, composed from `hero/race.yaml`, `svg/hero-race.svg` and `hero/verify-*.txt` | the opening figure |
-| `hero-race` | Python, `python/tests/readme_diagrams/hero/race.yaml`, the whole net, inhibitor and read arcs left out of the ranking | inside `hero` |
+| `hero` | `src/hero.ts`, composed from `hero/race*.yaml`, `svg/hero-race*.svg` and `hero/verify-*.txt` | the opening figure |
+| `hero-race`, `hero-race-naive` | Python, `python/tests/readme_diagrams/hero/race.yaml` and `race_naive.yaml`, whole nets, inhibitor and read arcs left out of the ranking | inside `hero` (the fix, and the obvious guard) |
 | `workflow-router` | Python, `compile_workflow(samples.router())`, view: `Wf_Start`, `Wf_classify_Run`, `Wf_handle_bug_Run`, `Wf_handle_other_Run`, `Wf_EndTurnOutput` | Quick start (Python) › Compile a Workflow (collapsed) |
 | `workflow-back-edge-budget` | Python, `compile_workflow(samples.looping(), back_edge_budget={('counter', 'counter'): 3})`, view: `Wf_Start`, `Wf_counter_Run`, `Wf_Edge_counter_counter`, `Wf_Edge_counter_counter_Exhausted`, `Wf_finish_Run` | Quick start (Python) › Compile a Workflow |
 | `llm-agent-turn-shell` | Java view of `LlmAgentSubnet.DEF`: StartTurn, BuildPrompt, EmitAnswer, EmitTransfer, AbortTurn, DropAbort | G1 One turn at a time, and no stranded turn |

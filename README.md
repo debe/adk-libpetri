@@ -11,12 +11,14 @@ properties of them with Z3 before they run, and runs them under ADK's own
 a join, a cancellation, a retry and a loop bound each become places and arcs,
 which the solver can check.
 
-<p align="center"><img src="docs/diagrams/svg/hero.svg" alt="A Petri-net blueprint in ADK YAML, the net it builds, and adk-libpetri verify: both claims proven, and with the permit arc removed, a counterexample in which two branches both answer" width="980"></p>
+<p align="center"><img src="docs/diagrams/svg/hero.svg" alt="A Petri-net blueprint in ADK YAML and two nets side by side: the obvious guard, where won inhibits the commit, is deadlock-free but Z3 finds both commits starting before either lands, so two answers leave; the fix, where each commit consumes the one permit, proves both claims" width="980"></p>
 
-*A complete blueprint, the net it builds, and what `adk-libpetri verify`
-reports. Two branches race for one `permit`; the first to finish answers.
-Remove the red `permit` arc and Z3 finds the run in which both answer. All
-three panels are generated from the file.*
+*Left, a complete blueprint. Middle, the obvious way to let only the first
+branch answer: commit only while nobody has won (`inhibit: [won]`). It is
+deadlock-free, and Z3 still finds the run in which both commits start before
+either lands, so two answers leave. Right, the fix: each commit consumes the
+one `permit`, and both claims are proven. Every panel is generated from the
+two YAML files.*
 
 In Python (ADK 2.11) there are three ways in:
 

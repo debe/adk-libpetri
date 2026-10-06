@@ -16,6 +16,7 @@ The check compares DOT text only, so CI needs no graphviz.
 from __future__ import annotations
 
 import contextlib
+import difflib
 import io
 import os
 import re
@@ -87,19 +88,24 @@ def diagrams() -> list[Diagram]:
     # Wf_Start puts K budget tokens on the place each turn, as the Java reask
     # budget's BuildPrompt does; the diagram marks it like reask-budget.dot.
     loop_seeds = _seeds(looping, loop_view) | {"wf/budget/counter->counter": "●×K"}
-    with _hero_on_path():
-        hero = from_config(str(HERO_SRC / "race.yaml"))
-    assert isinstance(hero, PetriNet)
+    heroes = []
+    for name, dot in (("race", "hero-race"), ("race_naive", "hero-race-naive")):
+        with _hero_on_path():
+            net = from_config(str(HERO_SRC / f"{name}.yaml"))
+        assert isinstance(net, PetriNet)
+        heroes.append(
+            Diagram(
+                dot,
+                f"tests/readme_diagrams/hero/{name}.yaml, the whole net",
+                net.spec,
+                tuple(net.spec.transition_names),
+                frozenset({C.USER_IN.name}),
+                {},
+                free_tests=True,
+            )
+        )
     return [
-        Diagram(
-            "hero-race",
-            "tests/readme_diagrams/hero/race.yaml, the whole net",
-            hero.spec,
-            tuple(hero.spec.transition_names),
-            frozenset({C.USER_IN.name}),
-            {},
-            free_tests=True,
-        ),
+        *heroes,
         Diagram(
             "workflow-router",
             "compile_workflow(samples.router()), view of the routed turn",
@@ -150,23 +156,40 @@ _KEEP = re.compile(r"^(PROVEN|VIOLATED|UNKNOWN) |^  fires: |^  markings:$|^\d+ p
 _MARKING = re.compile(r"^    \d+: \{")
 
 
-def verify_excerpt(path: Path) -> str:
-    """``adk-libpetri verify`` output, verbatim, cut to verdicts, firings and
-    each counterexample's last marking (``…`` marks the markings left out).
+def _in_flight(marking: str) -> int:
+    return sum(int(n) for n in re.findall(r"inflight:[^:]+: (\d+)", marking))
 
-    The README hero shows these lines; the report and the path line are left out.
+
+def verify_excerpt(path: Path) -> str:
+    """``adk-libpetri verify`` output, verbatim, cut to verdicts and firings.
+
+    Of each counterexample's markings it keeps the one with the most actions in
+    flight (when two or more are) and the last; ``…`` marks what is left out.
+    The README hero shows these lines; the report and the path line go.
     """
     out = io.StringIO()
     with _hero_on_path():
         cli.main(["verify", str(path)], out=out)
     kept: list[str] = []
     markings: list[str] = []
+
+    def flush() -> None:
+        busiest = max(markings, key=_in_flight)
+        keep = [m for m in markings if m == markings[-1] or (m is busiest and _in_flight(m) > 1)]
+        prev = -1
+        for m in keep:
+            i = markings.index(m)
+            if i > prev + 1:
+                kept.append("    …")
+            kept.append(m)
+            prev = i
+
     for line in out.getvalue().splitlines():
         if _MARKING.match(line):
             markings.append(line.rstrip())
             continue
         if markings:
-            kept += ["    …", markings[-1]] if len(markings) > 1 else markings
+            flush()
             markings = []
         if _KEEP.match(line):
             kept.append(line.rstrip())
@@ -174,7 +197,7 @@ def verify_excerpt(path: Path) -> str:
 
 
 @requires_z3
-@pytest.mark.parametrize("name", ["race", "race_broken"])
+@pytest.mark.parametrize("name", ["race", "race_naive"])
 def test_hero_verify_output_matches_the_cli(name: str) -> None:
     """The hero's right panel is the CLI's own output for the file it shows."""
     path = HERO_SRC / f"{name}.yaml"
@@ -184,20 +207,31 @@ def test_hero_verify_output_matches_the_cli(name: str) -> None:
 
 def test_hero_yaml_is_copied_verbatim() -> None:
     """The hero's left panel is the file the net and the verdicts come from."""
-    for name in ("race", "race_broken"):
+    for name in ("race", "race_naive"):
         src = HERO_SRC / f"{name}.yaml"
         _golden(HERO_OUT / f"{name}.yaml", src.read_text(encoding="utf-8"), str(src.name))
 
 
-def test_the_broken_hero_differs_by_one_arc() -> None:
+def test_the_naive_hero_guards_the_commit_with_an_inhibitor_instead_of_the_permit() -> None:
+    """race_naive.yaml is race.yaml with the obvious guard: no permit, and the
+    commit inhibited by ``won`` ("commit only if nobody has won yet")."""
     good = (HERO_SRC / "race.yaml").read_text(encoding="utf-8").splitlines()
-    bad = (HERO_SRC / "race_broken.yaml").read_text(encoding="utf-8").splitlines()
-    diff = [(a, b) for a, b in zip(good, bad, strict=True) if a != b]
-    assert diff == [
-        ("name: race", "name: race_broken"),
-        ("    in: [done, permit]", "    in: [done]"),
+    naive = (HERO_SRC / "race_naive.yaml").read_text(encoding="utf-8").splitlines()
+    diff = list(difflib.ndiff(good, naive))
+    removed = [d[2:] for d in diff if d.startswith("- ")]
+    added = [d[2:] for d in diff if d.startswith("+ ")]
+    assert removed == [
+        "name: race",
+        "  permit: {}",
+        "    out: {and: [triggerA, triggerB, permit]}",
+        "    in: [done, permit]",
     ]
-    assert good[good.index("    in: [done, permit]") - 1] == "  Race_Commit:"
+    assert added == [
+        "name: race_naive",
+        "    out: {and: [triggerA, triggerB]}",
+        "    in: [done]",
+        "    inhibit: [won]",
+    ]
 
 
 def test_back_edge_budget_view_carries_the_reask_budget_shape() -> None:
