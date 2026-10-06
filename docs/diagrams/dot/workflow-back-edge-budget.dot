@@ -26,7 +26,7 @@ digraph workflow_back_edge_budget {
     p_wf_failed [label="wf/failed", shape="ellipse", style="filled,dotted", fillcolor="#f6f8fa", color="#8c959f", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
     p_wf_quiet [label="wf/quiet ●", shape="ellipse", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
     p_wf_finish_idle [label="wf/finish/idle ●", shape="ellipse", style="filled", fillcolor="#FFFFFF", color="#333333", penwidth=1.5, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
-    p_wf_terminalOutput [label="wf/terminalOutput", shape="ellipse", style="filled,dotted", fillcolor="#f6f8fa", color="#8c959f", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
+    p_wf_finish_terminalOutput [label="wf/finish/terminalOutput", shape="ellipse", style="filled,dotted", fillcolor="#f6f8fa", color="#8c959f", penwidth=2, height=0.3, width=0.3, fixedsize="false", margin="0.08,0.03"];
     t_Wf_Start [label="Wf_Start", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
     t_Wf_counter_Run [label="Wf_counter_Run", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
     t_Wf_Edge_counter_counter [label="Wf_Edge_counter_counter prio=10", shape="box", style="filled", fillcolor="#fff3cd", color="#856404", penwidth=1, height=0.4, width=0.8];
@@ -79,7 +79,7 @@ digraph workflow_back_edge_budget {
     t_Wf_finish_Run -> j_Wf_finish_Run__xor_0 [color="#333333", style="solid", arrowhead="normal"];
     j_Wf_finish_Run__xor_0 -> j_Wf_finish_Run__and_1 [color="#333333", style="solid", arrowhead="normal"];
     j_Wf_finish_Run__and_1 -> p_wf_finish_idle [color="#333333", style="solid", arrowhead="normal"];
-    j_Wf_finish_Run__and_1 -> p_wf_terminalOutput [color="#333333", style="solid", arrowhead="normal"];
+    j_Wf_finish_Run__and_1 -> p_wf_finish_terminalOutput [color="#fd7e14", style="bold", arrowhead="normal", label="reset+out", penwidth=2];
     j_Wf_finish_Run__xor_0 -> p_wf_finish_idle [color="#333333", style="solid", arrowhead="normal"];
     j_Wf_finish_Run__xor_0 -> j_Wf_finish_Run__and_2 [color="#333333", style="solid", arrowhead="normal"];
     j_Wf_finish_Run__and_2 -> p_wf_finish_idle [color="#333333", style="solid", arrowhead="normal"];

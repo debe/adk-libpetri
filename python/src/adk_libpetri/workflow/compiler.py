@@ -19,11 +19,14 @@ Translation (``N`` a node, places named ``wf/N/...``):
   silent branch end a place a proof can name.
 * **JoinNode** -- one ``wf/J/from/P`` place per predecessor, consumed together
   (consume semantics; identical to ADK on a DAG).
-* **terminal output** -- ``wf/terminalOutput``; ``place_bound(..., 1)`` proves
-  ADK's runtime "multiple terminal outputs" error away.
-* **retry_config** -- attempts unrolled into ``Wf_N_Run``..``Wf_N_Run_k`` with
-  ``delayed`` backoff transitions between them (jitter dropped).
-* **timeout** -- enforced in the action; a timed-out run is a failure branch.
+* **terminal output** -- one ``wf/N/terminalOutput`` per terminal node, holding
+  its last output as ADK's ``node_outputs`` does. The node runs with
+  ``use_as_output``, so its own event is the workflow's output event. Two
+  terminal nodes with output end the turn on ``wf/terminalConflict`` (ADK's
+  "multiple terminal outputs" error), which a proof can show unreachable.
+* **retry_config, timeout** -- left on the node: ADK's node runner retries and
+  times out each attempt inside the node's transition, exactly as under
+  ``Workflow`` (same node path, ``attempt_count``, backoff and jitter).
 * **max_concurrency** -- a seeded ``wf/concurrency`` permit place.
 * **RequestInput** (opt-in per node: ``interruptible``) -- the run parks on
   ``wf/parked``; the next turn's function response arrives on ``wf/resumeIn``
@@ -31,15 +34,22 @@ Translation (``N`` a node, places named ``wf/N/...``):
 * **conditional cycles** -- kept; ``back_edge_budget={(a, b): K}`` routes the
   edge through a budget place with the reask-budget motif (ADR 0007), which
   makes termination provable.
-* **turn** -- ``Wf_Start`` takes ``USER_IN`` + ``TURN_PERMIT``; the turn ends
-  (``Wf_EndTurn*``, priority -100) once every node is idle and no work is
-  queued, returning the permit and emitting the final event.
+* **turn** -- ``Wf_Start`` takes the input + ``TURN_PERMIT`` (a new workflow
+  run: run ids restart at ``@1``, as ADK allocates them per run); the turn
+  ends (``Wf_EndTurn*``, priority -100) once every node is idle and no work is
+  queued, returning the permit. The end transition records the turn's result
+  on the :class:`TurnScope` (output, pending interrupts or failure) and emits
+  a marker event; :class:`~adk_libpetri.workflow.PetriWorkflow` hands the
+  result to ADK the way ``Workflow`` does, and adds no event of its own.
 """
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 import itertools
+import textwrap
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -62,28 +72,37 @@ from .._spec import (
     TransitionSpec,
     and_,
     at_least,
-    delayed,
     one,
     out,
     xor,
 )
-from .report import TranslationReport, WorkflowTranslationError
+from .report import (
+    AmbiguousRouteError,
+    LoopBudgetExhausted,
+    NotInterruptibleError,
+    TranslationReport,
+    WorkflowTranslationError,
+)
 from .tokens import NodeOutput, Parked, Resumed, ResumeTrigger, WfToken, WorkflowFailure
 
 MultiRoute = Literal["reject", "first"]
 StateMode = Literal["reject", "legacy_read"]
 
+INPUT: Place[Any] = Place(C.USER_IN.name, object)
+"""The turn's input: the user's message for a root workflow, or whatever
+``node_input`` a parent passes (a tool's arguments, a predecessor's output),
+unchanged, as ``Workflow`` passes it to START's successors."""
 TURN_ACTIVE: Place[None] = Place("wf/turnActive")
-TERMINAL: Place[NodeOutput] = Place("wf/terminalOutput", NodeOutput)
+CONFLICT: Place[None] = Place("wf/terminalConflict")
 FAILED: Place[WorkflowFailure] = Place("wf/failed", WorkflowFailure)
 PARKED: Place[Parked] = Place("wf/parked", Parked)
 RESUME_IN: Place[Resumed] = Place("wf/resumeIn", Resumed)
 RESUMED: Place[Resumed] = Place("wf/resumed", Resumed)
 CONCURRENCY: Place[None] = Place("wf/concurrency")
 QUIET: Place[None] = Place("wf/quiet")
-"""Held by every bookkeeping transition (backoff, budgeted edge, resume match)
-while it fires, and read by every turn end. Without it, such a transition in
-flight holds its token in no place, and the turn could end mid-retry (a
+"""Held by every bookkeeping transition (budgeted edge, resume match) while it
+fires, and read by every turn end. Without it, such a transition in flight
+holds its token in no place, and the turn could end mid-step (a
 counterexample the verifier found without assuming atomic firing)."""
 
 
@@ -99,12 +118,8 @@ def _from(n: str, p: str) -> Place[WfToken]:
     return Place(f"wf/{n}/from/{p}", WfToken)
 
 
-def _attempt(n: str, i: int) -> Place[WfToken]:
-    return Place(f"wf/{n}/attempt{i}", WfToken)
-
-
-def _retry(n: str, i: int) -> Place[WfToken]:
-    return Place(f"wf/{n}/retry{i}", WfToken)
+def _terminal(n: str) -> Place[NodeOutput]:
+    return Place(f"wf/{n}/terminalOutput", NodeOutput)
 
 
 def _unmatched(n: str) -> Place[WfToken]:
@@ -123,17 +138,39 @@ def _budget(a: str, b: str) -> Place[None]:
     return Place(f"wf/budget/{a}->{b}")
 
 
+@dataclass(frozen=True)
+class TurnResult:
+    """How a turn ended, as ``Workflow._finalize`` would leave its context."""
+
+    kind: Literal["output", "waiting", "empty", "failed"]
+    output: Any = None
+    interrupt_ids: frozenset[str] = frozenset()
+    failure: WorkflowFailure | None = None
+
+
 @dataclass
 class TurnScope:
     """The ADK invocation a session's compiled net serves right now.
 
     Set by the workflow agent before each turn's inject. Node actions read it
-    to run ADK nodes inside that invocation, on its loop. Not net state: it is
-    the address of the caller, like the reply-to of a message.
+    to run ADK nodes inside that invocation, on its loop, and the turn's end
+    leaves its :class:`TurnResult` here. Not net state: it is the address of
+    the caller, like the reply-to of a message.
     """
 
     ctx: Any = None
     loop: asyncio.AbstractEventLoop | None = None
+    result: TurnResult | None = None
+    run_ids: dict[str, Any] = field(default_factory=dict)
+    """Per-node run counters of the current workflow run (ADK's
+    ``_LoopState.run_counters``): reset when a turn starts a new run, kept
+    across a resume."""
+
+    def next_run_id(self, node: str) -> str:
+        counter = self.run_ids.get(node)
+        if counter is None:
+            counter = self.run_ids[node] = itertools.count(1)
+        return str(next(counter))
 
 
 @dataclass(frozen=True)
@@ -150,9 +187,6 @@ class _NodePlan:
     node: BaseNode
     is_join: bool
     preds: list[str]
-    attempts: int
-    delays_ms: list[int]
-    timeout_s: float | None
     interruptible: bool
     route_to_branch: dict[Any, int] = field(default_factory=dict)
     default_branch: int | None = None
@@ -181,8 +215,19 @@ class CompiledWorkflow:
     def node_names(self) -> list[str]:
         return list(self._plans)
 
+    @property
+    def terminal_nodes(self) -> list[str]:
+        return [n for n, p in self._plans.items() if p.terminal]
+
+    @property
+    def interruptible_nodes(self) -> list[str]:
+        return [n for n, p in self._plans.items() if p.interruptible]
+
     def idle_place(self, node: str) -> Place[None]:
         return _idle(node)
+
+    def terminal_place(self, node: str) -> Place[NodeOutput]:
+        return _terminal(node)
 
     def unmatched_places(self) -> list[Place[WfToken]]:
         return [_unmatched(n) for n, p in self._plans.items() if p.unmatched]
@@ -216,7 +261,17 @@ def compile_workflow(
     state: StateMode = "reject",
 ) -> CompiledWorkflow:
     """Compile ``workflow``. Raises :class:`WorkflowTranslationError` for what
-    cannot be compiled faithfully; everything approximated is in the report."""
+    cannot be compiled faithfully; everything approximated is in the report.
+
+    Nodes that interrupt by construction (a ``FunctionNode`` with
+    ``auth_config``, an agent with a tool that requires confirmation) are
+    compiled interruptible without being named in ``interruptible``.
+    """
+    if not isinstance(workflow, Workflow):
+        raise TypeError(
+            f"compile_workflow expects a google.adk Workflow, got {type(workflow).__name__}; "
+            "an agent root runs on ADK (or PetriAgent) directly"
+        )
     graph = workflow.graph
     report = TranslationReport(workflow.name)
     if graph is None:
@@ -236,6 +291,11 @@ def compile_workflow(
             report.add("rejected", f"{a}->{b}", "back_edge_budget names no edge of the graph")
     for n in hitl - names:
         report.add("rejected", n, "interruptible names no node of the graph")
+    for node in nodes:
+        reason = _static_interrupt(node)
+        if reason and node.name not in hitl:
+            hitl.add(node.name)
+            report.add("exact", node.name, f"{reason}: compiled interruptible")
     if workflow.max_concurrency is not None and workflow.max_concurrency > 0:
         report.add("exact", "max_concurrency", f"seeded permit place of {workflow.max_concurrency}")
 
@@ -247,9 +307,24 @@ def compile_workflow(
     if report.rejected:
         raise WorkflowTranslationError(report)
 
-    if any(isinstance(n, Workflow) for n in nodes):
+    terminals = [n for n, p in plans.items() if p.terminal]
+    if len(terminals) > 1:
         report.add(
-            "opaque", "nested Workflow", "runs as one node; its inner graph is ADK-scheduled"
+            "exact",
+            "terminal output",
+            f"{len(terminals)} terminal nodes {terminals}: two with output in one run end the "
+            "turn with ADK's WorkflowConfigurationError (wf/terminalConflict)",
+        )
+    if (
+        any(len(b.dests) > 1 for p in plans.values() for b in p.branches)
+        or len(out_edges[START.name]) > 1
+    ):
+        report.add(
+            "approximated",
+            "fan-out order",
+            "sibling branches run concurrently and complete in scheduling order; ADK starts "
+            "them in edge order on one loop. Run ids of a shared successor follow completion "
+            "order (max_concurrency=1 makes it deterministic)",
         )
     report.add(
         "approximated",
@@ -257,12 +332,17 @@ def compile_workflow(
         "ADK branch scoping is passed through per trigger; isolation scopes are ADK's own",
     )
     report.add(
-        "approximated", "event replay", "resume uses the net's marking, not ADK event replay"
+        "approximated",
+        "event replay",
+        "resume uses the net's marking, not ADK event replay; in a resumable app the node "
+        "emits none of Workflow's agent_state checkpoints or end_of_agent marker",
     )
 
     spec = _build_spec(
-        workflow.name, plans, out_edges[START.name], budgets, workflow.max_concurrency, report
+        workflow.name, plans, out_edges[START.name], budgets, workflow.max_concurrency
     )
+    for (a, b), k in budgets.items():
+        report.add("exact", f"{a}->{b}", f"back edge bounded by a budget of {k} per workflow run")
     return CompiledWorkflow(
         workflow=workflow,
         spec=spec,
@@ -282,42 +362,39 @@ def _routes_of(edge: Any) -> list[Any]:
 def _plan_node(
     node: BaseNode, edges: list[Any], preds: list[str], hitl: set[str], report: TranslationReport
 ) -> _NodePlan:
-    rc = node.retry_config
-    attempts = 1
-    delays: list[int] = []
-    if rc is not None:
-        attempts = rc.max_attempts if rc.max_attempts is not None else 5
-        initial = rc.initial_delay if rc.initial_delay is not None else 1.0
-        factor = rc.backoff_factor if rc.backoff_factor is not None else 2.0
-        cap = rc.max_delay if rc.max_delay is not None else 60.0
-        delays = [int(min(initial * factor**i, cap) * 1000) for i in range(attempts - 1)]
-        if rc.jitter:
-            report.add("approximated", node.name, "retry jitter dropped; backoff is deterministic")
-        report.add("exact", node.name, f"retry unrolled into {attempts} attempts {delays} ms")
+    if node.retry_config is not None:
+        report.add(
+            "exact",
+            node.name,
+            "retry_config kept on the node: ADK's node runner retries inside the transition",
+        )
     if node.timeout is not None:
         report.add(
-            "approximated",
+            "exact",
             node.name,
-            f"timeout {node.timeout}s enforced in the action; the verifier sees a failure branch",
+            f"timeout {node.timeout}s kept on the node: ADK's node runner enforces it",
         )
     plan = _NodePlan(
         name=node.name,
         node=node,
         is_join=bool(node._requires_all_predecessors),
         preds=preds,
-        attempts=max(1, attempts),
-        delays_ms=delays,
-        timeout_s=node.timeout,
         interruptible=node.name in hitl,
         wait_for_output=bool(node.wait_for_output),
     )
     if plan.is_join:
-        report.add("exact", node.name, f"join over {preds} (consume semantics)")
+        report.add(
+            "exact",
+            node.name,
+            f"join over {preds} (consume semantics); its input dict is in edge order, "
+            "where ADK's follows set iteration",
+        )
     if plan.wait_for_output and not plan.is_join:
         report.add(
             "approximated",
             node.name,
-            "wait_for_output: a run without output triggers nothing, as in ADK",
+            "wait_for_output: a run without output triggers nothing within the turn; ADK "
+            "also keeps the node WAITING into the next turn, the net does not",
         )
     if not edges:
         plan.terminal = True
@@ -352,31 +429,183 @@ def _plan_node(
         plan.default_branch = branch("default", fallback)
     else:
         plan.unmatched = True
+        report.add(
+            "exact",
+            node.name,
+            f"a route other than {labels} ends the branch (ADK logs a warning); the net "
+            f"marks wf/{node.name}/unmatched, which 'route coverage' names",
+        )
     return plan
 
 
-def _check_node(node: BaseNode, state: StateMode, report: TranslationReport) -> None:
+# ----------------------------------------------------------------------------
+#  Static checks: session-state reads (commitment 2) and interrupt sources
+# ----------------------------------------------------------------------------
+
+
+def _static_interrupt(node: BaseNode) -> str | None:
+    """Why ``node`` interrupts by construction, if it does."""
+    from google.adk.agents.llm_agent import LlmAgent
     from google.adk.workflow import FunctionNode
 
-    kind = type(node).__name__
-    if isinstance(node, FunctionNode):
-        sig = getattr(node, "_sig", None)
-        state_params = [
-            p for p in (sig.parameters if sig else {}) if p not in ("ctx", "node_input", "self")
+    inner = _unwrap(node)
+    if isinstance(inner, FunctionNode) and inner.auth_config is not None:
+        return "requests credentials (auth_config)"
+    if isinstance(inner, LlmAgent):
+        confirming = [
+            getattr(t, "name", type(t).__name__)
+            for t in inner.tools
+            if getattr(t, "_require_confirmation", False)
         ]
-        if state_params:
-            if state == "reject":
+        if confirming:
+            return f"tools {confirming} require confirmation"
+    return None
+
+
+def _unwrap(node: BaseNode) -> BaseNode:
+    from google.adk.workflow._parallel_worker import _ParallelWorker
+
+    while isinstance(node, _ParallelWorker):
+        node = node._node
+    return node
+
+
+def _check_node(
+    node: BaseNode, state: StateMode, report: TranslationReport, prefix: str = ""
+) -> None:
+    from google.adk.agents.llm_agent import LlmAgent
+    from google.adk.workflow import FunctionNode
+    from google.adk.workflow._parallel_worker import _ParallelWorker
+
+    subject = prefix + node.name
+    if isinstance(node, _ParallelWorker):
+        report.add(
+            "opaque",
+            subject,
+            "parallel worker: the per-item fan-out runs inside one transition, by ADK",
+        )
+        node = _unwrap(node)
+    reads: list[str] = []
+    if isinstance(node, Workflow):
+        report.add("opaque", subject, "nested Workflow: runs as one node, ADK-scheduled inside")
+        for child in node.graph.nodes if node.graph else ():
+            if child is not START and child.name != START.name:
+                _check_node(child, state, report, f"{subject}/")
+        return
+    if isinstance(node, FunctionNode):
+        ctx_name = node._context_param_name
+        sig = getattr(node, "_sig", None)
+        if node.parameter_binding == "state" and sig is not None:
+            reads += [f"parameter {p}" for p in sig.parameters if p not in (ctx_name, "node_input")]
+        if sig is not None and ctx_name in sig.parameters:
+            found = _ctx_state_reads(node, ctx_name)
+            if found is None:
                 report.add(
-                    "rejected",
-                    node.name,
-                    f"reads session state {state_params} (commitment 2: the marking is the "
-                    "state); pass state='legacy_read' to accept",
+                    "approximated",
+                    subject,
+                    f"takes {ctx_name} but its source is unavailable: it may read ctx.state",
                 )
             else:
-                report.add("approximated", node.name, f"reads legacy session state {state_params}")
-        report.add("exact", node.name, "FunctionNode, run by ADK's node runner")
+                reads += found
+            report.add(
+                "opaque",
+                subject,
+                f"takes {ctx_name}: children it runs via ctx.run_node are ADK-scheduled inside "
+                "this transition, and the proofs do not see them",
+            )
+        report.add("exact", subject, "FunctionNode, run by ADK's node runner")
+    elif isinstance(node, LlmAgent):
+        if node.mode in ("task", "chat"):
+            report.add(
+                "rejected",
+                subject,
+                f"mode={node.mode!r} agent: it waits for the user across turns inside one "
+                "workflow run, which the net does not model; run it as a PetriAgent or use "
+                "mode='single_turn'",
+            )
+        reads += [f"instruction {{{v}}}" for v in _template_vars(node)]
+        report.add("opaque", subject, "LlmAgent, run by ADK's node runner as one transition")
     else:
-        report.add("opaque", node.name, f"{kind}, run by ADK's node runner as one transition")
+        report.add("opaque", subject, f"{type(node).__name__}, run by ADK's node runner")
+    if reads:
+        if state == "reject":
+            report.add(
+                "rejected",
+                subject,
+                f"reads session state ({', '.join(reads)}) (commitment 2: the marking is the "
+                "state); pass state='legacy_read' to accept",
+            )
+        else:
+            report.add("approximated", subject, f"reads legacy session state ({', '.join(reads)})")
+
+
+def _template_vars(agent: Any) -> list[str]:
+    """Session-state keys an agent's string instructions read (ADK's templating)."""
+    from google.adk.flows.llm_flows.prompt._instructions_utils import (
+        _TEMPLATE_VAR_PATTERN,
+        _is_valid_state_name,
+    )
+
+    found: list[str] = []
+    for text in (agent.instruction, getattr(agent, "global_instruction", None)):
+        if not isinstance(text, str):
+            continue
+        for m in _TEMPLATE_VAR_PATTERN.finditer(text):
+            name = m.group().lstrip("{").rstrip("}").strip().removesuffix("?")
+            if name.startswith("artifact.") or not _is_valid_state_name(name):
+                continue
+            if name not in found:
+                found.append(name)
+    return found
+
+
+_STATE_WRITES = frozenset({"update", "__setitem__", "__delitem__"})
+
+
+def _ctx_state_reads(node: Any, ctx_name: str) -> list[str] | None:
+    """``ctx.state`` reads in a FunctionNode's body; ``None`` if its source is unavailable.
+
+    Writes (``ctx.state[k] = v``, ``ctx.state.update(...)``) are the legacy
+    write bridge and stay allowed; any other use of ``ctx.state`` counts as
+    a read.
+    """
+    func = getattr(node, "_unwrapped_func", None) or getattr(node, "_func", None)
+    if func is None:
+        return None
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    except (OSError, TypeError, SyntaxError):
+        return None
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+    reads: list[str] = []
+    for n in ast.walk(tree):
+        if not (
+            isinstance(n, ast.Attribute)
+            and n.attr == "state"
+            and isinstance(n.value, ast.Name)
+            and n.value.id == ctx_name
+        ):
+            continue
+        up = parents.get(n)
+        if isinstance(up, ast.Subscript) and isinstance(up.ctx, ast.Store | ast.Del):
+            continue
+        if isinstance(up, ast.Attribute) and up.attr in _STATE_WRITES:
+            continue
+        what = f"{ctx_name}.state"
+        if isinstance(up, ast.Subscript) and isinstance(up.slice, ast.Constant):
+            what += f"[{up.slice.value!r}]"
+        elif isinstance(up, ast.Attribute) and isinstance(parents.get(up), ast.Call):
+            call = parents[up]
+            assert isinstance(call, ast.Call)
+            key = call.args[0] if call.args else None
+            arg = f"{key.value!r}" if isinstance(key, ast.Constant) else ""
+            what += f".{up.attr}({arg})"
+        if what not in reads:
+            reads.append(what)
+    return reads
 
 
 def _check_cycles(
@@ -434,17 +663,13 @@ def _dest_place(
     return _trigger(target)
 
 
-def _work_places(
-    plans: dict[str, _NodePlan], budgets: Mapping[Any, int], start_dests: list[str]
-) -> list[Place[Any]]:
+def _work_places(plans: dict[str, _NodePlan], budgets: Mapping[Any, int]) -> list[Place[Any]]:
     ps: list[Place[Any]] = []
     for n, p in plans.items():
         if p.is_join:
             ps += [_from(n, q) for q in p.preds]
         else:
             ps.append(_trigger(n))
-        ps += [_attempt(n, i) for i in range(2, p.attempts + 1)]
-        ps += [_retry(n, i) for i in range(1, p.attempts)]
         if p.interruptible:
             ps.append(_resume(n))
     ps += [_edge(a, b) for a, b in budgets]
@@ -457,13 +682,14 @@ def _build_spec(
     start_edges: list[Any],
     budgets: Mapping[tuple[str, str], int],
     max_conc: int | None,
-    report: TranslationReport,
 ) -> NetSpec:
     conc = bool(max_conc and max_conc > 0)
     start_dests = [e.to_node.name for e in start_edges]
     ts: list[TransitionSpec] = []
     budget_places = [_budget(a, b) for a, b in budgets]
     interruptible = [n for n, p in plans.items() if p.interruptible]
+    terminals = [_terminal(n) for n, p in plans.items() if p.terminal]
+    conflict = len(terminals) > 1
 
     # -- turn start ----------------------------------------------------------
     start_outs: list[Any] = [TURN_ACTIVE]
@@ -472,9 +698,9 @@ def _build_spec(
     ts.append(
         TransitionSpec(
             "Wf_Start",
-            (one(C.USER_IN), one(C.TURN_PERMIT)),
+            (one(INPUT), one(C.TURN_PERMIT)),
             and_(*start_outs),
-            resets=(PARKED, *budget_places),
+            resets=(PARKED, *budget_places, *((CONFLICT,) if conflict else ())),
         )
     )
     if interruptible:
@@ -510,44 +736,31 @@ def _build_spec(
     for n, p in plans.items():
         common_in = [one(_idle(n))] + ([one(CONCURRENCY)] if conc else [])
         give_back: list[Place[Any]] = [_idle(n)] + ([CONCURRENCY] if conc else [])
-        for i in range(1, p.attempts + 1):
-            if i == 1:
-                ins = [one(_from(n, q)) for q in p.preds] if p.is_join else [one(_trigger(n))]
-                tname = f"Wf_{n}_Run"
-            else:
-                ins = [one(_attempt(n, i))]
-                tname = f"Wf_{n}_Run{i}"
-            fail_to = _retry(n, i) if i < p.attempts else FAILED
-            ts.append(
-                TransitionSpec(
-                    tname,
-                    (*ins, *common_in),
-                    _node_output(n, p, plans, budgets, give_back, fail_to),
-                    inhibitors=(FAILED,),
-                )
+        # A terminal run replaces the node's earlier output (ADK: node_outputs[n]).
+        own = (_terminal(n),) if p.terminal else ()
+        ins = [one(_from(n, q)) for q in p.preds] if p.is_join else [one(_trigger(n))]
+        ts.append(
+            TransitionSpec(
+                f"Wf_{n}_Run",
+                (*ins, *common_in),
+                _node_output(n, p, plans, budgets, give_back),
+                inhibitors=(FAILED,),
+                resets=own,
             )
-            if i < p.attempts:
-                ts.append(
-                    TransitionSpec(
-                        f"Wf_{n}_Backoff{i}",
-                        (one(_retry(n, i)), one(QUIET)),
-                        and_(_attempt(n, i + 1), QUIET),
-                        inhibitors=(FAILED,),
-                        timing=delayed(max(1, p.delays_ms[i - 1])),
-                    )
-                )
+        )
         if p.interruptible:
             ts.append(
                 TransitionSpec(
                     f"Wf_{n}_ResumeRun",
                     (one(_resume(n)), *common_in),
-                    _node_output(n, p, plans, budgets, give_back, FAILED),
+                    _node_output(n, p, plans, budgets, give_back),
                     inhibitors=(FAILED,),
+                    resets=own,
                 )
             )
 
     # -- budgeted back edges -------------------------------------------------
-    for (a, b), k in budgets.items():
+    for a, b in budgets:
         target = _from(b, a) if plans[b].is_join else _trigger(b)
         ts.append(
             TransitionSpec(
@@ -566,13 +779,13 @@ def _build_spec(
                 priority=-10,
             )
         )
-        report.add("exact", f"{a}->{b}", f"back edge bounded by a budget of {k}")
 
     # -- turn end ----------------------------------------------------------------
     idles = tuple(_idle(n) for n in plans)
-    work = _work_places(plans, budgets, start_dests)
+    work = _work_places(plans, budgets)
     unmatched = tuple(_unmatched(n) for n, p in plans.items() if p.unmatched)
     ends = (C.EVENT_OUT, C.TURN_PERMIT)
+    no_park = (PARKED,) if interruptible else ()
     if interruptible:
         ts.append(
             TransitionSpec(
@@ -581,29 +794,43 @@ def _build_spec(
                 and_(*ends),
                 reads=(PARKED, QUIET, *idles),
                 inhibitors=(*work, FAILED),
-                resets=(TERMINAL, *unmatched),
+                resets=(*terminals, *unmatched),
                 priority=-100,
             )
         )
-    no_park = (PARKED,) if interruptible else ()
-    ts.append(
-        TransitionSpec(
-            "Wf_EndTurnOutput",
-            (one(TURN_ACTIVE), at_least(1, TERMINAL)),
-            and_(*ends),
-            reads=(QUIET, *idles),
-            inhibitors=(*work, FAILED, *no_park),
-            resets=(*unmatched, *budget_places),
-            priority=-100,
+    for t in terminals:
+        others = tuple(o for o in terminals if o is not t)
+        ts.append(
+            TransitionSpec(
+                f"Wf_EndTurnOutput_{t.name.split('/')[1]}",
+                (one(TURN_ACTIVE), one(t)),
+                and_(*ends),
+                reads=(QUIET, *idles),
+                inhibitors=(*work, FAILED, *no_park),
+                resets=(*others, *unmatched, *budget_places),
+                priority=-100,
+            )
         )
-    )
+    if conflict:
+        for t1, t2 in itertools.combinations(terminals, 2):
+            ts.append(
+                TransitionSpec(
+                    f"Wf_EndTurnConflict_{t1.name.split('/')[1]}_{t2.name.split('/')[1]}",
+                    (one(TURN_ACTIVE), one(t1), one(t2)),
+                    and_(*ends, CONFLICT),
+                    reads=(QUIET, *idles),
+                    inhibitors=(*work, FAILED, *no_park),
+                    resets=(*terminals, *unmatched, *budget_places),
+                    priority=-95,
+                )
+            )
     ts.append(
         TransitionSpec(
             "Wf_EndTurnEmpty",
             (one(TURN_ACTIVE),),
             and_(*ends),
             reads=(QUIET, *idles),
-            inhibitors=(*work, FAILED, TERMINAL, *no_park),
+            inhibitors=(*work, FAILED, *terminals, *no_park),
             resets=(*unmatched, *budget_places),
             priority=-100,
         )
@@ -614,7 +841,7 @@ def _build_spec(
             (one(TURN_ACTIVE), at_least(1, FAILED)),
             and_(*ends),
             reads=(QUIET, *idles),
-            resets=(*work, TERMINAL, *unmatched, *budget_places, PARKED),
+            resets=(*work, *terminals, *unmatched, *budget_places, PARKED),
             priority=-90,
         )
     )
@@ -623,7 +850,7 @@ def _build_spec(
             "Wf_AbortTurn",
             (one(C.TURN_ABORT), one(TURN_ACTIVE)),
             out(C.TURN_PERMIT),
-            resets=(*work, TERMINAL, *unmatched, *budget_places, PARKED, FAILED),
+            resets=(*work, *terminals, *unmatched, *budget_places, PARKED, FAILED),
             priority=30,
         )
     )
@@ -636,11 +863,13 @@ def _build_spec(
             priority=30,
         )
     )
-    extra = [C.TURN_PERMIT, TURN_ACTIVE, TERMINAL, FAILED, QUIET, *idles]
+    extra = [C.TURN_PERMIT, TURN_ACTIVE, *terminals, FAILED, QUIET, *idles]
+    if conflict:
+        extra.append(CONFLICT)
     if conc:
         extra.append(CONCURRENCY)
     ports = [
-        Port("userIn", "in", C.USER_IN),
+        Port("userIn", "in", INPUT),
         Port("turnAbort", "in", C.TURN_ABORT),
         Port("eventOut", "out", C.EVENT_OUT),
     ]
@@ -655,12 +884,11 @@ def _node_output(
     plans: dict[str, _NodePlan],
     budgets: Mapping[Any, int],
     give_back: list[Place[Any]],
-    fail_to: Place[Any],
 ) -> Out:
     branches: list[Out] = []
     for b in p.branches:
         if b.dests == ("",):
-            branches.append(and_(*give_back, TERMINAL))
+            branches.append(and_(*give_back, _terminal(n)))
             branches.append(and_(*give_back))  # terminal run without output
         elif not b.dests:
             branches.append(and_(*give_back))
@@ -672,7 +900,7 @@ def _node_output(
         branches.append(and_(*give_back))
     if p.interruptible:
         branches.append(and_(*give_back, PARKED))
-    branches.append(and_(*give_back, fail_to))
+    branches.append(and_(*give_back, FAILED))
     unique: dict[str, Out] = {}
     for br in branches:
         unique.setdefault(repr(br), br)
@@ -690,6 +918,7 @@ class _Outcome:
     route: Any = None
     interrupts: tuple[str, ...] = ()
     error: BaseException | None = None
+    error_node_path: str = ""
     branch: str | None = None
 
 
@@ -698,32 +927,26 @@ def _error_code(err: BaseException) -> str:
     return status if isinstance(status, str) else type(err).__name__
 
 
-def _retryable(node: BaseNode, err: BaseException) -> bool:
-    rc = node.retry_config
-    if rc is None:
-        return False
-    if rc.exceptions is None:
-        return True
-    names = {cls.__name__ for cls in type(err).__mro__ if cls is not object}
-    return not names.isdisjoint(rc.exceptions)  # type: ignore[arg-type]
-
-
 async def _run_node(
     scope: TurnScope,
     node: BaseNode,
     token: WfToken,
     run_id: str,
-    timeout_s: float | None,
+    use_as_output: bool,
     resume_inputs: dict[str, Any] | None = None,
 ) -> _Outcome:
     ctx = scope.ctx
     if ctx is None:
         raise RuntimeError("compiled workflow node ran outside a turn (no TurnScope)")
-
-    async def go() -> Any:
-        return await ctx._run_node_internal(
+    if use_as_output:
+        # ADK allows one delegate per non-Workflow parent; a terminal node can
+        # run several times in one run, and its last output is the one kept.
+        ctx._output_delegated = False
+    try:
+        child = await ctx._run_node_internal(
             node,
             node_input=token.input,
+            use_as_output=use_as_output,
             return_ctx=True,
             run_id=run_id,
             use_sub_branch=token.use_sub_branch,
@@ -731,20 +954,14 @@ async def _run_node(
             resume_inputs=resume_inputs,
             skip_run_id_validation=True,
         )
-
-    try:
-        child = await (asyncio.wait_for(go(), timeout_s) if timeout_s else go())
-    except TimeoutError:
-        from google.adk.workflow import NodeTimeoutError
-
-        return _Outcome(error=NodeTimeoutError(node_name=node.name, timeout=timeout_s or 0))
     except Exception as err:
-        return _Outcome(error=err)
+        return _Outcome(error=err, error_node_path=f"{ctx.node_path}/{node.name}@{run_id}")
     return _Outcome(
         output=child.output,
         route=child.route,
         interrupts=tuple(sorted(child.interrupt_ids)),
         error=child.error,
+        error_node_path=child.error_node_path,
         branch=child._invocation_context.branch,
     )
 
@@ -759,8 +976,9 @@ def _actions(cw: CompiledWorkflow, scope: TurnScope, author: str) -> dict[str, A
 
     def start(ctx: Ctx) -> None:
         ctx.input(C.TURN_PERMIT)
-        content = ctx.input(C.USER_IN)
+        content = ctx.input(INPUT)
         ctx.signal(TURN_ACTIVE)
+        scope.run_ids.clear()  # a new workflow run: ADK's run ids restart at @1
         sub = len(start_dests) > 1
         for d in start_dests:
             ctx.output(_dest_place(d, START.name, plans, budgets), WfToken(content, None, sub))
@@ -792,31 +1010,20 @@ def _actions(cw: CompiledWorkflow, scope: TurnScope, author: str) -> dict[str, A
         acts["Wf_DropResume"] = drop_resume
 
     for n, p in plans.items():
-        counter = itertools.count(1)
-        node_exec = p.node.model_copy(update={"retry_config": None, "timeout": None})
 
-        def make_run(
-            n: str = n,
-            p: _NodePlan = p,
-            i: int = 1,
-            node_exec: BaseNode = node_exec,
-            counter: Any = counter,
-            resume: bool = False,
-        ) -> Action:
-            fail_to = _retry(n, i) if (not resume and i < p.attempts) else FAILED
-
+        def make_run(n: str = n, p: _NodePlan = p, resume: bool = False) -> Action:
             async def run(ctx: Ctx) -> None:
                 resume_inputs = None
+                run_id: str | None = None
                 if resume:
                     rt = ctx.input(_resume(n))
                     token = rt.parked.trigger
+                    run_id = rt.parked.run_id  # ADK resumes the interrupted run
                     resume_inputs = {rt.parked.interrupt_id: rt.response}
-                elif i == 1 and p.is_join:
+                elif p.is_join:
                     token = WfToken({q: ctx.input(_from(n, q)).input for q in p.preds})
-                elif i == 1:
-                    token = ctx.input(_trigger(n))
                 else:
-                    token = ctx.input(_attempt(n, i))
+                    token = ctx.input(_trigger(n))
                 ctx.input(_idle(n))
                 if conc:
                     ctx.input(CONCURRENCY)
@@ -826,32 +1033,23 @@ def _actions(cw: CompiledWorkflow, scope: TurnScope, author: str) -> dict[str, A
                     if conc:
                         ctx.signal(CONCURRENCY)
 
+                if run_id is None:
+                    run_id = scope.next_run_id(n)
                 if resume and not p.node.rerun_on_resume:
                     outcome = _Outcome(output=next(iter(resume_inputs.values())))  # type: ignore[union-attr]
                 else:
                     if scope.loop is None:
                         raise RuntimeError("compiled workflow node ran outside a turn")
                     outcome = await on_loop(
-                        _run_node(
-                            scope, node_exec, token, str(next(counter)), p.timeout_s, resume_inputs
-                        ),
+                        _run_node(scope, p.node, token, run_id, p.terminal, resume_inputs),
                         loop=scope.loop,
                     )
                 give_back()
-                _route_outcome(ctx, n, p, plans, budgets, token, outcome, fail_to, cw._multi_route)
+                _route_outcome(ctx, n, p, plans, budgets, token, run_id, outcome, cw._multi_route)
 
             return run
 
-        for i in range(1, p.attempts + 1):
-            acts[f"Wf_{n}_Run" if i == 1 else f"Wf_{n}_Run{i}"] = make_run(i=i)
-            if i < p.attempts:
-
-                def backoff(ctx: Ctx, n: str = n, i: int = i) -> None:
-                    ctx.input(QUIET)
-                    ctx.signal(QUIET)
-                    ctx.output(_attempt(n, i + 1), ctx.input(_retry(n, i)))
-
-                acts[f"Wf_{n}_Backoff{i}"] = backoff
+        acts[f"Wf_{n}_Run"] = make_run()
         if p.interruptible:
             acts[f"Wf_{n}_ResumeRun"] = make_run(resume=True)
 
@@ -868,58 +1066,67 @@ def _actions(cw: CompiledWorkflow, scope: TurnScope, author: str) -> dict[str, A
             ctx.input(QUIET)
             ctx.signal(QUIET)
             ctx.input(_edge(a, b))
+            msg = f"back edge {a}->{b} exhausted its budget of {budgets[(a, b)]}"
             ctx.output(
                 FAILED,
-                WorkflowFailure(
-                    a, "LoopBudgetExhausted", f"back edge {a}->{b} exhausted its budget"
-                ),
+                WorkflowFailure(a, "LoopBudgetExhausted", msg, error=LoopBudgetExhausted(msg)),
             )
 
         acts[f"Wf_Edge_{a}_{b}"] = edge
         acts[f"Wf_Edge_{a}_{b}_Exhausted"] = exhausted
 
-    def final(**kw: Any) -> Event:
-        return Event(author=author, **kw)
+    def finish(ctx: Ctx, result: TurnResult, **event: Any) -> None:
+        """Record the turn's result, then emit the marker event that ends it."""
+        ctx.input(TURN_ACTIVE)
+        scope.result = result
+        ctx.output(C.EVENT_OUT, Event(author=author, **event))
+        ctx.signal(C.TURN_PERMIT)
 
     def end_waiting(ctx: Ctx) -> None:
-        ctx.input(TURN_ACTIVE)
-        ids = sorted({pk.interrupt_id for pk in ctx.reads(PARKED)})
-        ctx.output(C.EVENT_OUT, final(long_running_tool_ids=set(ids)))
-        ctx.signal(C.TURN_PERMIT)
+        ids = frozenset(pk.interrupt_id for pk in ctx.reads(PARKED))
+        finish(ctx, TurnResult("waiting", interrupt_ids=ids), long_running_tool_ids=set(ids))
 
-    def end_output(ctx: Ctx) -> None:
-        ctx.input(TURN_ACTIVE)
-        outs = ctx.inputs(TERMINAL)
-        if len(outs) > 1:
-            ctx.output(
-                C.EVENT_OUT,
-                final(
-                    error_code="WorkflowConfigurationError",
-                    error_message=f"Workflow {cw.name}: multiple terminal nodes produced output "
-                    f"({len(outs)}). A workflow must have at most one terminal output.",
-                ),
+    def end_output(t: Place[NodeOutput]) -> Action:
+        def act(ctx: Ctx) -> None:
+            value = ctx.input(t).output
+            finish(ctx, TurnResult("output", output=value), output=value)
+
+        return act
+
+    def end_conflict(t1: Place[NodeOutput], t2: Place[NodeOutput]) -> Action:
+        def act(ctx: Ctx) -> None:
+            ctx.input(t1)
+            ctx.input(t2)
+            ctx.signal(CONFLICT)
+            from google.adk.workflow._errors import WorkflowConfigurationError
+
+            msg = (
+                f"Workflow {cw.name}: multiple terminal nodes produced output. "
+                "A workflow must have at most one terminal output."
             )
-        else:
-            ctx.output(C.EVENT_OUT, final(output=outs[0].output))
-        ctx.signal(C.TURN_PERMIT)
+            failure = WorkflowFailure(
+                cw.name, "WorkflowConfigurationError", msg, error=WorkflowConfigurationError(msg)
+            )
+            finish(
+                ctx,
+                TurnResult("failed", failure=failure),
+                error_code=failure.error_code,
+                error_message=msg,
+            )
+
+        return act
 
     def end_empty(ctx: Ctx) -> None:
-        ctx.input(TURN_ACTIVE)
-        ctx.output(C.EVENT_OUT, final())
-        ctx.signal(C.TURN_PERMIT)
+        finish(ctx, TurnResult("empty"))
 
     def end_failed(ctx: Ctx) -> None:
-        ctx.input(TURN_ACTIVE)
-        failures = ctx.inputs(FAILED)
-        f = failures[0]
-        ctx.output(
-            C.EVENT_OUT,
-            final(
-                error_code=f.error_code,
-                error_message=f"node {f.node!r} failed: {f.message}",
-            ),
+        f = ctx.inputs(FAILED)[0]
+        finish(
+            ctx,
+            TurnResult("failed", failure=f),
+            error_code=f.error_code,
+            error_message=f"node {f.node!r} failed: {f.message}",
         )
-        ctx.signal(C.TURN_PERMIT)
 
     def abort(ctx: Ctx) -> None:
         ctx.input(C.TURN_ABORT)
@@ -928,7 +1135,14 @@ def _actions(cw: CompiledWorkflow, scope: TurnScope, author: str) -> dict[str, A
 
     if any(p.interruptible for p in plans.values()):
         acts["Wf_EndTurnWaiting"] = end_waiting
-    acts["Wf_EndTurnOutput"] = end_output
+    terminals = [_terminal(n) for n, p in plans.items() if p.terminal]
+    for t in terminals:
+        acts[f"Wf_EndTurnOutput_{t.name.split('/')[1]}"] = end_output(t)
+    if len(terminals) > 1:
+        for t1, t2 in itertools.combinations(terminals, 2):
+            acts[f"Wf_EndTurnConflict_{t1.name.split('/')[1]}_{t2.name.split('/')[1]}"] = (
+                end_conflict(t1, t2)
+            )
     acts["Wf_EndTurnEmpty"] = end_empty
     acts["Wf_EndTurnFailed"] = end_failed
     acts["Wf_AbortTurn"] = abort
@@ -948,33 +1162,34 @@ def _route_outcome(
     plans: dict[str, _NodePlan],
     budgets: Mapping[Any, int],
     token: WfToken,
+    run_id: str,
     outcome: _Outcome,
-    fail_to: Place[Any],
     multi_route: MultiRoute,
 ) -> None:
     if outcome.error is not None:
-        if fail_to is FAILED or not _retryable(p.node, outcome.error):
-            ctx.output(FAILED, WorkflowFailure(n, _error_code(outcome.error), str(outcome.error)))
-        else:
-            ctx.output(fail_to, token)
+        # ADK's node runner already retried it and recorded its error event.
+        err = outcome.error
+        ctx.output(
+            FAILED,
+            WorkflowFailure(
+                n, _error_code(err), str(err), err, outcome.error_node_path, from_node=True
+            ),
+        )
         return
     if outcome.interrupts:
         if not p.interruptible:
+            msg = f"node {n!r} requested input but was not compiled as interruptible"
             ctx.output(
                 FAILED,
-                WorkflowFailure(
-                    n,
-                    "WorkflowTranslationError",
-                    f"node {n!r} requested input but was not compiled as interruptible",
-                ),
+                WorkflowFailure(n, "NotInterruptibleError", msg, NotInterruptibleError(msg)),
             )
             return
         for iid in outcome.interrupts:
-            ctx.output(PARKED, Parked(n, iid, token))
+            ctx.output(PARKED, Parked(n, iid, token, run_id))
         return
     if p.terminal:
         if outcome.output is not None:
-            ctx.output(TERMINAL, NodeOutput(n, outcome.output))
+            ctx.output(_terminal(n), NodeOutput(n, outcome.output))
         return
     if p.wait_for_output and outcome.output is None and outcome.route is None:
         return
@@ -983,14 +1198,12 @@ def _route_outcome(
     if isinstance(route, list):
         hits = [p.route_to_branch[r] for r in route if r in p.route_to_branch]
         if len(set(hits)) > 1 and multi_route == "reject":
+            msg = (
+                f"node {n!r} emitted routes {route!r} matching several branches; "
+                "compile with multi_route='first' to take the first"
+            )
             ctx.output(
-                FAILED,
-                WorkflowFailure(
-                    n,
-                    "WorkflowTranslationError",
-                    f"node {n!r} emitted routes {route!r} matching several branches; "
-                    "compile with multi_route='first' to take the first",
-                ),
+                FAILED, WorkflowFailure(n, "AmbiguousRouteError", msg, AmbiguousRouteError(msg))
             )
             return
         index = hits[0] if hits else p.default_branch
@@ -1009,14 +1222,16 @@ def _route_outcome(
 
 __all__ = [
     "CONCURRENCY",
+    "CONFLICT",
     "FAILED",
+    "INPUT",
     "PARKED",
     "QUIET",
     "RESUMED",
     "RESUME_IN",
-    "TERMINAL",
     "TURN_ACTIVE",
     "CompiledWorkflow",
+    "TurnResult",
     "TurnScope",
     "compile_workflow",
 ]

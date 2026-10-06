@@ -47,7 +47,8 @@ def diagrams() -> list[Diagram]:
         "Wf_classify_Run",
         "Wf_handle_bug_Run",
         "Wf_handle_other_Run",
-        "Wf_EndTurnOutput",
+        # One of the two terminal ends; Wf_EndTurnOutput_handle_other mirrors it.
+        "Wf_EndTurnOutput_handle_bug",
     )
     looping = compile_workflow(
         samples.looping(), back_edge_budget={("counter", "counter"): BUDGET_K}

@@ -55,7 +55,12 @@ markers = [
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
-extend-exclude = ["spikes"]
+# ADK's own workflow samples, vendored verbatim (Google's style, not ours).
+extend-exclude = [
+    "spikes",
+    "tests/workflow/adk_samples/*/agent.py",
+    "tests/workflow/adk_samples/sequence/__init__.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]

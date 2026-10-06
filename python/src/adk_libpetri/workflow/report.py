@@ -45,3 +45,24 @@ class WorkflowTranslationError(ValueError):
             + "\n".join(f"  {f.subject}: {f.message}" for f in report.rejected)
         )
         self.report = report
+
+
+class WorkflowRunError(RuntimeError):
+    """A turn the net itself ended in failure (not a failing ADK node).
+
+    Raised from the compiled workflow node, so ADK's node runner records it
+    as an error event and the failure reaches ``Runner.run_async`` as a
+    native ``Workflow`` failure would.
+    """
+
+
+class LoopBudgetExhausted(WorkflowRunError):
+    """A budgeted back edge (``back_edge_budget``) was taken more often than allowed."""
+
+
+class NotInterruptibleError(WorkflowRunError):
+    """A node requested input, but it was not compiled interruptible."""
+
+
+class AmbiguousRouteError(WorkflowRunError):
+    """A node emitted several routes matching different branches (``multi_route='reject'``)."""

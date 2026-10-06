@@ -26,13 +26,24 @@ libpetri-py `>=7.2,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
   bridge, `AdkNetInvariants` and the stock-subnet Z3 proofs.
 - **`from_workflow` (experimental).** Compiles an ADK 2 graph `Workflow` into a
   net served by `PetriWorkflow`, a drop-in for `Runner(node=workflow)`.
-  - Translated: routes, `DEFAULT_ROUTE`, `JoinNode`, retries, timeouts,
-    `max_concurrency`, `RequestInput` interrupts and opt-in back-edge budgets
+  - Translated: routes, `DEFAULT_ROUTE`, `JoinNode`, `max_concurrency`,
+    `RequestInput` interrupts (and `auth_config` / tool-confirmation
+    interrupts, detected) and opt-in back-edge budgets
     ([ADR 0007](docs/adr/0007-compiled-workflow-back-edge-budgets.md)).
+    `retry_config` and `timeout` stay on the node, for ADK's node runner.
+  - The compiled node behaves like `Workflow` towards ADK: the terminal
+    node's event is the output event, run ids are per workflow run, a
+    resumed node keeps its run id, a failing node fails the run, and
+    `input_schema`/`output_schema` carry over (so it works as an agent tool).
+  - Rejected: nodes reading session state (parameters, `ctx.state` in the
+    body, instruction templates) unless `state="legacy_read"`, and
+    `mode='task'`/`'chat'` agents, whose across-turn wait is not modelled.
   - `verify_workflow` proves: one turn at a time, the permit never doubles,
-    at most one terminal output, every node runs serially, no route goes
-    unmatched, and deadlock freedom for workflows without interrupts.
-  - Tests run each sample natively and compiled and require the same results.
+    one output per terminal node and at most one terminal node with output,
+    every node runs serially, and deadlock freedom for workflows without
+    interrupts. Route coverage is reported as a lint.
+  - Tests run ADK's own workflow samples (google/adk-python v2.11.0,
+    vendored under `tests/workflow/adk_samples`) natively and compiled.
 - **Cross-language fixtures.** `spec/fixtures/nets` holds every stock subnet's
   structure. Java's new `SpecFixturesTest` writes and golden-checks it, and so
   does Python's `tests/conformance`.

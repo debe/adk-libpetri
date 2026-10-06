@@ -25,7 +25,7 @@ Requirement -> the tests that cover it in each port. Paths are relative to
 | REG-001..006 | `runner/SessionExecutorRegistryTest`, `runner/SessionExecutorRegistryStrongOwnedTest`, `runner/SessionCheckpointTest` | `runner/test_session_registry_finalizer_owned.py`, `runner/test_session_registry_strong_owned.py`, `runner/test_session_checkpoint.py` |
 | VER-001..006 | `verify/StockSubnetProofsTest` | `verify/test_stock_subnet_proofs.py` |
 | VER-007 | `verify/AdkNetInvariantsTest` | `verify/test_adk_net_invariants.py` |
-| WF-001 | (Python only) | `workflow/test_runtime_parity.py` |
+| WF-001 | (Python only) | `workflow/test_runtime_parity.py`, `workflow/adk_samples/*` (ADK's own samples) |
 | WF-002..005, 007..009 | (Python only) | `workflow/test_compile.py`, `workflow/test_runtime_parity.py` |
 | WF-006 | (Python only) | `workflow/test_runtime_parity.py::test_request_input_interrupts_and_resumes_like_adk` |
 

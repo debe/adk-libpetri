@@ -15,17 +15,9 @@ from google.adk.runners import InMemoryRunner
 from google.adk.workflow import Workflow
 from google.genai import types
 
-from adk_libpetri._aio import OrchestratorLoop
-from adk_libpetri.workflow import PetriWorkflow
+from adk_libpetri.workflow import LoopBudgetExhausted, PetriWorkflow
 
 from . import samples
-
-
-@pytest.fixture(scope="module")
-def orchestrator():  # type: ignore[no-untyped-def]
-    loop = OrchestratorLoop()
-    yield loop
-    loop.close()
 
 
 def _msg(text: str) -> types.Content:
@@ -102,10 +94,16 @@ async def test_budgeted_loop_runs_to_its_exit(orchestrator) -> None:  # type: ig
 
 
 async def test_exhausted_back_edge_budget_fails_the_turn_with_a_typed_error(orchestrator) -> None:  # type: ignore[no-untyped-def]
+    # As a failing Workflow does: ADK records an error event, then run_async raises.
     agent = PetriWorkflow.from_workflow(
         samples.looping(), orchestrator=orchestrator, back_edge_budget={("counter", "counter"): 1}
     )
-    events, _ = await _run(InMemoryRunner(node=agent, app_name="c"), "go")
+    runner = InMemoryRunner(node=agent, app_name="c")
+    s = await runner.session_service.create_session(app_name="c", user_id="u")
+    events: list[Any] = []
+    with pytest.raises(LoopBudgetExhausted, match="counter->counter"):
+        async for e in runner.run_async(user_id="u", session_id=s.id, new_message=_msg("go")):
+            events.append(e)
     assert events[-1].error_code == "LoopBudgetExhausted"
 
 

@@ -29,9 +29,14 @@ permits at `Wf_Start`:
 - `Wf_Edge_a_b` (priority 10) takes the edge token and one permit and
   triggers `b`;
 - `Wf_Edge_a_b_Exhausted` (priority -10, inhibited by the budget) fails the
-  turn with a typed `LoopBudgetExhausted` error event.
+  run with a typed `LoopBudgetExhausted`, raised from the compiled node so
+  that ADK records the error event and `Runner.run_async` raises, as for a
+  failing `Workflow`.
 
-The turn's end resets the budget, so no allowance outlives its turn. Budgets
+The budget is seeded when a workflow run starts (`Wf_Start`) and reset when
+the run ends, so no allowance outlives its run. A run that pauses on a
+`RequestInput` keeps its permits across the pause: one ADK workflow run
+spans those turns. Budgets
 are opt-in per edge. An unbudgeted cycle compiles and is reported as
 "unbudgeted cycle: termination is not provable".
 
@@ -48,6 +53,6 @@ loop it bounds.
   seed as one token, so `place_bound(budget, 1)` is the claim that matters.
 - A bookkeeping transition that consumes one place and produces another holds
   its token in no place while it fires. The verifier found that this let a
-  turn end mid-retry. Every such transition (`Backoff`, budgeted edges, the
-  resume match) therefore takes and returns a seeded `wf/quiet` token, which
+  turn end mid-retry. Every such transition (budgeted edges, the resume match,
+  and the retry backoff of the first compiler, which unrolled retries) therefore takes and returns a seeded `wf/quiet` token, which
   every turn end reads.

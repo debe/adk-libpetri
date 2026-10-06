@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -30,6 +30,8 @@ class Parked:
     node: str
     interrupt_id: str
     trigger: WfToken
+    run_id: str = "1"
+    """The interrupted run's id: ADK resumes the same run (same node path)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,8 +50,13 @@ class ResumeTrigger:
 
 @dataclass(frozen=True, slots=True)
 class WorkflowFailure:
-    """A node that failed for good (retries spent or not retryable)."""
+    """Why a turn failed: a node's own error, or the net's (``error`` is then a
+    :class:`~adk_libpetri.workflow.report.WorkflowRunError`)."""
 
     node: str
     error_code: str
     message: str
+    error: BaseException | None = field(default=None, compare=False)
+    node_path: str = ""
+    from_node: bool = False
+    """True when an ADK node failed: its runner already reported the error."""

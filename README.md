@@ -244,7 +244,7 @@ lives under `python/tests/`. The Python column notes where the port differs.
 | [Silence escalation ladder](#g5-escalation-ladders-timed-recovery-as-places) | `delayed` rungs under `inhibitor(MODEL_ACTIVE)`; an answer consumes its rung | No counterpart | Behavioural | Timing is not proved (the verifier is untimed) | Same tests on `SteppedClock`, to the millisecond |
 | [Voice composition deadlock-free](#g6-full-duplex-vad-barge-in-chunk-drop-ordering-experimental) | Env places modelled `bounded(1)` | No counterpart | Proven, no foil | `deadlock_free` only; streaming, barge-in and recovery, without the Router or `Vad` | Same |
 | [VAD edges that ADK Java turns into errors are recovered](#g6-full-duplex-vad-barge-in-chunk-drop-ordering-experimental) | `VadTapGemini` plus the `Vad` window | ADK Java 1.10.1 maps a VAD-only frame to an error | Behavioural + foil | ADK Java 1.10.1 | n/a: ADK Python 2.11 keeps the edges, and a foil locks that in |
-| [Compiled workflow safety](#from-workflow-to-net-from_workflow-python-experimental) | Turn permit, idle place per node, `unmatched` places | Raises at finalize on a second output; logs and ends the branch on an unmatched route | Proven, no foil | Per compiled workflow; `deadlock_free` is not claimed when the workflow has interrupts | Python only |
+| [Compiled workflow safety](#from-workflow-to-net-from_workflow-python-experimental) | Turn permit, idle place per node, a terminal-conflict place; `unmatched` places as a lint | Raises at finalize on a second terminal output; logs and ends the branch on an unmatched route | Proven, no foil | Per compiled workflow; `deadlock_free` is not claimed when the workflow has interrupts | Python only |
 
 ## Why a Petri net
 
@@ -347,38 +347,47 @@ from adk_libpetri import OrchestratorLoop
 from adk_libpetri.workflow import PetriWorkflow, compile_workflow, verify_workflow
 
 loop = OrchestratorLoop()                        # one per process
-compiled = compile_workflow(workflow)            # routes, joins, retries; interrupts opt-in via interruptible=[...]
+compiled = compile_workflow(workflow)            # routes, joins, interrupts; see the report
 proofs = verify_workflow(compiled, k=2)          # one Z3 verify() per claim; needs the z3 binary
-assert all(p.proven for p in proofs)
+assert all(p.proven for p in proofs if p.kind != "route coverage")
 runner = InMemoryRunner(node=PetriWorkflow.from_compiled(compiled, orchestrator=loop),
                         app_name="app")          # in place of InMemoryRunner(node=workflow)
 # or in one call: PetriWorkflow.from_workflow(workflow, orchestrator=loop)
 ```
 
 Each ADK node still runs through ADK's own node runner, inside the
-invocation. What moves into the net is the scheduling: triggers, routes,
-joins, retries, concurrency, interrupts and the turn itself.
+invocation, with its own `retry_config` and `timeout`. What moves into the
+net is the scheduling: triggers, routes, joins, concurrency, interrupts and
+the turn itself. The compiled node adds no events of its own: the terminal
+node's event is the workflow's output event, and a failing node fails the
+run as it fails a `Workflow`.
 
-<p align="center"><img src="docs/diagrams/svg/workflow-router.svg" alt="Compiled router workflow: Wf_Start takes the user input and the turn permit, Wf_classify_Run routes to Wf_handle_bug_Run or Wf_handle_other_Run, and Wf_EndTurnOutput returns the permit and emits the final event" width="860"></p>
+<p align="center"><img src="docs/diagrams/svg/workflow-router.svg" alt="Compiled router workflow: Wf_Start takes the user input and the turn permit, Wf_classify_Run routes to Wf_handle_bug_Run or Wf_handle_other_Run, each terminal node keeps its last output on its own terminalOutput place, and Wf_EndTurnOutput_handle_bug returns the permit and ends the turn" width="980"></p>
 
-*Exported from the compiled router sample; the abort and empty/failed turn
-endings are omitted.*
+*Exported from the compiled router sample. It has two terminal nodes, so
+each keeps its last output on its own place; the view shows one of the two
+turn endings, and omits the abort, empty, failed and two-output endings.*
 
 | Claim | ADK's `Workflow` | Compiled net |
 |---|---|---|
 | one turn at a time per session | not modelled | `place_bound(wf/turnActive, 1)` |
 | the turn permit never doubles | not modelled | `place_bound(turnPermit, 1)` |
-| at most one terminal output | raises at finalize | `place_bound(wf/terminalOutput, 1)` |
+| at most one terminal node outputs | raises at finalize | `unreachable(wf/terminalConflict)` (with two or more terminal nodes) |
 | every node runs serially | runtime queue | `place_bound(wf/<node>/idle, 1)` |
-| a route always matches an edge | logs a warning, ends the branch | `unreachable(wf/<node>/unmatched)` |
+| route coverage (a lint) | logs a warning, ends the branch | `unreachable(wf/<node>/unmatched)` |
 | no turn gets stuck | no | `deadlock_free` (not claimed for interruptible workflows; safety is then proved on the match-free over-approximation) |
 | a loop is bounded | no bound | opt-in `back_edge_budget` ([ADR 0007](docs/adr/0007-compiled-workflow-back-edge-budgets.md)) |
 
 A cycle without a budget still compiles, and the compiler reports it as
 approximated: deadlock freedom and safety are provable, termination is not.
 `back_edge_budget={(a, b): K}` routes the edge through a budget place seeded
-with K permits each turn. Once they are spent, a fallback transition fails
-the turn with a typed `LoopBudgetExhausted` error event.
+with K permits when a workflow run starts (a run that pauses on
+`RequestInput` keeps its permits). Once they are spent, a fallback
+transition fails the run with a typed `LoopBudgetExhausted`.
+
+Route coverage is a lint, not a safety claim: a violation means the net
+cannot rule out a route with no edge, which ADK treats as the end of that
+branch. ADK's own loop samples exit that way.
 
 <p align="center"><img src="docs/diagrams/svg/workflow-back-edge-budget.svg" alt="Compiled looping workflow: Wf_Edge_counter_counter spends one budget permit to re-trigger counter, and Wf_Edge_counter_counter_Exhausted, inhibited by the budget place, fails the turn when the permits are spent" width="860"></p>
 
@@ -389,11 +398,17 @@ the turn with a typed `LoopBudgetExhausted` error event.
 **Behavioural**. ADK-only foils for Patterns A/B/C run against ADK 2
 `Workflow` (see [G4](#g4-at-most-one-commit-per-turn-race-optimistic-commit-quorum)).
 
-Four sample workflows, in five cases, run natively and compiled with the
-same final output and event authors; retry, budgeted loop and
-`RequestInput` resume each have their own test that compares final output.
-What the compiler cannot translate faithfully, it rejects; what it
-approximates, it reports. See
+ADK's own workflow samples (the 24 runnable ones under
+`contributing/samples` in google/adk-python v2.11.0, vendored in
+`python/tests/workflow/adk_samples`) run natively and compiled, with a
+scripted model in place of Gemini, and the runs are compared event by event:
+outputs, authors, node paths, texts, session state, and the exception
+`Runner.run_async` raises. 22 compile and match, 10 of them only with
+`state="legacy_read"` because they read session state. The remaining 2 are
+rejected because they use `mode='task'` agents. One gap is left open:
+in a resumable app, the compiled node does not emit `Workflow`'s
+`agent_state` checkpoints. What the compiler cannot translate faithfully, it
+rejects; what it approximates, it reports. See
 [`python/README.md`](python/README.md#1-compile-an-existing-adk-workflow-from_workflow).
 
 ## Guarantees
@@ -1252,7 +1267,7 @@ it differs.
 | Deadlock-free | voice composition without its Router (streaming step, barge-in, Live-API recovery, `StartStream`), env places including `MODEL_QUIET` and `VOICE_ACTIVITY_OPEN` modelled `bounded(1)` | `VoiceSessionDemoTest` | same | [G5](#g5-escalation-ladders-timed-recovery-as-places), [G6](#g6-full-duplex-vad-barge-in-chunk-drop-ordering-experimental) |
 | One winner per turn: one race commit and one race event; one quorum synthesis and one quorum event; one optimistic commit, with mutually exclusive verdicts. Each net is deadlock-free | the three pattern demos, one turn | `Pattern{A,B,C}_*DemoTest` | same | [G4](#g4-at-most-one-commit-per-turn-race-optimistic-commit-quorum) |
 | The race permit never stacks across turns (assumes atomic firing, see above) | Pattern A, two arrivals | `PatternA_SpeculativeRaceDemoTest` | same; exact because `Race_Start` is synchronous | [G4](#g4-at-most-one-commit-per-turn-race-optimistic-commit-quorum) |
-| Sample DAGs (linear, router, fan-join, retrying, concurrent): every safety claim (one turn, permit never doubles, one terminal output, serial nodes, and no unmatched route where a router has one) and deadlock freedom. With an interruptible node: safety only, on the match-free over-approximation. With a budgeted cycle: safety and deadlock freedom; the budget bounds the cycle by construction, and termination is not a separate property | compiled workflows, two user inputs (`arrivals(2)`; deadlock freedom under `arrivals(2, 2)`) | — | Python only: `tests/workflow/test_compile.py` | [from_workflow](#from-workflow-to-net-from_workflow-python-experimental) |
+| Sample DAGs (linear, router, fan-join, retrying, concurrent): every safety claim (one turn, permit never doubles, one output per terminal node and at most one terminal node with output, serial nodes) and deadlock freedom; route coverage holds where every router has a default. With an interruptible node: safety only, on the match-free over-approximation. With a budgeted cycle: safety and deadlock freedom; the budget bounds the cycle by construction, and termination is not a separate property | compiled workflows, two user inputs (`arrivals(2)`; deadlock freedom under `arrivals(2, 2)`) | — | Python only: `tests/workflow/test_compile.py` | [from_workflow](#from-workflow-to-net-from_workflow-python-experimental) |
 
 The race regression that replays the double-commit marking is
 `two_results_ready_in_one_pass_commit_exactly_once` in Java and

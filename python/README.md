@@ -57,28 +57,44 @@ runner = InMemoryRunner(
 )
 ```
 
-`PetriWorkflow` is a drop-in for `Runner(node=workflow)`. Each ADK node still
-runs through ADK's own node runner, inside the invocation, so session events,
-plugins and tracing are unchanged. What moves into the net is the
-scheduling, and with it the claims Z3 can prove:
+`PetriWorkflow` is a drop-in for `Runner(node=workflow)`, and nests where a
+`Workflow` does (inside another workflow, or as an agent's tool: it carries
+the workflow's `input_schema` and `output_schema`). Each ADK node still runs
+through ADK's own node runner, inside the invocation, with its own
+`retry_config` and `timeout`, so session events, node paths, plugins and
+tracing are unchanged. The compiled node adds no events of its own: the
+terminal node's event is the workflow's output event, and a failing node
+fails the run as it fails a `Workflow` (`Runner.run_async` raises). What
+moves into the net is the scheduling, and with it the claims Z3 can prove:
 
 | Claim | Property |
 |---|---|
 | one turn at a time | `place_bound(wf/turnActive, 1)` |
 | the permit never doubles | `place_bound(turnPermit, 1)` |
-| at most one terminal output (ADK raises at runtime) | `place_bound(wf/terminalOutput, 1)` |
+| each terminal node keeps one output (its last, as ADK) | `place_bound(wf/<node>/terminalOutput, 1)` |
+| at most one terminal node outputs (ADK raises at runtime) | `unreachable(wf/terminalConflict)` |
 | every node runs serially | `place_bound(wf/<node>/idle, 1)` |
-| no route goes unmatched (ADK logs a warning) | `unreachable(wf/<node>/unmatched)` |
 | no turn gets stuck | `deadlock_free` (not claimed when the workflow has `interruptible` nodes) |
+| route coverage, a lint (ADK logs a warning and ends the branch) | `unreachable(wf/<node>/unmatched)` |
+
+Each proof has a `kind`: `"safety"`, `"deadlock"` or `"route coverage"`.
+Route coverage is a lint, not a safety claim: ADK's own loop samples exit
+through a route with no edge, so a violation there is expected.
 
 Translation, in short:
 
 - **Routes** become XOR branches, with `DEFAULT_ROUTE` as the no-match branch.
 - **`JoinNode`** becomes one place per predecessor.
-- **`retry_config`** is unrolled into attempts with `delayed` backoff (jitter dropped).
+- **Terminal nodes** run with `use_as_output`; each keeps its last output on
+  its own place, and two with output fail the run as ADK does.
+- **`retry_config`** and **`timeout`** stay on the node: ADK's node runner
+  retries and times out inside the node's transition.
 - **`max_concurrency`** becomes a permit place.
 - **`RequestInput`** parks the node until the next turn's function response
-  (pass `interruptible=["node"]`).
+  (pass `interruptible=["node"]`); the resumed run keeps its run id. Nodes
+  that interrupt by construction (`auth_config`, a tool with
+  `require_confirmation`) are compiled interruptible without being named.
+- **Run ids** restart at `@1` with each workflow run, as ADK allocates them.
 - **Conditional cycles** are kept. An unbudgeted cycle still gets deadlock
   freedom and safety, but not termination, and the report lists it as
   approximated. `back_edge_budget={("a", "b"): K}` bounds one, which makes
@@ -93,15 +109,31 @@ the net with the match guards dropped, an over-approximation whose bounds hold
 on the real net (the proof label ends in `[on the match-free
 over-approximation]`), and does not claim deadlock freedom.
 
-What cannot be compiled faithfully is rejected: a `FunctionNode` that reads
-session state, unless you pass `state="legacy_read"`. What is approximated is
-listed in the report.
+What cannot be compiled faithfully is rejected:
 
-Four sample workflows, in five cases (linear, the router on two inputs, fan-out with a join,
-concurrent) run natively and compiled with the same final output and the same
-event authors (`tests/workflow/test_runtime_parity.py`). Retry, a budgeted
-loop and `RequestInput` resume each have their own test there that compares
-final output only.
+- a node that reads session state, unless you pass `state="legacy_read"`: a
+  `FunctionNode` parameter bound from state, a `ctx.state` read in its body,
+  or an `{key}` placeholder in an agent's instruction (looked for inside
+  parallel workers and nested workflows too);
+- a `mode='task'` or `mode='chat'` agent node. Under `Workflow` it waits for
+  the user across turns inside one workflow run, which the net does not
+  model; run it as a `PetriAgent`, or use `mode='single_turn'`.
+
+What is approximated is listed in the report: fan-out completion order
+(siblings run concurrently and finish in scheduling order), branch scoping,
+event replay, a node that takes `ctx` (children it runs through
+`ctx.run_node` are invisible to the proofs), and `wait_for_output` across
+turns.
+
+`tests/workflow/adk_samples` runs ADK's own workflow samples (google/adk-python
+v2.11.0, `contributing/samples`) natively and compiled, with scripted models,
+and compares outputs, authors, node paths, texts, state and raised
+exceptions. Of the 24 runnable samples, 22 match (10 need `state="legacy_read"`)
+and 2 are rejected for their `mode='task'` agents; the Antigravity sample needs
+an external SDK and is not vendored. Open gap: in a resumable app the compiled
+node emits none of `Workflow`'s `agent_state` checkpoints (a strict xfail in
+`node_as_tool`). `tests/workflow/test_runtime_parity.py` adds small
+hand-written cases (retry, a budgeted loop, `RequestInput` resume).
 
 ### 2. Write the net yourself (`PetriAgent`)
 
