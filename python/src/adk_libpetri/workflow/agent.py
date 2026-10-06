@@ -19,6 +19,23 @@ the failure. A failing ADK node fails this node as it fails a ``Workflow``;
 a failure of the net itself (a spent back-edge budget, two terminal outputs)
 is raised as a typed :class:`~adk_libpetri.workflow.report.WorkflowRunError`.
 
+It also loads from ADK's own YAML agent config, so ``adk web`` and ``adk run``
+serve the compiled net::
+
+    # root_agent.yaml
+    agent_class: adk_libpetri.workflow.PetriWorkflow
+    name: root_agent
+    state: legacy_read                 # compile options, as for compile_workflow
+    back_edge_budget: [[route_headline, generate_headline, 3]]
+    edges:                             # exactly a Workflow's edges
+      - [START, .agent.process_input, generate_headline.yaml]
+      - [generate_headline, {unrelated: generate_headline.yaml}]
+
+ADK's loader resolves the edges (code references, nested YAML files, route
+maps) as it does for ``agent_class: Workflow``; the node then compiles itself
+on :meth:`OrchestratorLoop.shared`. A ``WorkflowTranslationError`` fails the
+load.
+
 A turn that answers pending ``adk_request_input`` interrupts (ADK passes the
 answers as ``ctx.resume_inputs``) is a *resume*: they go to the net's
 ``wf/resumeIn`` place instead of ``USER_IN``.
@@ -31,7 +48,8 @@ from collections.abc import AsyncGenerator, Iterable, Mapping
 from typing import Any
 
 from google.adk.workflow import BaseNode, Workflow
-from pydantic import PrivateAttr
+from google.adk.workflow._graph import EdgeItem
+from pydantic import Field, PrivateAttr
 
 from .._aio import OrchestratorLoop
 from .._experimental import experimental
@@ -57,6 +75,16 @@ _SCOPE = "adk_libpetri.workflow.turn_scope"
 @experimental
 class PetriWorkflow(BaseNode):
     rerun_on_resume: bool = True
+
+    # Set from YAML (or by keyword): the Workflow to compile, and how.
+    edges: list[EdgeItem] = Field(default_factory=list)
+    """A ``Workflow``'s edges; ADK's config loader resolves them by this type."""
+    max_concurrency: int | None = None
+    interruptible: list[str] = Field(default_factory=list)
+    back_edge_budget: list[tuple[str, str, int]] = Field(default_factory=list)
+    """``[from, to, budget]`` per budgeted back edge (ADR 0007)."""
+    state: StateMode = "reject"
+    multi_route: MultiRoute = "reject"
 
     _compiled: CompiledWorkflow = PrivateAttr()
     _registry: SessionExecutorRegistry = PrivateAttr()
@@ -111,6 +139,68 @@ class PetriWorkflow(BaseNode):
         node._orchestrator = orchestrator
         node._event_store = event_store
         return node
+
+    def model_post_init(self, context: Any, /) -> None:
+        super().model_post_init(context)
+        if not self.edges:
+            return  # built by from_compiled
+        workflow = Workflow(
+            name=self.name,
+            description=self.description,
+            edges=self.edges,
+            max_concurrency=self.max_concurrency,
+            input_schema=self.input_schema,
+            output_schema=self.output_schema,
+        )
+        self._compiled = compile_workflow(
+            workflow,
+            interruptible=self.interruptible,
+            back_edge_budget={(a, b): k for a, b, k in self.back_edge_budget},
+            multi_route=self.multi_route,
+            state=self.state,
+        )
+        self._registry = SessionExecutorRegistry.strong_owned()
+        self._orchestrator = OrchestratorLoop.shared()
+
+    @classmethod
+    def from_config(
+        cls,
+        config_path: str,
+        *,
+        orchestrator: OrchestratorLoop | None = None,
+        registry: SessionExecutorRegistry | None = None,
+        event_store: Any = None,
+        **compile_options: Any,
+    ) -> PetriWorkflow:
+        """Load an ADK YAML agent config and serve it compiled.
+
+        ``agent_class: Workflow`` is compiled with ``compile_options``;
+        ``agent_class: adk_libpetri.workflow.PetriWorkflow`` carries its own
+        options in the YAML. ``orchestrator`` defaults to the shared loop.
+        """
+        from google.adk.agents.config_agent_utils import from_config
+
+        node = from_config(config_path)
+        loop = orchestrator or OrchestratorLoop.shared()
+        if isinstance(node, PetriWorkflow):
+            if compile_options:
+                raise TypeError("a PetriWorkflow YAML sets its compile options itself")
+            node._orchestrator = loop
+            node._registry = registry or node._registry
+            node._event_store = event_store
+            return node
+        if not isinstance(node, Workflow):
+            raise TypeError(
+                f"{config_path} defines a {type(node).__name__}, not a Workflow; "
+                "an agent root runs on ADK (or PetriAgent) directly"
+            )
+        return cls.from_workflow(
+            node,
+            orchestrator=loop,
+            registry=registry,
+            event_store=event_store,
+            **compile_options,
+        )
 
     @property
     def compiled(self) -> CompiledWorkflow:

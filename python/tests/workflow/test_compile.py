@@ -36,11 +36,40 @@ def test_join_consumes_one_token_per_predecessor() -> None:
     assert {i.place.name for i in run.inputs} >= {"wf/join/from/upper", "wf/join/from/lower"}
 
 
-def test_retry_stays_on_the_node_for_adks_runner() -> None:
+def test_retry_is_a_loop_in_the_net_with_timed_backoff() -> None:
     cw = compile_workflow(samples.retrying())
-    assert [t for t in cw.spec.transition_names if t.startswith("Wf_flaky_")] == ["Wf_flaky_Run"]
-    assert cw._plans["flaky"].node.retry_config is not None
-    assert any("retry_config kept" in f.message for f in cw.report.of("exact"))
+    names = sorted(t for t in cw.spec.transition_names if t.startswith("Wf_flaky_"))
+    assert {"Wf_flaky_Run", "Wf_flaky_Retry", "Wf_flaky_Backoff1", "Wf_flaky_Backoff2"} <= set(
+        names
+    )
+    assert cw.spec.transition("Wf_flaky_Backoff1").timing.earliest_ms == 10
+    assert cw.spec.transition("Wf_flaky_Backoff2").timing.earliest_ms == 20
+    # A retry holds the node: the retry transition takes no idle token.
+    assert {i.place.name for i in cw.spec.transition("Wf_flaky_Retry").inputs} == {"wf/flaky/again"}
+
+
+@requires_z3
+@pytest.mark.timeout(300)
+def test_folding_the_retry_loop_keeps_the_verdicts() -> None:
+    """The proofs run on the folded net; on the executed net they agree."""
+    import libpetri as lp
+
+    from adk_libpetri.workflow import proofs as P
+
+    cw = compile_workflow(samples.retrying())
+    folded = {p.label: p.result.verdict for p in verify_workflow(cw, k=1)}
+    acts = cw.actions(P._StructuralScope())
+    net = cw.spec.build(acts)
+    unfolded = {
+        label: lp.verify(net, prop, **P._options(cw, 1, False)).verdict
+        for label, prop in P.workflow_properties(cw).items()
+    }
+    sinks = ["eventOut", "turnPermit", "wf/quiet", "wf/flaky/idle"]
+    unfolded["deadlock_free"] = lp.verify(
+        net, lp.deadlock_free(), **P._options(cw, 1, True), sink_places=sinks
+    ).verdict
+    assert unfolded == folded
+    assert set(folded.values()) == {"proven"}
 
 
 def test_terminal_nodes_keep_their_last_output_and_two_with_output_conflict() -> None:

@@ -30,7 +30,9 @@ libpetri-py `>=7.2,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
     `RequestInput` interrupts (and `auth_config` / tool-confirmation
     interrupts, detected) and opt-in back-edge budgets
     ([ADR 0007](docs/adr/0007-compiled-workflow-back-edge-budgets.md)).
-    `retry_config` and `timeout` stay on the node, for ADK's node runner.
+    `retry_config` becomes a retry loop in the net (timed backoff
+    transitions, attempts of one ADK run); the proofs fold it into the run.
+    `timeout` stays on the node, for ADK's node runner.
   - The compiled node behaves like `Workflow` towards ADK: the terminal
     node's event is the output event, run ids are per workflow run, a
     resumed node keeps its run id, a failing node fails the run, and
@@ -42,6 +44,10 @@ libpetri-py `>=7.2,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
     one output per terminal node and at most one terminal node with output,
     every node runs serially, and deadlock freedom for workflows without
     interrupts. Route coverage is reported as a lint.
+  - Loads from ADK's YAML agent config: `agent_class:
+    adk_libpetri.workflow.PetriWorkflow` takes a `Workflow`'s edges plus the
+    compile options, so `adk web` and `adk run` serve the compiled net.
+    `PetriWorkflow.from_config` also compiles an `agent_class: Workflow` file.
   - Tests run ADK's own workflow samples (google/adk-python v2.11.0,
     vendored under `tests/workflow/adk_samples`) natively and compiled.
 - **Cross-language fixtures.** `spec/fixtures/nets` holds every stock subnet's

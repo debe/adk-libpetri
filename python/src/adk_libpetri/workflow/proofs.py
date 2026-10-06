@@ -76,8 +76,10 @@ def verify_workflow(
 
     Under ``arrivals(k)`` user inputs. Deadlock freedom (with the permit and
     the egress as the only sinks) is checked under exactly ``k`` arrivals.
+    The proofs run on :attr:`CompiledWorkflow.verification_spec`, where each
+    retry loop is folded into its run; they hold on the executed net.
     """
-    spec = cw.spec
+    spec = cw.verification_spec
     suffix = ""
     if any(t.match is not None for t in spec.transitions):
         # Interrupt ids arrive from the environment (unbounded ν-names, NU-040).
@@ -93,7 +95,8 @@ def verify_workflow(
         )
         suffix = " [on the match-free over-approximation]"
         deadlock = False
-    net = spec.build(cw.actions(_StructuralScope()))
+    acts = cw.actions(_StructuralScope())
+    net = spec.build({t: a for t, a in acts.items() if t in spec.transition_names})
     proofs: list[WorkflowProof] = []
     for kind, props in (
         ("safety", workflow_properties(cw)),

@@ -356,9 +356,13 @@ runner = InMemoryRunner(node=PetriWorkflow.from_compiled(compiled, orchestrator=
 ```
 
 Each ADK node still runs through ADK's own node runner, inside the
-invocation, with its own `retry_config` and `timeout`. What moves into the
-net is the scheduling: triggers, routes, joins, concurrency, interrupts and
-the turn itself. The compiled node adds no events of its own: the terminal
+invocation (with its own `timeout`). What moves into the net is the
+scheduling: triggers, routes, joins, retries, concurrency, interrupts and
+the turn itself. A retry is a loop of places and transitions: a failed
+attempt waits on a timed backoff transition (ADK's delay) and comes back as
+the same ADK run, with its `ctx.attempt_count`; the node stays busy
+meanwhile, as under ADK. The proofs fold each retry loop into its run, which
+is sound and keeps them as cheap as for a node without retries. The compiled node adds no events of its own: the terminal
 node's event is the workflow's output event, and a failing node fails the
 run as it fails a `Workflow`.
 

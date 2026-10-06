@@ -27,6 +27,7 @@ Requirement -> the tests that cover it in each port. Paths are relative to
 | VER-007 | `verify/AdkNetInvariantsTest` | `verify/test_adk_net_invariants.py` |
 | WF-001 | (Python only) | `workflow/test_runtime_parity.py`, `workflow/adk_samples/*` (ADK's own samples) |
 | WF-002..005, 007..009 | (Python only) | `workflow/test_compile.py`, `workflow/test_runtime_parity.py` |
+| WF-010 | (Python only) | `workflow/adk_samples/loop_config/test_petri_yaml.py` |
 | WF-006 | (Python only) | `workflow/test_runtime_parity.py::test_request_input_interrupts_and_resumes_like_adk` |
 
 ## Demos and foils

@@ -15,8 +15,10 @@ transitions run the ADK nodes through ADK's own node runner.
   branch; `DEFAULT_ROUTE` is the no-match branch; a node with routed edges and
   no match reaches a named `unmatched` place.
 - **WF-004** A `JoinNode` consumes one output per predecessor.
-- **WF-005** `retry_config` and `timeout` stay on the node: ADK's node runner
-  retries and times out inside the node's transition.
+- **WF-005** `retry_config` is a retry loop in the net: each attempt of one
+  ADK run (same node path, `ctx.attempt_count` counting up), ADK's backoff as
+  a timed transition, ADK's retry decision; the node stays busy through the
+  backoff. Proofs fold the loop into the run. `timeout` stays on the node.
 - **WF-006** A `RequestInput` parks the node; the turn ends with the pending
   interrupt ids; the next turn's function response resumes the node. Nodes
   that interrupt by construction (`auth_config`, tools requiring
@@ -27,6 +29,10 @@ transitions run the ADK nodes through ADK's own node runner.
   permit never doubles, one output per terminal node, at most one terminal
   node with output, every node serial; deadlock freedom for workflows without
   interrupts. Route coverage (unmatched routes unreachable) is a lint.
+- **WF-010** A `PetriWorkflow` loads from ADK's YAML agent config
+  (`agent_class: adk_libpetri.workflow.PetriWorkflow`, a `Workflow`'s edges
+  plus compile options) through ADK's own loader, and serves the same run as
+  the `agent_class: Workflow` file.
 - **WF-009** What cannot be compiled faithfully is rejected: a node reading
   session state (a parameter, `ctx.state` in its body, an instruction
   template), unless `state="legacy_read"`; a `mode='task'`/`'chat'` agent;

@@ -142,13 +142,23 @@ def test_report() -> None:
     exact = {(f.subject, f.message) for f in cw.report.of("exact")}
     assert (
         "get_weather",
-        "retry_config kept on the node: ADK's node runner retries inside the transition",
+        "retry loop of 5 attempts in one run, backoff [1000, 2000, 4000, 8000] ms",
     ) in exact
+    approximated = {(f.subject, f.message) for f in cw.report.of("approximated")}
+    assert (
+        "get_weather",
+        "retry jitter 1.0 dropped: each backoff waits ADK's undrawn delay",
+    ) in approximated
     names = set(cw.spec.transition_names)
     assert {"Wf_get_weather_Run", "Wf_report_weather_Run"} <= names
     assert "Wf_EndTurnOutput_report_weather" in names
-    assert {n for n in names if "get_weather" in n} == {"Wf_get_weather_Run"}
-    assert not [n for n in names if "Backoff" in n]
+    # The retry is in the net: one retry transition, one timed backoff per attempt.
+    assert {"Wf_get_weather_Retry", *(f"Wf_get_weather_Backoff{i}" for i in range(1, 5))} <= names
+    assert cw.spec.transition("Wf_get_weather_Backoff3").timing.earliest_ms == 4000
+    # The proofs see the loop folded into the run.
+    assert {n for n in cw.verification_spec.transition_names if "get_weather" in n} == {
+        "Wf_get_weather_Run"
+    }
 
 
 @requires_z3

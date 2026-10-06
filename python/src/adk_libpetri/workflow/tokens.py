@@ -16,6 +16,15 @@ class WfToken:
 
 
 @dataclass(frozen=True, slots=True)
+class Retry:
+    """A failed attempt waiting for its backoff: the same run, attempt ``attempt + 1`` next."""
+
+    trigger: WfToken
+    run_id: str
+    attempt: int
+
+
+@dataclass(frozen=True, slots=True)
 class NodeOutput:
     """A terminal node's output (ADK: at most one per workflow run)."""
 

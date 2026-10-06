@@ -1,0 +1,15 @@
+# adk-libpetri: not part of ADK's sample. root_agent.yaml with the PetriWorkflow
+# agent class: the same edges, compiled into a net when ADK's loader builds it.
+agent_class: adk_libpetri.workflow.PetriWorkflow
+name: root_agent
+state: legacy_read  # generate_headline's instruction reads {topic} and {feedback?}
+back_edge_budget:
+  - [route_headline, generate_headline, 3]
+edges:
+  - - START
+    - .agent.process_input
+    - generate_headline.yaml
+    - evaluate_headline.yaml
+    - .agent.route_headline
+  - - .agent.route_headline
+    - unrelated: generate_headline.yaml

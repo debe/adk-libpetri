@@ -24,9 +24,15 @@ Translation (``N`` a node, places named ``wf/N/...``):
   ``use_as_output``, so its own event is the workflow's output event. Two
   terminal nodes with output end the turn on ``wf/terminalConflict`` (ADK's
   "multiple terminal outputs" error), which a proof can show unreachable.
-* **retry_config, timeout** -- left on the node: ADK's node runner retries and
-  times out each attempt inside the node's transition, exactly as under
-  ``Workflow`` (same node path, ``attempt_count``, backoff and jitter).
+* **retry_config** -- a retry loop: a failed attempt ``i`` lands on
+  ``wf/N/retryI``, whose timed ``Wf_N_BackoffI`` (ADK's delay for attempt
+  ``i``, without its random jitter) moves it to ``wf/N/again``, where
+  ``Wf_N_Retry`` runs the next attempt. The node stays busy through the
+  backoff, as under ADK's retry loop. One retry transition, not one per
+  attempt, keeps the proofs flat in the number of attempts. Every attempt is the same ADK run (same
+  node path) and sees its ``ctx.attempt_count``; whether to retry is ADK's
+  own ``_should_retry_node``.
+* **timeout** -- left on the node: ADK's node runner enforces it per attempt.
 * **max_concurrency** -- a seeded ``wf/concurrency`` permit place.
 * **RequestInput** (opt-in per node: ``interruptible``) -- the run parks on
   ``wf/parked``; the next turn's function response arrives on ``wf/resumeIn``
@@ -51,7 +57,7 @@ import inspect
 import itertools
 import textwrap
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from google.adk.events.event import Event
@@ -72,6 +78,7 @@ from .._spec import (
     TransitionSpec,
     and_,
     at_least,
+    delayed,
     one,
     out,
     xor,
@@ -83,7 +90,7 @@ from .report import (
     TranslationReport,
     WorkflowTranslationError,
 )
-from .tokens import NodeOutput, Parked, Resumed, ResumeTrigger, WfToken, WorkflowFailure
+from .tokens import NodeOutput, Parked, Resumed, ResumeTrigger, Retry, WfToken, WorkflowFailure
 
 MultiRoute = Literal["reject", "first"]
 StateMode = Literal["reject", "legacy_read"]
@@ -120,6 +127,16 @@ def _from(n: str, p: str) -> Place[WfToken]:
 
 def _terminal(n: str) -> Place[NodeOutput]:
     return Place(f"wf/{n}/terminalOutput", NodeOutput)
+
+
+def _again(n: str) -> Place[Retry]:
+    """A retry whose backoff is over: the node's next attempt, any attempt."""
+    return Place(f"wf/{n}/again", Retry)
+
+
+def _retry(n: str, i: int) -> Place[Retry]:
+    """Attempt ``i`` failed; its backoff (ADK's delay for attempt ``i``) runs."""
+    return Place(f"wf/{n}/retry{i}", Retry)
 
 
 def _unmatched(n: str) -> Place[WfToken]:
@@ -188,12 +205,18 @@ class _NodePlan:
     is_join: bool
     preds: list[str]
     interruptible: bool
+    attempts: int = 1
+    backoff_ms: list[int] = field(default_factory=list)
+    """Per retry, the delay of its backoff."""
     route_to_branch: dict[Any, int] = field(default_factory=dict)
     default_branch: int | None = None
     branches: list[_Branch] = field(default_factory=list)
     unmatched: bool = False
     terminal: bool = False
     wait_for_output: bool = False
+    folded_retries: bool = False
+    """Verification net only: the retry loop folded into the run (see
+    :attr:`CompiledWorkflow.verification_spec`)."""
 
 
 @experimental
@@ -202,6 +225,17 @@ class CompiledWorkflow:
     workflow: Workflow
     spec: NetSpec
     report: TranslationReport
+    verification_spec: NetSpec
+    """The net the proofs run on: :attr:`spec` with every retry loop folded
+    into its node's run, which gains a branch that only hands the node back
+    (a retry dropped after an abort, or cancelled by another node's failure).
+
+    Sound for the proofs: a retry token maps to the run still in flight, and
+    the retry loop never strands a token (a pending retry's backoff or retry
+    is always enabled, or else its cancel or drop is), so every marking of
+    :attr:`spec` maps to one of this net with the same transitions enabled
+    outside the loop. Safety and deadlock freedom proved here hold on the
+    executed net. It keeps the proofs as cheap as for a node without retries."""
     max_concurrency: int | None
     budgets: dict[tuple[str, str], int]
     _plans: dict[str, _NodePlan]
@@ -341,17 +375,89 @@ def compile_workflow(
     spec = _build_spec(
         workflow.name, plans, out_edges[START.name], budgets, workflow.max_concurrency
     )
+    folded = {
+        n: replace(p, attempts=1, backoff_ms=[], folded_retries=p.attempts > 1)
+        for n, p in plans.items()
+    }
+    verification_spec = _build_spec(
+        workflow.name, folded, out_edges[START.name], budgets, workflow.max_concurrency
+    )
     for (a, b), k in budgets.items():
         report.add("exact", f"{a}->{b}", f"back edge bounded by a budget of {k} per workflow run")
     return CompiledWorkflow(
         workflow=workflow,
         spec=spec,
         report=report,
+        verification_spec=verification_spec,
         max_concurrency=workflow.max_concurrency if workflow.max_concurrency else None,
         budgets=budgets,
         _plans=plans,
         _multi_route=multi_route,
     )
+
+
+def _retry_plan(node: BaseNode, report: TranslationReport) -> tuple[int, list[int]]:
+    """ADK's attempts and backoff (``_get_retry_delay`` without the random draw)."""
+    rc = node.retry_config
+    if rc is None:
+        return 1, []
+    attempts = max(1, rc.max_attempts if rc.max_attempts is not None else 5)
+    initial = rc.initial_delay if rc.initial_delay is not None else 1.0
+    factor = rc.backoff_factor if rc.backoff_factor is not None else 2.0
+    cap = rc.max_delay if rc.max_delay is not None else 60.0
+    jitter = rc.jitter if rc.jitter is not None else 1.0
+    delays: list[int] = []
+    for failed in range(1, attempts):
+        d = initial * factor ** (failed - 1)
+        if jitter > 0.0:
+            d = min(d, cap / (1.0 + jitter))  # ADK's cap before jittering
+        delays.append(max(1, round(min(d, cap) * 1000)))
+    report.add(
+        "exact",
+        node.name,
+        f"retry loop of {attempts} attempts in one run, backoff {delays} ms",
+    )
+    if jitter > 0.0:
+        # A firing window [d(1-j), d(1+j)] would be the honest TPN reading, but
+        # libpetri force-disables a window transition that misses its latest
+        # bound, and a backoff must never expire.
+        report.add(
+            "approximated",
+            node.name,
+            f"retry jitter {jitter} dropped: each backoff waits ADK's undrawn delay",
+        )
+    return attempts, delays
+
+
+def _with_attempt(node: BaseNode, attempt: int) -> BaseNode:
+    """A copy of ``node`` that runs as attempt ``attempt`` of its run.
+
+    ADK's dynamic node runner always starts a run at attempt 1; the net owns
+    the retry, so the copy sets the attempt on its context before the node's
+    own body runs (``ctx.attempt_count``, as under ADK's own retry loop).
+    """
+    from google.adk.utils.context_utils import Aclosing
+
+    copy = node.model_copy(update={"retry_config": None})
+    if attempt == 1:
+        return copy
+    body = copy._run_impl
+
+    async def run_impl(*, ctx: Any, node_input: Any) -> Any:
+        ctx._attempt_count = attempt
+        async with Aclosing(body(ctx=ctx, node_input=node_input)) as agen:
+            async for item in agen:
+                yield item
+
+    object.__setattr__(copy, "_run_impl", run_impl)
+    return copy
+
+
+def _should_retry(node: BaseNode, err: BaseException, attempt: int) -> bool:
+    from google.adk.workflow._node_state import NodeState
+    from google.adk.workflow.utils._retry_utils import _should_retry_node
+
+    return _should_retry_node(err, node.retry_config, NodeState(attempt_count=attempt))
 
 
 def _routes_of(edge: Any) -> list[Any]:
@@ -362,12 +468,7 @@ def _routes_of(edge: Any) -> list[Any]:
 def _plan_node(
     node: BaseNode, edges: list[Any], preds: list[str], hitl: set[str], report: TranslationReport
 ) -> _NodePlan:
-    if node.retry_config is not None:
-        report.add(
-            "exact",
-            node.name,
-            "retry_config kept on the node: ADK's node runner retries inside the transition",
-        )
+    attempts, backoff = _retry_plan(node, report)
     if node.timeout is not None:
         report.add(
             "exact",
@@ -380,6 +481,8 @@ def _plan_node(
         is_join=bool(node._requires_all_predecessors),
         preds=preds,
         interruptible=node.name in hitl,
+        attempts=attempts,
+        backoff_ms=backoff,
         wait_for_output=bool(node.wait_for_output),
     )
     if plan.is_join:
@@ -663,6 +766,12 @@ def _dest_place(
     return _trigger(target)
 
 
+def _retry_chain(n: str, p: _NodePlan) -> list[Place[Retry]]:
+    if p.attempts == 1:
+        return []
+    return [_retry(n, i) for i in range(1, p.attempts)] + [_again(n)]
+
+
 def _work_places(plans: dict[str, _NodePlan], budgets: Mapping[Any, int]) -> list[Place[Any]]:
     ps: list[Place[Any]] = []
     for n, p in plans.items():
@@ -670,6 +779,7 @@ def _work_places(plans: dict[str, _NodePlan], budgets: Mapping[Any, int]) -> lis
             ps += [_from(n, q) for q in p.preds]
         else:
             ps.append(_trigger(n))
+        ps += _retry_chain(n, p)
         if p.interruptible:
             ps.append(_resume(n))
     ps += [_edge(a, b) for a, b in budgets]
@@ -739,15 +849,55 @@ def _build_spec(
         # A terminal run replaces the node's earlier output (ADK: node_outputs[n]).
         own = (_terminal(n),) if p.terminal else ()
         ins = [one(_from(n, q)) for q in p.preds] if p.is_join else [one(_trigger(n))]
+        first_retry = [_retry(n, 1)] if p.attempts > 1 else []
         ts.append(
             TransitionSpec(
                 f"Wf_{n}_Run",
                 (*ins, *common_in),
-                _node_output(n, p, plans, budgets, give_back),
+                _node_output(n, p, plans, budgets, give_back, first_retry),
                 inhibitors=(FAILED,),
                 resets=own,
             )
         )
+        if p.attempts > 1:
+            # A retry keeps the node busy through its backoff, as ADK's retry
+            # loop does: the retry token holds the idle token (and the
+            # concurrency permit) the first run took.
+            later = [_retry(n, i) for i in range(2, p.attempts)]
+            ts.append(
+                TransitionSpec(
+                    f"Wf_{n}_Retry",
+                    (one(_again(n)),),
+                    _node_output(n, p, plans, budgets, give_back, later),
+                    inhibitors=(FAILED,),
+                    resets=own,
+                )
+            )
+            for i in range(1, p.attempts):
+                ts.append(
+                    TransitionSpec(
+                        f"Wf_{n}_Backoff{i}",
+                        (one(_retry(n, i)), one(QUIET)),
+                        and_(_again(n), QUIET),
+                        inhibitors=(FAILED,),
+                        timing=delayed(p.backoff_ms[i - 1]),
+                    )
+                )
+        for q in _retry_chain(n, p):
+            stage = q.name.rsplit("/", 1)[1]
+            # A retry that will not run hands the node back: after an abort
+            # (no turn is active), or once another node failed the run (ADK
+            # cancels the pending tasks then).
+            for why, read in (("DropRetry", C.TURN_PERMIT), ("CancelRetry", FAILED)):
+                ts.append(
+                    TransitionSpec(
+                        f"Wf_{n}_{why}_{stage}",
+                        (one(q),),
+                        and_(*give_back),
+                        reads=(read,),
+                        priority=30,
+                    )
+                )
         if p.interruptible:
             ts.append(
                 TransitionSpec(
@@ -783,6 +933,13 @@ def _build_spec(
     # -- turn end ----------------------------------------------------------------
     idles = tuple(_idle(n) for n in plans)
     work = _work_places(plans, budgets)
+    # Attempt and retry tokens stand for a node that is still busy (they hold
+    # its idle token), so no turn end may reset them: that would lose the
+    # idle. They drain through Wf_N_DropRetry once no turn is active. Nor do
+    # the turn ends inhibit on them: each end reads every idle token, which
+    # is absent while a retry is pending (the P-invariant the verifier finds).
+    in_retry = {q.name for n, p in plans.items() for q in _retry_chain(n, p)}
+    clearable = tuple(q for q in work if q.name not in in_retry)
     unmatched = tuple(_unmatched(n) for n, p in plans.items() if p.unmatched)
     ends = (C.EVENT_OUT, C.TURN_PERMIT)
     no_park = (PARKED,) if interruptible else ()
@@ -793,7 +950,7 @@ def _build_spec(
                 (one(TURN_ACTIVE),),
                 and_(*ends),
                 reads=(PARKED, QUIET, *idles),
-                inhibitors=(*work, FAILED),
+                inhibitors=(*clearable, FAILED),
                 resets=(*terminals, *unmatched),
                 priority=-100,
             )
@@ -806,7 +963,7 @@ def _build_spec(
                 (one(TURN_ACTIVE), one(t)),
                 and_(*ends),
                 reads=(QUIET, *idles),
-                inhibitors=(*work, FAILED, *no_park),
+                inhibitors=(*clearable, FAILED, *no_park),
                 resets=(*others, *unmatched, *budget_places),
                 priority=-100,
             )
@@ -819,7 +976,7 @@ def _build_spec(
                     (one(TURN_ACTIVE), one(t1), one(t2)),
                     and_(*ends, CONFLICT),
                     reads=(QUIET, *idles),
-                    inhibitors=(*work, FAILED, *no_park),
+                    inhibitors=(*clearable, FAILED, *no_park),
                     resets=(*terminals, *unmatched, *budget_places),
                     priority=-95,
                 )
@@ -830,7 +987,7 @@ def _build_spec(
             (one(TURN_ACTIVE),),
             and_(*ends),
             reads=(QUIET, *idles),
-            inhibitors=(*work, FAILED, *terminals, *no_park),
+            inhibitors=(*clearable, FAILED, *terminals, *no_park),
             resets=(*unmatched, *budget_places),
             priority=-100,
         )
@@ -841,7 +998,7 @@ def _build_spec(
             (one(TURN_ACTIVE), at_least(1, FAILED)),
             and_(*ends),
             reads=(QUIET, *idles),
-            resets=(*work, *terminals, *unmatched, *budget_places, PARKED),
+            resets=(*clearable, *terminals, *unmatched, *budget_places, PARKED),
             priority=-90,
         )
     )
@@ -850,7 +1007,7 @@ def _build_spec(
             "Wf_AbortTurn",
             (one(C.TURN_ABORT), one(TURN_ACTIVE)),
             out(C.TURN_PERMIT),
-            resets=(*work, *terminals, *unmatched, *budget_places, PARKED, FAILED),
+            resets=(*clearable, *terminals, *unmatched, *budget_places, PARKED, FAILED),
             priority=30,
         )
     )
@@ -884,6 +1041,7 @@ def _node_output(
     plans: dict[str, _NodePlan],
     budgets: Mapping[Any, int],
     give_back: list[Place[Any]],
+    retries: list[Place[Retry]] = (),  # type: ignore[assignment]
 ) -> Out:
     branches: list[Out] = []
     for b in p.branches:
@@ -900,6 +1058,10 @@ def _node_output(
         branches.append(and_(*give_back))
     if p.interruptible:
         branches.append(and_(*give_back, PARKED))
+    for retry in retries:
+        branches.append(out(retry))  # the node stays busy: idle is not given back
+    if p.folded_retries:
+        branches.append(and_(*give_back))  # a dropped or cancelled retry
     branches.append(and_(*give_back, FAILED))
     unique: dict[str, Out] = {}
     for br in branches:
@@ -1011,11 +1173,21 @@ def _actions(cw: CompiledWorkflow, scope: TurnScope, author: str) -> dict[str, A
 
     for n, p in plans.items():
 
-        def make_run(n: str = n, p: _NodePlan = p, resume: bool = False) -> Action:
+        def make_run(
+            n: str = n, p: _NodePlan = p, again: bool = False, resume: bool = False
+        ) -> Action:
+            # One node copy per attempt number, each reporting its ctx.attempt_count.
+            execs = {a: _with_attempt(p.node, a) for a in range(1, p.attempts + 1)}
+
             async def run(ctx: Ctx) -> None:
                 resume_inputs = None
                 run_id: str | None = None
-                if resume:
+                attempt = 1
+                if again:
+                    r = ctx.input(_again(n))
+                    token, run_id = r.trigger, r.run_id  # the same ADK run, one attempt on
+                    attempt = r.attempt + 1
+                elif resume:
                     rt = ctx.input(_resume(n))
                     token = rt.parked.trigger
                     run_id = rt.parked.run_id  # ADK resumes the interrupted run
@@ -1024,9 +1196,10 @@ def _actions(cw: CompiledWorkflow, scope: TurnScope, author: str) -> dict[str, A
                     token = WfToken({q: ctx.input(_from(n, q)).input for q in p.preds})
                 else:
                     token = ctx.input(_trigger(n))
-                ctx.input(_idle(n))
-                if conc:
-                    ctx.input(CONCURRENCY)
+                if not again:
+                    ctx.input(_idle(n))
+                    if conc:
+                        ctx.input(CONCURRENCY)
 
                 def give_back() -> None:
                     ctx.signal(_idle(n))
@@ -1041,15 +1214,44 @@ def _actions(cw: CompiledWorkflow, scope: TurnScope, author: str) -> dict[str, A
                     if scope.loop is None:
                         raise RuntimeError("compiled workflow node ran outside a turn")
                     outcome = await on_loop(
-                        _run_node(scope, p.node, token, run_id, p.terminal, resume_inputs),
+                        _run_node(scope, execs[attempt], token, run_id, p.terminal, resume_inputs),
                         loop=scope.loop,
                     )
+                if (
+                    not resume
+                    and attempt < p.attempts
+                    and outcome.error is not None
+                    and _should_retry(p.node, outcome.error, attempt)
+                ):
+                    ctx.output(_retry(n, attempt), Retry(token, run_id, attempt))
+                    return
                 give_back()
                 _route_outcome(ctx, n, p, plans, budgets, token, run_id, outcome, cw._multi_route)
 
             return run
 
         acts[f"Wf_{n}_Run"] = make_run()
+        if p.attempts > 1:
+            acts[f"Wf_{n}_Retry"] = make_run(again=True)
+        for i in range(1, p.attempts):
+
+            def backoff(ctx: Ctx, n: str = n, i: int = i) -> None:
+                ctx.input(QUIET)
+                ctx.signal(QUIET)
+                ctx.output(_again(n), ctx.input(_retry(n, i)))
+
+            acts[f"Wf_{n}_Backoff{i}"] = backoff
+        for q in _retry_chain(n, p):
+
+            def drop(ctx: Ctx, q: Place[Retry] = q, n: str = n) -> None:
+                ctx.input(q)
+                ctx.signal(_idle(n))
+                if conc:
+                    ctx.signal(CONCURRENCY)
+
+            stage = q.name.rsplit("/", 1)[1]
+            acts[f"Wf_{n}_DropRetry_{stage}"] = drop
+            acts[f"Wf_{n}_CancelRetry_{stage}"] = drop
         if p.interruptible:
             acts[f"Wf_{n}_ResumeRun"] = make_run(resume=True)
 
@@ -1167,7 +1369,7 @@ def _route_outcome(
     multi_route: MultiRoute,
 ) -> None:
     if outcome.error is not None:
-        # ADK's node runner already retried it and recorded its error event.
+        # ADK's node runner has recorded its error event; retries are spent.
         err = outcome.error
         ctx.output(
             FAILED,

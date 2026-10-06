@@ -57,12 +57,32 @@ runner = InMemoryRunner(
 )
 ```
 
+Or declare it in ADK's own YAML agent config, so `adk web` and `adk run`
+serve the compiled net:
+
+```yaml
+# root_agent.yaml
+agent_class: adk_libpetri.workflow.PetriWorkflow
+name: root_agent
+state: legacy_read                       # compile options, as for compile_workflow
+back_edge_budget: [[route_headline, generate_headline, 3]]
+edges:                                   # exactly a Workflow's edges
+  - [START, .agent.process_input, generate_headline.yaml, evaluate_headline.yaml, .agent.route_headline]
+  - [.agent.route_headline, {unrelated: generate_headline.yaml}]
+```
+
+ADK's loader resolves the edges (code references, nested YAML files, route
+maps) as for `agent_class: Workflow`, and the node compiles itself on
+`OrchestratorLoop.shared()`. `PetriWorkflow.from_config(path, ...)` loads
+either kind of YAML: an `agent_class: Workflow` file is compiled with the
+options you pass.
+
 `PetriWorkflow` is a drop-in for `Runner(node=workflow)`, and nests where a
 `Workflow` does (inside another workflow, or as an agent's tool: it carries
 the workflow's `input_schema` and `output_schema`). Each ADK node still runs
-through ADK's own node runner, inside the invocation, with its own
-`retry_config` and `timeout`, so session events, node paths, plugins and
-tracing are unchanged. The compiled node adds no events of its own: the
+through ADK's own node runner, inside the invocation (with its own
+`timeout`), so session events, node paths, plugins and tracing are
+unchanged. The compiled node adds no events of its own: the
 terminal node's event is the workflow's output event, and a failing node
 fails the run as it fails a `Workflow` (`Runner.run_async` raises). What
 moves into the net is the scheduling, and with it the claims Z3 can prove:
@@ -87,8 +107,20 @@ Translation, in short:
 - **`JoinNode`** becomes one place per predecessor.
 - **Terminal nodes** run with `use_as_output`; each keeps its last output on
   its own place, and two with output fail the run as ADK does.
-- **`retry_config`** and **`timeout`** stay on the node: ADK's node runner
-  retries and times out inside the node's transition.
+- **`retry_config`** becomes a retry loop in the net: a failed attempt `i`
+  lands on `wf/<node>/retry<i>`, a `delayed` backoff transition with ADK's
+  delay for attempt `i` moves it to `wf/<node>/again`, and `Wf_<node>_Retry`
+  runs the next attempt as the same ADK run (same node path, the next
+  `ctx.attempt_count`). Whether to retry is ADK's own `_should_retry_node`.
+  The node stays busy through the backoff, as under ADK's retry loop. Jitter
+  is dropped: a firing window would be the TPN reading, but libpetri
+  force-disables a window transition that misses its latest bound. The
+  proofs run on a net where each retry loop is folded into its run
+  (`CompiledWorkflow.verification_spec`): a retry token stands for the run
+  still in flight, and the loop never strands a token, so the verdicts hold
+  on the executed net (`test_folding_the_retry_loop_keeps_the_verdicts`
+  checks one against the other).
+- **`timeout`** stays on the node: ADK's node runner enforces it per attempt.
 - **`max_concurrency`** becomes a permit place.
 - **`RequestInput`** parks the node until the next turn's function response
   (pass `interruptible=["node"]`); the resumed run keeps its run id. Nodes
