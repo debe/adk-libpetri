@@ -71,7 +71,15 @@ def test_unknown_interruptible_and_budget_names_are_rejected() -> None:
 
 @requires_z3
 @pytest.mark.parametrize(
-    "make", [samples.linear, samples.router, samples.fan_join, samples.retrying, samples.concurrent]
+    "make",
+    [
+        samples.linear,
+        samples.router,
+        samples.fan_join,
+        # Z3 time on the unrolled retry net varies widely (8s to 50s locally).
+        pytest.param(samples.retrying, marks=pytest.mark.timeout(300)),
+        samples.concurrent,
+    ],
 )
 def test_compiled_dags_prove_every_safety_claim_and_deadlock_freedom(make) -> None:  # type: ignore[no-untyped-def]
     verdicts = _verdicts(compile_workflow(make()))
