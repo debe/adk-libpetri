@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -77,3 +79,17 @@ def runner_of(node: Any, s: Session) -> PetriRunner:
     runner = node.registry.get(key)
     assert runner is not None
     return runner
+
+
+async def settled(runner: PetriRunner, done: Callable[[Any], bool], timeout: float = 5.0) -> Any:
+    """The first snapshot for which ``done`` holds.
+
+    A turn ends when its node runs finish; the transitions those runs enable
+    (a race's drain, say) fire a moment later on the orchestrator.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        snap = await runner.snapshot()
+        if done(snap) or time.monotonic() > deadline:
+            return snap
+        await asyncio.sleep(0.01)

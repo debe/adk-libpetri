@@ -19,7 +19,7 @@ from adk_libpetri._spec import NetSpec, Place, TransitionSpec, and_, one, out
 from adk_libpetri.net import BlueprintError, PetriNet
 from adk_libpetri.runner import SessionExecutorRegistry
 
-from ._harness import runner_of, session, text_of
+from ._harness import runner_of, session, settled, text_of
 from .conftest import BLUEPRINTS, Serve
 
 BASIC = BLUEPRINTS / "bp_basic"
@@ -194,7 +194,9 @@ async def test_the_race_answers_with_the_fast_branch_and_drains_the_slow_one(
     assert "speculative_race@1/slow@1" not in [e.node_info.path for e in turn.events[:first_answer]]
     # ... and the invocation lasts until the loser's run is over (it runs inside it).
     assert agent.FINISHED == ["fast", "slow"]
-    snap = await runner_of(node, s).snapshot()
+    snap = await settled(
+        runner_of(node, s), lambda m: m.marking.count("raceDiscarded") and not m.action_in_flight
+    )
     assert list(snap.marking.tokens("raceDiscarded")) == ["answer from slow"]
     assert snap.marking.count("raceWon") == 1
     assert snap.marking.count("racePermit") == 0
