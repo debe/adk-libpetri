@@ -77,12 +77,12 @@ Section names are the root README's headings.
 
 | File | Source | Embedded in (root README) |
 |---|---|---|
-| `workflow-router` | Python, `compile_workflow(samples.router())`, view: `Wf_Start`, `Wf_classify_Run`, `Wf_handle_bug_Run`, `Wf_handle_other_Run`, `Wf_EndTurnOutput` | From Workflow to net: from_workflow (Python, experimental) |
-| `workflow-back-edge-budget` | Python, `compile_workflow(samples.looping(), back_edge_budget={('counter', 'counter'): 3})`, view: `Wf_Start`, `Wf_counter_Run`, `Wf_Edge_counter_counter`, `Wf_Edge_counter_counter_Exhausted`, `Wf_finish_Run` | From Workflow to net: from_workflow (Python, experimental) |
+| `workflow-router` | Python, `compile_workflow(samples.router())`, view: `Wf_Start`, `Wf_classify_Run`, `Wf_handle_bug_Run`, `Wf_handle_other_Run`, `Wf_EndTurnOutput` | Quick start (Python) › Compile a Workflow (collapsed) |
+| `workflow-back-edge-budget` | Python, `compile_workflow(samples.looping(), back_edge_budget={('counter', 'counter'): 3})`, view: `Wf_Start`, `Wf_counter_Run`, `Wf_Edge_counter_counter`, `Wf_Edge_counter_counter_Exhausted`, `Wf_finish_Run` | Quick start (Python) › Compile a Workflow |
 | `llm-agent-turn-shell` | Java view of `LlmAgentSubnet.DEF`: StartTurn, BuildPrompt, EmitAnswer, EmitTransfer, AbortTurn, DropAbort | G1 One turn at a time, and no stranded turn |
 | `reask-budget` | Java view of `LlmAgentSubnet.DEF`: BuildPrompt, ReAsk, ReAskExhaustedFallback, EmitAnswer | G2 Bounded autonomous loops (reask budget) |
 | `transfer-router` | Java, `TransferRouterSubnet.def` with `billing` and `tech_support` | G3 Typed fallbacks: no dead letters |
-| `speculative-race` | Java, `PatternA_SpeculativeRaceDemoTest.buildNet()` | G4 At most one commit per turn: race, optimistic commit, quorum |
+| `speculative-race` | Java, `PatternA_SpeculativeRaceDemoTest.buildNet()` | Quick start (Python) › Write the net in YAML or JSON (the YAML twin builds the same net) |
 | `quorum` | Java, `PatternB_QuorumDemoTest.buildNet()` | G4 At most one commit per turn: race, optimistic commit, quorum |
 | `optimistic-commit` | Java, `PatternC_OptimisticCommitDemoTest.buildNet()` | G4 At most one commit per turn: race, optimistic commit, quorum (collapsed) |
 | `escalation-ladder` | Java, `LiveApiRecoverySubnet.def(Config.defaults())` composed into a net, timing shown, one cluster | G5 Escalation ladders: timed recovery as places |
@@ -91,7 +91,7 @@ Section names are the root README's headings.
 | `barge-in-chunk-drop` | Java, `VoiceSessionDemoTest.bargeInDropNet()` | G6 Full duplex: VAD, barge-in, chunk drop, ordering (experimental) |
 | `sketch-stale-result` | Sketch, `src/index.ts` | N1 Not yet guaranteed: staleness across turns (Illustrative) |
 | `sketch-fanout-monitor` | Sketch, `src/index.ts` | N2 Not yet guaranteed: variable-N fan-out (Illustrative) |
-| `llm-agent-inner-loop` | Java view of `LlmAgentSubnet.DEF`: BuildPrompt, the four `LlmStep` transitions, `Router_Route`, `ToolDispatch_Dispatch`, ReAsk, ReAskExhaustedFallback; `LlmStep` and `ToolDispatch` clusters | How it works › The canonical composition: LlmAgentSubnet |
+| `llm-agent-inner-loop` | Java view of `LlmAgentSubnet.DEF`: BuildPrompt, the four `LlmStep` transitions, `Router_Route`, `ToolDispatch_Dispatch`, ReAsk, ReAskExhaustedFallback; `LlmStep` and `ToolDispatch` clusters | How it works › The canonical composition: `LlmAgent` |
 
 The legend at `docs/assets/diagram-legend.svg` documents the notation.
 If the post-processing conventions change (in `ReadmeDiagramsTest`,

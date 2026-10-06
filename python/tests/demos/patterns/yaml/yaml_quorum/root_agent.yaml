@@ -1,0 +1,55 @@
+# Pattern B, K-of-N quorum (test_pattern_b_quorum_demo.py), as a blueprint.
+# Five branches each put one result on quorumResult; synthesis fires the moment
+# the third lands, through an exactly(3) input arc. Late results drain to
+# quorumDiscarded once quorumMet is marked. Same places, arcs and priorities as
+# the demo's SPEC, but for one place type: see eventOut below.
+agent_class: adk_libpetri.net.PetriNet
+name: quorum_agent
+description: K-of-N quorum across five branches
+nodes:
+  - [.agent.b1, .agent.b2, .agent.b3, .agent.b4, .agent.b5]
+  - [.agent.synthesize]
+places:
+  # The demo's eventOut carries an Event, which its synthesis action builds. A
+  # blueprint builds an Event only with `action: emit`, and emit forwards one
+  # token of a one() arc, not the three of exactly(3); the synthesize node's
+  # output is a str, so eventOut is a str here and becomes the node's output.
+  eventOut: {type: str}
+  trigger1: {}
+  trigger2: {}
+  trigger3: {}
+  trigger4: {}
+  trigger5: {}
+  quorumResult: {type: .agent.BranchResult}
+  quorumMet: {}
+  quorumDiscarded: {type: .agent.BranchResult}
+transitions:
+  Quorum_Start:
+    in: [userIn]
+    out: {and: [trigger1, trigger2, trigger3, trigger4, trigger5]}
+    reset: [quorumResult, quorumMet, quorumDiscarded]
+  Quorum_RunBranch_1: {in: [trigger1], out: quorumResult, node: b1}
+  Quorum_RunBranch_2: {in: [trigger2], out: quorumResult, node: b2}
+  Quorum_RunBranch_3: {in: [trigger3], out: quorumResult, node: b3}
+  Quorum_RunBranch_4: {in: [trigger4], out: quorumResult, node: b4}
+  Quorum_RunBranch_5: {in: [trigger5], out: quorumResult, node: b5}
+  # The load-bearing transition: K lives in the input arc, not in an action guard.
+  Quorum_Synthesize:
+    in: [{place: quorumResult, count: 3}]
+    out: {and: [eventOut, quorumMet]}
+    inhibit: [quorumMet]
+    priority: 10
+    node: synthesize
+  # Late absorber: drains the results that arrive after the quorum.
+  Quorum_AbsorbLate: {in: [quorumResult], out: quorumDiscarded, read: [quorumMet], priority: -10}
+prove:
+  options:
+    initial_marking: {userIn: 1}
+    # quorumResult may hold the N-K leftovers until the absorber drains them.
+    sinks: [eventOut, quorumMet, quorumDiscarded, quorumResult]
+  claims:
+    - label: "one synthesis per turn: place_bound(QUORUM_MET, 1)"
+      place_bound: {place: quorumMet, bound: 1}
+    - label: "one egress event per turn: place_bound(EVENT_OUT, 1)"
+      place_bound: {place: eventOut, bound: 1}
+    - deadlock_free

@@ -1,0 +1,9 @@
+# eventOut carries a plain value: it becomes the node's output.
+agent_class: adk_libpetri.net.PetriNet
+name: value_net
+nodes:
+  - [.agent.count_words]
+places:
+  eventOut: {type: int}
+transitions:
+  Count_Words: {in: [userIn], out: eventOut, node: count_words}

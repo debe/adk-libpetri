@@ -1,0 +1,24 @@
+# The broken encoding: commits guarded by inhibitor(raceWon) instead of a
+# consumed permit. Results ready in one pass all commit; prove: says so.
+agent_class: adk_libpetri.net.PetriNet
+name: inhibitor_race
+places:
+  branchADone: {type: str}
+  branchBDone: {type: str}
+  raceWon: {}
+transitions:
+  Race_CommitA:
+    in: [branchADone]
+    out: {and: [eventOut, raceWon]}
+    inhibit: [raceWon]
+    action: emit
+  Race_CommitB:
+    in: [branchBDone]
+    out: {and: [eventOut, raceWon]}
+    inhibit: [raceWon]
+    action: emit
+prove:
+  options:
+    initial_marking: {branchADone: 1, branchBDone: 1}
+  claims:
+    - place_bound: {place: raceWon, bound: 1}

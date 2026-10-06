@@ -1,0 +1,9 @@
+# Tags the turn's input; a slow input takes longer.
+agent_class: adk_libpetri.net.PetriNet
+name: inner_net
+nodes:
+  - [.agent.tag]
+places:
+  eventOut: {type: str}
+transitions:
+  Inner_Tag: {in: [userIn], out: eventOut, node: tag}

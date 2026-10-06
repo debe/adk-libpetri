@@ -45,6 +45,11 @@ def on_loop(
     return asyncio.wrap_future(fut, loop=_libpetri.captured_event_loop())
 
 
+def on_future(fut: cf.Future[T]) -> Awaitable[T]:
+    """Await a ``concurrent.futures.Future`` from inside an action."""
+    return asyncio.wrap_future(fut, loop=_libpetri.captured_event_loop())
+
+
 def await_on(coro: Coroutine[Any, Any, T], loop: asyncio.AbstractEventLoop) -> Awaitable[T]:
     """Await ``coro`` scheduled on ``loop`` from whatever loop is running now."""
     try:
@@ -117,11 +122,23 @@ class OrchestratorLoop:
     def close(self) -> None:
         if self.loop.is_closed():
             return
+        if not self.on_thread and self._thread.is_alive():
+            # Cancel what is still running (a runner nobody closed) so its
+            # tasks end here, not as "Task was destroyed" at interpreter exit.
+            with contextlib.suppress(Exception):
+                self.submit(_cancel_pending()).result(5)
         self.loop.call_soon_threadsafe(self.loop.stop)
         if not self.on_thread:
             self._thread.join(5)
             if not self._thread.is_alive():
                 self.loop.close()
+
+
+async def _cancel_pending() -> None:
+    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 _END: Any = object()

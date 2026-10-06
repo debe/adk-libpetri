@@ -1,0 +1,18 @@
+# Two node transitions inhibited by their shared output: the bound holds only
+# if node runs were atomic, which they are not.
+agent_class: adk_libpetri.net.PetriNet
+name: atomic_net
+nodes:
+  - [.agent.slow]
+places:
+  a: {}
+  b: {}
+  done: {type: str}
+transitions:
+  Atomic_Fan: {in: [userIn], out: {and: [a, b, eventOut]}, action: emit}
+  Atomic_RunA: {in: [a], out: done, inhibit: [done], node: slow}
+  Atomic_RunB: {in: [b], out: done, inhibit: [done], node: slow}
+prove:
+  claims:
+    - label: at most one done
+      place_bound: {place: done, bound: 1}

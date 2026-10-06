@@ -1,0 +1,53 @@
+# Pattern A's speculative race with two branches, as a blueprint: the first
+# result commits (it consumes the one permit), the loser drains to discard.
+agent_class: adk_libpetri.net.PetriNet
+name: speculative_race
+nodes:
+  - [.agent.fast]
+  - [.agent.slow]
+places:
+  triggerA: {}
+  triggerB: {}
+  branchADone: {type: str}
+  branchBDone: {type: str}
+  racePermit: {}
+  raceWon: {}
+  raceDiscarded: {type: str}
+transitions:
+  Race_Start:
+    in: [userIn]
+    out: {and: [triggerA, triggerB, racePermit]}
+    reset: [racePermit, raceWon, triggerA, triggerB, branchADone, branchBDone, raceDiscarded]
+  Race_RunBranchA: {in: [triggerA], out: branchADone, inhibit: [raceWon], node: fast}
+  Race_RunBranchB: {in: [triggerB], out: branchBDone, inhibit: [raceWon], node: slow}
+  Race_CommitA:
+    in: [branchADone, racePermit]
+    out: {and: [eventOut, raceWon]}
+    priority: 10
+    action: emit
+  Race_CommitB:
+    in: [branchBDone, racePermit]
+    out: {and: [eventOut, raceWon]}
+    priority: 10
+    action: emit
+  Race_DiscardA: {in: [branchADone], out: raceDiscarded, read: [raceWon], priority: -10}
+  Race_DiscardB: {in: [branchBDone], out: raceDiscarded, read: [raceWon], priority: -10}
+prove:
+  options:
+    initial_marking: {userIn: 1}
+    sinks: [eventOut, raceWon, raceDiscarded]
+    sinks_when: {raceWon: [triggerA, triggerB]}
+  claims:
+    - place_bound: {place: raceWon, bound: 1}
+      label: one commit per turn
+    - place_bound: {place: eventOut, bound: 1}
+    - deadlock_free
+    - label: permit never stacks
+      place_bound: {place: racePermit, bound: 1}
+      options:
+        initial_marking: {}
+        environment: {userIn: {arrivals: [2, 2]}}
+        # Exact here: without it the only counterexample starts Race_Start again
+        # while its synchronous firing is in flight; no node run is involved.
+        assume_atomic_firing: true
+        assume_atomic_nodes: true

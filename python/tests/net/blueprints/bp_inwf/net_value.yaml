@@ -1,0 +1,10 @@
+# A PetriNet whose answer is a plain value (eventOut retyped); its userIn is
+# Content, and the Workflow hands it a str.
+agent_class: adk_libpetri.net.PetriNet
+name: net_value
+nodes:
+  - [.agent.shout]
+places:
+  eventOut: {type: str}
+transitions:
+  Value_Shout: {in: [userIn], out: eventOut, node: shout}

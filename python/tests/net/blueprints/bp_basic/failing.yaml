@@ -1,0 +1,6 @@
+agent_class: adk_libpetri.net.PetriNet
+name: failing_net
+nodes:
+  - [.agent.explode]
+transitions:
+  Fail_Run: {in: [userIn], out: eventOut, node: explode}

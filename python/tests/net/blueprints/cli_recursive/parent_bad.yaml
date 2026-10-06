@@ -1,0 +1,13 @@
+# Mounts child_bad.yaml and claims nothing itself: only --recursive finds the bug.
+agent_class: adk_libpetri.net.PetriNet
+name: cli_parent_bad
+nodes:
+  - [child_bad.yaml]
+  - [bp_compose.agent.text_of]
+places:
+  q: {type: str}
+subnets:
+  race: {net: child_bad_race, bind: {question: q, answer: r}}
+transitions:
+  Parent_Read: {in: [userIn], out: q, node: text_of}
+  Parent_Emit: {in: [r], out: eventOut, action: emit}

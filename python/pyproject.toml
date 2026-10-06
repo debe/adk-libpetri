@@ -34,13 +34,19 @@ dev = [
     "pyright>=1.1.380",
     "respx>=0.21",
     "opentelemetry-sdk>=1.30",
+    "jsonschema>=4.18",
 ]
+
+[project.scripts]
+adk-libpetri = "adk_libpetri.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/debe/adk-libpetri"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/adk_libpetri"]
+# Package data the CLI prints (`adk-libpetri schema`, `adk-libpetri guide`).
+artifacts = ["src/adk_libpetri/net/schema.json", "src/adk_libpetri/net/AUTHORING.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

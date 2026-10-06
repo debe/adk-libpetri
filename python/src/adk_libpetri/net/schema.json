@@ -1,0 +1,820 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/debe/adk-libpetri/python/src/adk_libpetri/net/schema.json",
+  "title": "adk-libpetri net blueprint",
+  "description": "A Coloured Time Petri Net written as an ADK YAML agent config (agent_class: adk_libpetri.net.PetriNet). ADK's loader (adk web, adk run, config_agent_utils.from_config) builds it into an ADK node. The schema checks shape only; `adk-libpetri check FILE` also resolves names, types and node refs and reports every error with its YAML key path, and `adk-libpetri verify FILE` runs the prove: claims. No key may be named `args`, at any depth: not a place, transition, port, subnet or route label (ADK's web UI refuses the file). The AUTHORING.md guide next to this file has copy-ready motifs.",
+  "type": "object",
+  "required": [
+    "agent_class",
+    "name"
+  ],
+  "additionalProperties": false,
+  "patternProperties": {
+    "^(name|description|rerun_on_resume|wait_for_output|retry_config|timeout|input_schema|output_schema|state_schema|nodes|places|transitions|env|ports|subnets|prove)_code$": {
+      "description": "ADK's `<field>_code` form: the field's value is the Python object at this dotted path (the loader accepts it for every node field)."
+    }
+  },
+  "properties": {
+    "agent_class": {
+      "const": "adk_libpetri.net.PetriNet",
+      "description": "Selects the PetriNet node class. Must be exactly adk_libpetri.net.PetriNet."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "description": "The node's name (a Python identifier). Events the net emits carry it as author; a parent blueprint refers to this net by it (subnets.<inst>.net)."
+    },
+    "description": {
+      "type": "string",
+      "description": "ADK node description."
+    },
+    "rerun_on_resume": {
+      "type": "boolean",
+      "description": "ADK node field; PetriNet needs true (the default)."
+    },
+    "wait_for_output": {
+      "type": "boolean",
+      "description": "ADK node field."
+    },
+    "retry_config": {
+      "description": "ADK node field (RetryConfig)."
+    },
+    "timeout": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "ADK node field: seconds."
+    },
+    "input_schema": {
+      "description": "ADK node field."
+    },
+    "output_schema": {
+      "description": "ADK node field."
+    },
+    "state_schema": {
+      "description": "ADK node field."
+    },
+    "nodes": {
+      "type": "array",
+      "description": "The ADK nodes transitions (`node:`) and subnets (`net:`, `from:`) name, by node name. ADK's loader resolves each entry relative to this file. Write every entry as a list: `- [helper.yaml]` (an agent or child blueprint YAML next to this file), `- [.agent.my_fn]` (a function in <this file's directory>/agent.py, becoming a FunctionNode named my_fn), `- [.agent.a, .agent.b]` (several), or an inline `- [{agent_class: LlmAgent, name: x, ...}]`. A bare entry (`- x.yaml`, `- {agent_class: ...}`) is not resolved by ADK and is a load error. A leading dot means the YAML file's own directory name as a package (ADK's rule): it works for a file directly inside an agents_dir package; a YAML in a subdirectory of that package needs fully qualified refs (`app.sub.agent.fn`). ADK rejects a ref that leaves the file's directory (`../x.yaml`). Two different nodes with one name, START, and routing maps are errors.",
+      "items": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "$ref": "#/$defs/nodeRef"
+        },
+        "description": "One entry: a list of node refs. A bare string or a bare mapping is not resolved by ADK; write it inside a list."
+      }
+    },
+    "places": {
+      "type": "object",
+      "description": "Place declarations, by name. A place used in an arc must be declared here, unless it is a catalog place (userIn: Content, eventOut: Event, turnPermit, turnAbort, llmRequest, llmResponse, toolCalls, toolResults, transfer, legacySessionWrite, endInvocation), which are implicit with their catalog types, or a parent place named in a subnet bind (it takes the port's type). Declaring a catalog place overrides its type (`eventOut: {type: int}`).",
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/placeDecl"
+      }
+    },
+    "transitions": {
+      "type": "object",
+      "description": "Transitions, by name (convention: <Net>_<Verb>, e.g. Race_Commit; names must not contain '/'). A net needs at least one transition or subnet.",
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/transition"
+      }
+    },
+    "env": {
+      "type": "array",
+      "description": "Further environment places: tokens arrive on them from outside while the net runs, through PetriNet.inject(session, place, value) during a turn (adk web and adk run have no way to fill them). userIn is always one when the net uses it. A turn blocks until eventOut, so a value it waits for comes from another task.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "ports": {
+      "type": "object",
+      "description": "This blueprint's interface when a parent mounts it (subnets.<inst>.net). With no ports:, the defaults are userIn (in) and eventOut (out), each only if the net uses it. A parent must bind every in port.",
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/port"
+      }
+    },
+    "subnets": {
+      "type": "object",
+      "description": "Mounted subnets, by instance name. A bound port's place fuses with the parent place; every other child place and transition is renamed `<inst>/<name>` (so a blueprint can be mounted twice, and prove: claims can name `inst/place`). The result is one flat net; prove: checks the whole of it.",
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/subnet"
+      }
+    },
+    "prove": {
+      "$ref": "#/$defs/prove"
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/]+$",
+      "description": "A place, transition, port or subnet name: non-empty, no '/' ('/' separates a subnet prefix), and not `args` (ADK's web UI refuses that key).",
+      "not": {
+        "const": "args"
+      }
+    },
+    "placeRef": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A place name: declared under places:, a catalog place (userIn, eventOut, ...), or in a claim a mounted subnet's place (`inst/place`)."
+    },
+    "placeRefs": {
+      "description": "One place name or a list of them.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/placeRef"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/placeRef"
+          }
+        }
+      ]
+    },
+    "nodeRef": {
+      "description": "One ADK node ref: `file.yaml`, `.agent.fn` (leading dot: this file's directory as a package), `pkg.module.fn`, or an inline node mapping.",
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "$ref": "#/$defs/inlineNode"
+        }
+      ]
+    },
+    "inlineNode": {
+      "type": "object",
+      "description": "An inline ADK node config, e.g. {agent_class: LlmAgent, name: helper, model: gemini-2.5-flash, instruction: ...}, or {config_path: x.yaml}, or {code: pkg.module.node}.",
+      "anyOf": [
+        {
+          "required": [
+            "agent_class"
+          ]
+        },
+        {
+          "required": [
+            "config_path"
+          ]
+        },
+        {
+          "required": [
+            "code"
+          ]
+        },
+        {
+          "required": [
+            "func_code"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
+      ]
+    },
+    "placeDecl": {
+      "description": "A place. `{}` or null is a unit place (black tokens, type Void).",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The token type. An alias (Void, str, int, float, bool, dict, list, object, Any, Content, Event, LlmRequest, LlmResponse, ToolCalls, ToolResults, TransferTarget, NodeError), a dotted name (google.genai.types.Content), or `.module.Name` relative to this file's package (`.agent.Draft`). Omitted: Void."
+            },
+            "seed": {
+              "description": "Tokens on the place when a session starts: a count for a unit place, a list of token values for a coloured one.",
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "array"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "inArc": {
+      "description": "An input arc. A place name consumes one token. The mapping forms take `place` plus at most one of count (exactly n; count 1 is one), at_least (n or more, all of them), all (every token, possibly none).",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/placeRef"
+        },
+        {
+          "type": "object",
+          "required": [
+            "place"
+          ],
+          "maxProperties": 2,
+          "additionalProperties": false,
+          "properties": {
+            "place": {
+              "$ref": "#/$defs/placeRef"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Consume exactly this many tokens."
+            },
+            "at_least": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Enabled with at least this many tokens; consumes all of them."
+            },
+            "all": {
+              "const": true,
+              "description": "Consume every token on the place."
+            }
+          }
+        }
+      ]
+    },
+    "output": {
+      "description": "An output tree. A place name; {and: [...]} (every child); {xor: [...]} or {xor: {label: out, ...}} (exactly one branch, chosen by the transition's node route: `default` is the fallback branch, `error` the node-failure branch; a plain-list branch that is a single place is routed by its place name); {timeout: ms, child: out} (the child if the action finishes within ms). Only the top level may be an xor.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/placeRef"
+        },
+        {
+          "type": "object",
+          "required": [
+            "and"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "and": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/output"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "xor"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "xor": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": {
+                    "$ref": "#/$defs/output"
+                  }
+                },
+                {
+                  "type": "object",
+                  "minProperties": 2,
+                  "description": "Route-labelled branches: the node's route picks the branch with that label; `default` is taken when no label matches; `error` when the node fails (its coloured places must take NodeError). A labelled xor is what a node's route names; in a plain list {xor: [p, q]} each single-place branch is routed by its place name. A node routes by returning Event(output=value, actions=EventActions(route=\"label\")).",
+                  "additionalProperties": {
+                    "$ref": "#/$defs/output"
+                  },
+                  "propertyNames": {
+                    "not": {
+                      "const": "args"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "timeout",
+            "child"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "timeout": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Milliseconds."
+            },
+            "child": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/output"
+                }
+              ],
+              "not": {
+                "type": "object",
+                "required": [
+                  "xor"
+                ]
+              },
+              "description": "The output on time; it cannot be an xor (put the xor at the top instead)."
+            }
+          }
+        }
+      ]
+    },
+    "timing": {
+      "description": "When an enabled transition fires, in ms after it became enabled. Omitted or `immediate`: at once. delayed: no earlier than ms. deadline: no later than ms. exact: at ms. window: between earliest and latest.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "const": "immediate"
+        },
+        {
+          "type": "object",
+          "required": [
+            "delayed"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "delayed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "deadline"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "exact"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "exact": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "window"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "window": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              ],
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "[earliest_ms, latest_ms], latest >= earliest."
+            }
+          }
+        }
+      ]
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A transition: arcs, timing and at most one action. Actions: no `node`/`action` (or action: move) consumes the inputs and forwards the one coloured input token to the coloured outputs, signalling unit outputs (a coloured input with no coloured output is dropped); action: emit does the same but turns the value into an ADK Event (str -> model text, Content -> content, Event as is, else Event(output=value)); node: <name> runs that ADK node with the consumed and read coloured values (one value as itself, several as {place: value}) and puts its output on the chosen branch's coloured places. An xor with more than one choosable branch needs a node.",
+      "not": {
+        "required": [
+          "node",
+          "action"
+        ]
+      },
+      "properties": {
+        "in": {
+          "description": "Input arcs: one arc or a list. An immediate transition needs at least one.",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/inArc"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/inArc"
+              }
+            }
+          ]
+        },
+        "out": {
+          "description": "The output tree; omit it for a transition that only consumes (a discard).",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/output"
+            }
+          ]
+        },
+        "read": {
+          "$ref": "#/$defs/placeRefs",
+          "description": "Read arcs: need a token there, do not consume it."
+        },
+        "inhibit": {
+          "$ref": "#/$defs/placeRefs",
+          "description": "Inhibitor arcs: enabled only while these places are empty."
+        },
+        "reset": {
+          "$ref": "#/$defs/placeRefs",
+          "description": "Reset arcs: firing empties these places."
+        },
+        "priority": {
+          "type": "integer",
+          "description": "Higher fires first among transitions enabled at once (default 0). Use +10 for commits, -10 for discards."
+        },
+        "timing": {
+          "$ref": "#/$defs/timing"
+        },
+        "node": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The name of a node listed under nodes: to run when this transition fires."
+        },
+        "action": {
+          "enum": [
+            "move",
+            "emit"
+          ],
+          "description": "move (the default) or emit. Not together with node."
+        }
+      }
+    },
+    "port": {
+      "type": "object",
+      "required": [
+        "direction"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "place": {
+          "$ref": "#/$defs/placeRef",
+          "description": "The place behind the port (default: the port's name). The net must use it."
+        },
+        "direction": {
+          "enum": [
+            "in",
+            "out",
+            "inout"
+          ],
+          "description": "in ports must be bound by a parent; out and inout may be left unbound."
+        }
+      }
+    },
+    "subnet": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A mounted subnet: either a child blueprint (`net:`) or a stock subnet (`stock:`). Stock ports: llm_agent userIn(in), turnAbort(in), eventOut(out), transfer(out), needs from: <an LlmAgent node>; its turnAbort fuses with the net's own turnAbort unless bound elsewhere (so does any mounted child's); llm_step llmRequest(in), llmResponse(out), needs from:; tool_dispatch toolCalls(in), toolResults(out), tools from from: (optional); router llmResponse(in), toolCalls, transfer, eventOut (out).",
+      "oneOf": [
+        {
+          "required": [
+            "net"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "stock"
+                ]
+              },
+              {
+                "required": [
+                  "from"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "stock"
+          ],
+          "not": {
+            "required": [
+              "net"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "net": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The name of a PetriNet node listed under nodes: (- [child.yaml])."
+        },
+        "stock": {
+          "enum": [
+            "llm_agent",
+            "llm_step",
+            "tool_dispatch",
+            "router"
+          ],
+          "description": "A stock subnet kind."
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stock only: the ADK LlmAgent node (under nodes:) whose model, instruction (a str) and tools configure the stock subnet."
+        },
+        "bind": {
+          "type": "object",
+          "description": "Child port name -> parent place name. Every in port must be bound.",
+          "additionalProperties": {
+            "$ref": "#/$defs/name"
+          }
+        }
+      }
+    },
+    "envMode": {
+      "description": "How the verifier lets the environment fill a place: always (unbounded), {arrivals: k} (at most k tokens in all, so possibly none), {arrivals: [min, max]} (at least min, at most max), {bounded: k} (at most k at a time). Every environment place takes the same mode: an optional input (an approval, a webhook) under {arrivals: [k, k]} must arrive exactly k times.",
+      "oneOf": [
+        {
+          "const": "always"
+        },
+        {
+          "type": "object",
+          "required": [
+            "arrivals"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "arrivals": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  ],
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "bounded"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "bounded": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      ]
+    },
+    "proofOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Options for the claims. With no environment, the user's inputs come turn by turn (the next on userIn only after an answer is on eventOut and the turn's node runs are done): one turn for a safety claim, two for deadlock_free (--k N: N for both); the env: places, and for a safety claim turnAbort, get at most k arrivals each (exactly k for deadlock_free). An initial_marking leaves that in place, except that an environment place it seeds is closed (its tokens are the seeded ones).",
+      "properties": {
+        "initial_marking": {
+          "type": "object",
+          "description": "Token counts per place, laid over the places' seeds (turnPermit is included automatically). Seeding userIn (or an env: place) closes it: the claim covers that many inputs, with no turn order.",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "environment": {
+          "type": "object",
+          "description": "Environment places and their mode (one mode for all). It replaces the turn-by-turn default: userIn, when listed, arrives in any order. It must list every env: place the initial_marking does not seed; turnAbort is added for safety claims.",
+          "additionalProperties": {
+            "$ref": "#/$defs/envMode"
+          }
+        },
+        "sinks": {
+          "$ref": "#/$defs/placeRefs",
+          "description": "deadlock_free only: places where a token may rest at the end (default: eventOut, turnPermit, and each mounted subnet's unbound eventOut, turnPermit and transfer)."
+        },
+        "sinks_when": {
+          "type": "object",
+          "description": "deadlock_free only: marker place -> places that may rest while the marker holds a token (e.g. {won: [triggerB]}: the loser's trigger may be stranded once someone won).",
+          "additionalProperties": {
+            "$ref": "#/$defs/placeRefs"
+          }
+        },
+        "assume_atomic_firing": {
+          "type": "boolean",
+          "description": "Treat each firing as atomic instead of a start and a completion step. Refused on a net with node: transitions or stock subnets unless assume_atomic_nodes is also true: their actions run while other transitions fire."
+        },
+        "assume_atomic_nodes": {
+          "type": "boolean",
+          "description": "Your word that assume_atomic_firing is exact although the net runs nodes: the claim's counterexample without it needs only move and emit transitions to be atomic. The verdict then rests on that."
+        }
+      }
+    },
+    "claim": {
+      "description": "One property to prove: deadlock_free, {place_bound: {place, bound}}, {unreachable: [places]} (never all marked at once), {mutual_exclusion: [two or more places]} (never two marked at once). A mapping claim may add label and options (laid over prove.options key by key).",
+      "oneOf": [
+        {
+          "const": "deadlock_free"
+        },
+        {
+          "type": "object",
+          "required": [
+            "deadlock_free"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "deadlock_free": {
+              "description": "No arguments: null, true or {}.",
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "const": true
+                },
+                {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              ]
+            },
+            "label": {
+              "type": "string"
+            },
+            "options": {
+              "$ref": "#/$defs/proofOptions"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "place_bound"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "place_bound": {
+              "type": "object",
+              "required": [
+                "place",
+                "bound"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "place": {
+                  "$ref": "#/$defs/placeRef"
+                },
+                "bound": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "label": {
+              "type": "string"
+            },
+            "options": {
+              "$ref": "#/$defs/proofOptions"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "unreachable"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "unreachable": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/placeRef"
+                },
+                {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/placeRef"
+                  }
+                }
+              ]
+            },
+            "label": {
+              "type": "string"
+            },
+            "options": {
+              "$ref": "#/$defs/proofOptions"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "mutual_exclusion"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "mutual_exclusion": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "$ref": "#/$defs/placeRef"
+              }
+            },
+            "label": {
+              "type": "string"
+            },
+            "options": {
+              "$ref": "#/$defs/proofOptions"
+            }
+          }
+        }
+      ]
+    },
+    "prove": {
+      "description": "Claims Z3/libpetri proves on the net's structure (actions never run): `adk-libpetri verify FILE`, PetriNet.verify(), or at load with on_load: true.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "options": {
+              "$ref": "#/$defs/proofOptions"
+            },
+            "claims": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/claim"
+              }
+            },
+            "on_load": {
+              "type": "boolean",
+              "description": "Prove the claims when the file loads; a claim not proven fails the load. Needs claims."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

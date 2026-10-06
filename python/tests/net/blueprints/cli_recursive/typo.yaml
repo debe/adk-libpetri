@@ -1,0 +1,7 @@
+# A transition names a place that does not exist (wonn): check says where.
+agent_class: adk_libpetri.net.PetriNet
+name: cli_typo
+places:
+  won: {}
+transitions:
+  Typo_Emit: {in: [userIn], out: {and: [eventOut, wonn]}, action: emit}

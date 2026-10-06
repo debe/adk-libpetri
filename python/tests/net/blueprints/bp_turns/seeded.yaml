@@ -1,0 +1,12 @@
+# A node transition a seed enables fires when the session's net starts,
+# before its first turn: it runs inside that turn.
+agent_class: adk_libpetri.net.PetriNet
+name: seeded_net
+nodes:
+  - [.agent.later_fn]
+places:
+  warm: {seed: 1}
+  ready: {type: str}
+transitions:
+  Seeded_Warm: {in: [warm], out: ready, node: later_fn}
+  Seeded_Answer: {in: [userIn], read: [ready], out: eventOut, action: emit}

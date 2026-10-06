@@ -1,0 +1,8 @@
+# userIn takes an int: a str input does not fit it.
+agent_class: adk_libpetri.net.PetriNet
+name: net_int
+places:
+  userIn: {type: int}
+  eventOut: {type: int}
+transitions:
+  Int_Pass: {in: [userIn], out: eventOut}

@@ -31,7 +31,7 @@ import concurrent.futures as cf
 import contextlib
 import logging
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import timedelta
 from typing import Any
 
@@ -144,6 +144,7 @@ class PetriRunner:
         self._spec = spec
         self.attachments: dict[str, Any] = {}
         """Per-session objects that live as long as this runner (e.g. a turn scope)."""
+        self._drain_hooks: list[Callable[[], None]] = []
 
     @staticmethod
     def builder(net: lp.BuiltNet | NetSpec, actions: Mapping[str, Any] | None = None) -> Builder:
@@ -235,12 +236,31 @@ class PetriRunner:
     def closed(self) -> bool:
         return self._done.done()
 
+    def on_drain(self, hook: Callable[[], None]) -> None:
+        """Call ``hook`` once, when the run starts to drain (or is killed).
+
+        For an action that waits on something outside the net (a turn that may
+        never come): the hook releases it, so the drain does not wait forever.
+        """
+        self._drain_hooks.append(hook)
+
+    def _run_drain_hooks(self) -> None:
+        hooks, self._drain_hooks = self._drain_hooks, []
+        for hook in hooks:
+            try:
+                hook()
+            except Exception:
+                log.exception("A drain hook of a PetriRunner failed")
+
     def drain(self) -> bool:
         """Stop accepting injects; in-flight work finishes. Returns at once."""
-        return self._handle.drain()
+        accepted = self._handle.drain()
+        self._run_drain_hooks()
+        return accepted
 
     def kill(self) -> bool:
         """Close at once: no drain, in-flight work is abandoned."""
+        self._run_drain_hooks()
         return self._handle.close()
 
     def await_termination(self, timeout: timedelta | float | None = None) -> bool:

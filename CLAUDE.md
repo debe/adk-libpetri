@@ -81,7 +81,7 @@ fails `pytest`. `npm run build` then writes the illustrative
 `dot/sketch-*.dot` files from `src/index.ts` and renders every DOT file
 to SVG. Only that last step needs Node.js 20 or later and graphviz
 `dot`; CI needs neither. Hand-drawn SVGs live in `docs/assets/`. Keep
-every diagram except the cover a white card with no
+every diagram, the cover included, a white card with no
 `prefers-color-scheme` block: inside `<img>` the media query follows the
 OS, not the GitHub theme.
 
@@ -270,7 +270,8 @@ bug classes the design is meant to eliminate.
 ## Python port (`python/src/adk_libpetri/`)
 
 Same packages as Java (`colours`, `bridge`, `subnet`, `runner`, `verify`),
-plus `workflow/` (`compile_workflow`, `verify_workflow`, `PetriWorkflow`).
+plus `workflow/` (`compile_workflow`, `verify_workflow`, `PetriWorkflow`) and
+`net/` (`PetriNet`, Petri-net blueprints written in ADK YAML, ADR 0008).
 Read [ADR 0006](docs/adr/0006-python-port-and-adk-python-compat.md) before
 structural changes. Python-specific rules:
 
@@ -287,6 +288,15 @@ structural changes. Python-specific rules:
 - **libpetri-py may re-enter an async transition** while an earlier firing is
   in flight (Java never does). Ordering-sensitive actions are sync; shared
   side effects are serialised (see `PersistState`).
+- **Blueprints (`net/`)**: `blueprint.py` parses the YAML into one flat
+  `NetSpec` plus action plans and `prove:` claims (pure, no ADK loader);
+  `node.py` is `PetriNet(BaseNode)`; `proofs.py` runs the claims. `nodes` is
+  `list[EdgeItem]` on purpose: it is the only field type ADK's loader resolves
+  `.agent.fn` and `x.yaml` refs for, relative to the YAML file. Do not retype
+  it. Subnets mount by YAML ref, bound ports fused, the rest prefixed `inst/`.
+  Tests and fixture blueprints are in `tests/net/`.
+- **`_net_node.py`** (`NetNodeBase`) holds the turn and per-session runner
+  logic both `PetriWorkflow` and `PetriNet` subclass; change it once.
 - **A compiled workflow is a `BaseNode`** (`PetriWorkflow`), not a
   `BaseAgent`: ADK 2.11 runs a `BaseAgent` root on its legacy path, which has
   no node `Context` to run child nodes with.

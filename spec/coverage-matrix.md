@@ -29,6 +29,16 @@ Requirement -> the tests that cover it in each port. Paths are relative to
 | WF-002..005, 007..009 | (Python only) | `workflow/test_compile.py`, `workflow/test_runtime_parity.py` |
 | WF-010 | (Python only) | `workflow/adk_samples/loop_config/test_petri_yaml.py` |
 | WF-006 | (Python only) | `workflow/test_runtime_parity.py::test_request_input_interrupts_and_resumes_like_adk` |
+| NET-001 | (Python only) | `net/test_yaml_nets.py` |
+| NET-002..003 | (Python only) | `net/test_blueprint_parse.py`, `net/test_composition.py` (leading-dot types per file) |
+| NET-004 | (Python only) | `net/test_yaml_nets.py`, `demos/patterns/yaml/*` |
+| NET-005..007 | (Python only) | `net/test_yaml_nets.py`, `net/test_blueprint_parse.py` (action plans), `net/test_turns.py` (turns, inputs, node outputs) |
+| NET-008 | (Python only) | `net/test_blueprint_parse.py`, `net/test_yaml_nets.py`, `net/test_loader_edges.py` |
+| NET-009..010 | (Python only) | `net/test_composition.py`, `net/test_turns.py` (turnAbort, runner keys and teardown) |
+| NET-011 | (Python only) | `net/test_prove.py`, `net/test_prove_scope.py`, `demos/patterns/yaml/*` |
+| NET-012 | (Python only) | `net/test_cli.py` |
+| NET-013 | (Python only) | `net/test_schema.py`, `net/test_authoring.py` |
+| NET-014 | (Python only) | `demos/patterns/yaml/*` |
 
 ## Demos and foils
 
@@ -44,4 +54,5 @@ Requirement -> the tests that cover it in each port. Paths are relative to
 | Barge-in, VAD, Live recovery | `demos/voice/*SubnetTest` | `demos/voice/test_*_subnet.py` |
 | Live connection exemplar | `demos/SyncGeminiLiveConnectionTest` | `demos/voice/test_genai_live_connection.py` |
 | Patterns A/B/C | `demos/patterns/Pattern*DemoTest` | `demos/patterns/test_pattern_*_demo.py` |
+| Patterns A/B/C as YAML blueprints | (Python only) | `demos/patterns/yaml/*` |
 | Patterns A/B/C (ADK foils) | `demos/patterns/Pattern*_AdkOnlyFoilTest` | `demos/patterns/test_pattern_*_adk_only_foil.py` (against ADK 2 `Workflow`) |

@@ -1,0 +1,10 @@
+# A PetriNet whose answer is an emitted text Event.
+agent_class: adk_libpetri.net.PetriNet
+name: net_text
+nodes:
+  - [.agent.shout]
+places:
+  shouted: {type: str}
+transitions:
+  Text_Shout: {in: [userIn], out: shouted, node: shout}
+  Text_Emit: {in: [shouted], out: eventOut, action: emit}

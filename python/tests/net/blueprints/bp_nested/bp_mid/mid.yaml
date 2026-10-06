@@ -1,0 +1,15 @@
+agent_class: adk_libpetri.net.PetriNet
+name: mid
+nodes:
+  - [bp_leaf/leaf.yaml]
+  - [.agent.wrap_mid]
+places:
+  inp: {type: str}
+  out: {type: .agent.MidNote}
+ports:
+  inp: {direction: in}
+  out: {direction: out}
+subnets:
+  inner: {net: leaf, bind: {inp: inp, note: leaf_note}}
+transitions:
+  Mid_Wrap: {in: [leaf_note], out: out, node: wrap_mid}

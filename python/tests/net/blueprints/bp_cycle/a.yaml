@@ -1,0 +1,6 @@
+agent_class: adk_libpetri.net.PetriNet
+name: cycle_a
+nodes:
+  - [b.yaml]
+transitions:
+  A_Echo: {in: [userIn], out: eventOut, action: emit}

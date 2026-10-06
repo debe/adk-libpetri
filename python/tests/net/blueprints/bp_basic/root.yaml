@@ -1,0 +1,10 @@
+# The smallest useful blueprint: one node, one emit.
+agent_class: adk_libpetri.net.PetriNet
+name: echo_net
+nodes:
+  - [.agent.shout]
+places:
+  shouted: {type: str}
+transitions:
+  Echo_Shout: {in: [userIn], out: shouted, node: shout}
+  Echo_Emit: {in: [shouted], out: eventOut, action: emit}

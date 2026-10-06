@@ -1,0 +1,23 @@
+# The race blueprint mounted twice; each instance's places are its own.
+agent_class: adk_libpetri.net.PetriNet
+name: double_race
+nodes:
+  - [race.yaml]
+  - [.agent.text_of]
+  - [.agent.join]
+places:
+  q1: {type: str}
+  q2: {type: str}
+  joined: {type: str}
+subnets:
+  first: {net: two_way_race, bind: {question: q1, answer: r1}}
+  second: {net: two_way_race, bind: {question: q2, answer: r2}}
+transitions:
+  Double_Read: {in: [userIn], out: {and: [q1, q2]}, node: text_of}
+  Double_Join: {in: [r1, r2], out: joined, node: join}
+  Double_Emit: {in: [joined], out: eventOut, action: emit}
+prove:
+  claims:
+    - place_bound: {place: first/won, bound: 1}
+    - place_bound: {place: second/won, bound: 1}
+    - mutual_exclusion: [first/permit, first/won]

@@ -1,0 +1,8 @@
+agent_class: adk_libpetri.net.PetriNet
+name: worker
+nodes:
+  - [.agent.upper]
+places:
+  eventOut: {type: str}
+transitions:
+  A_Up: {in: [userIn], out: eventOut, node: upper}

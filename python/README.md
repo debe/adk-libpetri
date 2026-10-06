@@ -11,8 +11,8 @@ The design, the commitments and the Java port live in the
 [repository README](../README.md). This page covers what is Python-specific.
 
 > **0.x and experimental.** The turn-based path mirrors the Java port; SSE,
-> BIDI/live and `from_workflow` are `@experimental` and may change in any
-> release.
+> BIDI/live, `from_workflow` and `PetriNet` blueprints are `@experimental` and
+> may change in any release.
 
 ## Install
 
@@ -26,7 +26,7 @@ install from a clone with `pip install -e python`.
 Python 3.11+. Pulls `google-adk~=2.11.0` and `libpetri`. Proofs need a `z3`
 binary (4.8+) on `PATH` or named by `LIBPETRI_Z3`; the runtime does not.
 
-## Two ways in
+## Three ways in
 
 ### 1. Compile an existing ADK `Workflow` (`from_workflow`)
 
@@ -201,6 +201,104 @@ transition and place names as Java (`LlmAgent_BuildPrompt`, `userIn`, ...).
 Compose your own with `NetSpec.compose(...)`. `NetSpec.build(actions)`
 rejects a missing, unknown or doubly bound action, and every stock subnet's
 structure is golden-checked against the Java net (`spec/fixtures/nets`).
+
+### 3. Write the net in YAML (`PetriNet`)
+
+`agent_class: adk_libpetri.net.PetriNet` writes the net itself in ADK's YAML
+agent config, for what a `Workflow` cannot say (races, quorums, permits,
+inhibitors, timed transitions). ADK's loader builds it, so `adk web` and
+`adk run` serve it; `PetriNet.from_config(path, orchestrator=loop)` loads one
+in Python. The design is
+[ADR 0008](../docs/adr/0008-petri-net-blueprints.md) and the requirements are
+[spec/08-blueprints.md](../spec/08-blueprints.md).
+
+```yaml
+# root_agent.yaml
+agent_class: adk_libpetri.net.PetriNet
+name: triage
+nodes:                               # ADK node refs, resolved by ADK's loader
+  - [.agent.classify]
+  - [.agent.answer]
+places:
+  question: {type: str}              # userIn and eventOut need no declaration
+  answered: {type: str}
+  failed: {type: NodeError}
+transitions:
+  Triage_Read:     {in: [userIn], out: question, node: classify}
+  Triage_Answer:   {in: [question], out: {xor: {default: answered, error: failed}}, node: answer}
+  Triage_Emit:     {in: [answered], out: eventOut, action: emit}
+  Triage_Fallback: {in: [failed], out: eventOut, action: emit}
+prove:
+  claims: [deadlock_free, {place_bound: {place: eventOut, bound: 1}}]
+```
+
+The format, in short:
+
+- **`nodes:`** lists the ADK nodes the net runs, each entry a list
+  (`- [.agent.fn]`, `- [child.yaml]`, or an inline `{agent_class: ...}`).
+  The field is typed `list[EdgeItem]` on purpose: it is the only field ADK's
+  loader resolves code and file references for, relative to the YAML file.
+  Transitions name nodes by node name.
+- **`places:`** `name: {type, seed}`. No type is a unit place. A type is an
+  alias (`str`, `int`, `Content`, `Event`, `NodeError`, ...), a dotted name, or
+  `.module.Name` relative to the YAML file's package (a `PetriNet` built in
+  Python has no file and needs dotted names). The catalog places (`userIn`,
+  `eventOut`, `turnPermit`, `turnAbort`, ...) need no declaration.
+- **`transitions:`** `in` (`p`, `{place, count}`, `{place, at_least}`,
+  `{place, all: true}`), `out` (`p`, `{and: [...]}`, `{xor: [...]}`,
+  `{xor: {label: out, ...}}` with `default` and `error`, `{timeout: ms, child:
+  out}`), `read`, `inhibit`, `reset`, `priority`, `timing` (`{delayed: ms}`,
+  `{deadline: ms}`, `{exact: ms}`, `{window: [a, b]}`), and at most one action:
+  - none, or `action: move`: forward the one coloured value to the coloured
+    outputs, signal the unit ones;
+  - `action: emit`: the same, with the value turned into an `Event`;
+  - `node: name`: run the ADK node inside the invocation. Its output goes on
+    the branch its route picks (`default` when none matches); a failure takes
+    the `error` branch as a `NodeError`, or, with no `error` branch, fails
+    the turn as it fails a `Workflow`. An xor with no node is rejected.
+- **The turn** is `PetriAgent`'s: the input lands on `userIn`, the first
+  non-partial `eventOut` token ends the turn (an `Event` is yielded, any other
+  value becomes the node's output), and `env:` adds environment places, filled
+  with `PetriNet.inject(session, place, value)` during a turn. The invocation
+  stays open until the turn's node runs finish, so a race's loser runs to the
+  end inside it. A session's net serves one turn at a time, and a node
+  transition that fires between turns runs in the next turn's invocation. A
+  `PetriNet` node cannot interrupt (`RequestInput`).
+- **`ports:` and `subnets:`** compose blueprints. A child is a node ref
+  (`- [race.yaml]`) mounted as `first: {net: speculative_race, bind: {userIn:
+  question, eventOut: answer}}`: bound ports fuse with the parent's places,
+  everything else is prefixed `first/`. `stock: llm_agent`, `llm_step`,
+  `tool_dispatch` or `router` mounts a stock subnet configured from an ADK
+  `LlmAgent` named in `from:`. A mounted child's `turnAbort` fuses with the
+  net's own, which the runner signals on a failure.
+- **`prove:`** `{options, claims, on_load}`: `deadlock_free`, `place_bound`,
+  `unreachable` and `mutual_exclusion`, one `verify()` each, on the composed
+  net. `on_load: true` fails the load when a claim is not proven.
+
+Every load error names the file, the YAML key path and a fix:
+
+```text
+root_agent.yaml: transitions.Triage_Answer.out.xor.default: unknown place 'answerd'. Fix: did you mean 'answered'?
+```
+
+The JSON Schema is `adk_libpetri/net/schema.json`, and
+`adk_libpetri/net/AUTHORING.md` is a short guide with the motifs (permit race,
+quorum, inhibitor fallback, budget) as YAML.
+
+```bash
+adk-libpetri check root_agent.yaml                     # parse and build, no Z3
+adk-libpetri verify root_agent.yaml --k 2 --recursive  # run prove:, children's too
+```
+
+`verify` prints each claim's verdict and exits nonzero on a violated claim.
+`PetriNet.verify(k=2)` returns the same verdicts in Python. The proofs are on the net's
+structure, untimed, with every xor a free choice, so a claim holds whatever
+the nodes return. By default the user's inputs come turn by turn, the next
+after the previous answer: a safety claim covers one turn, `deadlock_free`
+two, and `--k` sets the number for both. Safety claims also let `turnAbort`
+and every `env:` place arrive; `deadlock_free` covers runs where nothing
+fails. Running a `{timeout: ...}` output is broken in libpetri-py
+for now (ADR 0008).
 
 ## What is different from Java
 

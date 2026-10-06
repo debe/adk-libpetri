@@ -1,0 +1,42 @@
+# A human approval on an env: place, else an escalation after 3 s.
+agent_class: adk_libpetri.net.PetriNet
+name: approval
+nodes:
+  - [.agent.draft, .agent.decide, .agent.escalate_msg]
+env: [approval]
+places:
+  request: {type: Content}
+  drafted: {type: str}
+  waiting: {}
+  approval: {type: bool}
+  approvedText: {type: str}
+  rejectedText: {type: str}
+  due: {}
+  escalation: {type: str}
+  decided: {}
+transitions:
+  Gate_Start:
+    in: [userIn]
+    out: request
+    reset: [drafted, waiting, approvedText, rejectedText, due, escalation, decided]
+  Gate_Draft: {in: [request], out: {and: [drafted, waiting]}, node: draft}
+  Gate_Decide:
+    in: [approval, waiting, drafted]
+    out: {xor: {approve: {and: [approvedText, decided]}, reject: {and: [rejectedText, decided]}}}
+    priority: 10
+    node: decide
+  Gate_Escalate:
+    in: [waiting]
+    out: {and: [due, decided]}
+    timing: {delayed: 3000}
+  Gate_EscalateMsg: {in: [due], out: escalation, node: escalate_msg}
+  Gate_AnswerApproved: {in: [approvedText], out: eventOut, action: emit}
+  Gate_AnswerRejected: {in: [rejectedText], out: eventOut, action: emit}
+  Gate_AnswerEscalated: {in: [escalation], out: eventOut, action: emit}
+  Gate_LateApproval: {in: [approval], read: [decided], priority: -10}
+prove:
+  options:
+    sinks: [eventOut, decided, drafted]
+  claims:
+    - label: never approved
+      place_bound: {place: approvedText, bound: 0}

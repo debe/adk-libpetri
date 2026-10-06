@@ -1,0 +1,31 @@
+# A reusable two-way race with its own claims, proven on the child alone.
+agent_class: adk_libpetri.net.PetriNet
+name: child_race
+nodes:
+  - [bp_compose.agent.quick, bp_compose.agent.careful]
+places:
+  question: {type: str}
+  answer: {type: str}
+  qa: {type: str}
+  qb: {type: str}
+  a: {type: str}
+  b: {type: str}
+  permit: {}
+  won: {}
+ports:
+  question: {direction: in}
+  answer: {direction: out}
+transitions:
+  Race_Start: {in: [question], out: {and: [qa, qb, permit]}, reset: [won, permit]}
+  Race_RunA: {in: [qa], out: a, inhibit: [won], node: quick}
+  Race_RunB: {in: [qb], out: b, inhibit: [won], node: careful}
+  Race_CommitA: {in: [a, permit], out: {and: [answer, won]}, priority: 10}
+  Race_CommitB: {in: [b, permit], out: {and: [answer, won]}, priority: 10}
+  Race_DiscardA: {in: [a], read: [won], priority: -10}
+  Race_DiscardB: {in: [b], read: [won], priority: -10}
+prove:
+  options:
+    environment: {question: {arrivals: 1}}
+  claims:
+    - place_bound: {place: won, bound: 1}
+      label: child one winner

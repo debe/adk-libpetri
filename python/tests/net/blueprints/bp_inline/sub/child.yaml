@@ -1,0 +1,14 @@
+# One directory below the agent package: a leading dot here would mean the
+# package `sub`, which adk web cannot import, so the refs are fully qualified.
+agent_class: adk_libpetri.net.PetriNet
+name: sub_child
+nodes:
+  - [bp_inline.sub.agent.tag]
+places:
+  q: {type: str}
+  r: {type: str}
+ports:
+  q: {direction: in}
+  r: {direction: out}
+transitions:
+  Sub_Tag: {in: [q], out: r, node: tag}

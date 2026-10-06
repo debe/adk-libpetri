@@ -1,0 +1,63 @@
+# Pattern A, speculative race (test_pattern_a_speculative_race_demo.py), as a
+# blueprint. Three branches start on one userIn; the first result commits by
+# consuming the turn's one racePermit and marks raceWon; the losers run out and
+# drain to raceDiscarded. Same places, arcs and priorities as race_spec().
+agent_class: adk_libpetri.net.PetriNet
+name: race_agent
+description: Speculative race across three branches
+nodes:
+  - [.agent.fast]
+  - [.agent.medium]
+  - [.agent.slow]
+places:
+  triggerA: {}
+  triggerB: {}
+  triggerC: {}
+  branchADone: {type: .agent.BranchResult}
+  branchBDone: {type: .agent.BranchResult}
+  branchCDone: {type: .agent.BranchResult}
+  racePermit: {}
+  raceWon: {}
+  raceDiscarded: {type: .agent.BranchResult}
+transitions:
+  Race_Start:
+    in: [userIn]
+    out: {and: [triggerA, triggerB, triggerC, racePermit]}
+    # Wipe whatever the prior turn left.
+    reset: [racePermit, raceWon, triggerA, triggerB, triggerC,
+            branchADone, branchBDone, branchCDone, raceDiscarded]
+  # Don't even start if the race is already decided.
+  Race_RunBranchA: {in: [triggerA], out: branchADone, inhibit: [raceWon], node: fast}
+  Race_RunBranchB: {in: [triggerB], out: branchBDone, inhibit: [raceWon], node: medium}
+  Race_RunBranchC: {in: [triggerC], out: branchCDone, inhibit: [raceWon], node: slow}
+  # Every commit needs the one permit: at most one commit per turn.
+  Race_CommitA: {in: [branchADone, racePermit], out: {and: [eventOut, raceWon]}, priority: 10, action: emit}
+  Race_CommitB: {in: [branchBDone, racePermit], out: {and: [eventOut, raceWon]}, priority: 10, action: emit}
+  Race_CommitC: {in: [branchCDone, racePermit], out: {and: [eventOut, raceWon]}, priority: 10, action: emit}
+  # Only drain once the race is over.
+  Race_DiscardA: {in: [branchADone], out: raceDiscarded, read: [raceWon], priority: -10}
+  Race_DiscardB: {in: [branchBDone], out: raceDiscarded, read: [raceWon], priority: -10}
+  Race_DiscardC: {in: [branchCDone], out: raceDiscarded, read: [raceWon], priority: -10}
+prove:
+  options:
+    initial_marking: {userIn: 1}
+    sinks: [eventOut, raceWon, raceDiscarded]
+    # A loser that never started keeps its trigger: the inhibitor on raceWon is
+    # the cancellation. Excused only once the race is won.
+    sinks_when: {raceWon: [triggerA, triggerB, triggerC]}
+  claims:
+    - label: "one commit per turn: place_bound(RACE_WON, 1)"
+      place_bound: {place: raceWon, bound: 1}
+    - label: "one egress event per turn: place_bound(EVENT_OUT, 1)"
+      place_bound: {place: eventOut, bound: 1}
+    - deadlock_free
+    # Two turns: Race_Start resets the permit before it seeds a new one.
+    - label: "permit never stacks: place_bound(RACE_PERMIT, 1)"
+      place_bound: {place: racePermit, bound: 1}
+      options:
+        initial_marking: {}
+        environment: {userIn: {arrivals: [2, 2]}}
+        # Exact here: without it the only counterexample starts Race_Start again
+        # while its synchronous firing is in flight; no node run is involved.
+        assume_atomic_firing: true
+        assume_atomic_nodes: true

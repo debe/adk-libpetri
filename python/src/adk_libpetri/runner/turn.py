@@ -1,4 +1,4 @@
-"""One turn against a session runner, shared by ``PetriAgent`` and ``PetriWorkflow``."""
+"""One turn against a session runner (``PetriAgent``, ``PetriWorkflow``, ``PetriNet``)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import Any
 from google.adk.events.event import Event
 
 from .. import colours as C
+from .._aio import HotStream
 from ..bridge import TransitionFailure
 from .petri_runner import PetriRunner
 
@@ -42,20 +43,25 @@ async def run_turn(
     sse: bool = False,
     abort_signal: asyncio.Event | None = None,
     finish: Callable[[Event], Event] = lambda e: e,
-) -> AsyncGenerator[Event, None]:
+    egress: HotStream[Any] | None = None,
+) -> AsyncGenerator[Any, None]:
     """The first of (terminal event, failure, abort) settles the turn.
 
     Both subscriptions are made before the inject (the streams are hot) and
     dropped with the turn, so nothing outlives the invocation on a long-lived
     runner. Every event is stamped with ``invocation_id``. Under ``sse``
     partials are yielded too; otherwise only the first non-partial event.
+
+    ``egress`` replaces :meth:`PetriRunner.adk_events` as the stream the turn
+    waits on. An item on it that is not an ``Event`` is terminal and yielded
+    as is (``PetriNet`` taps every ``EVENT_OUT`` token that way).
     """
     loop = asyncio.get_running_loop()
-    events: Any = runner.adk_events().subscribe()
+    events: Any = (egress if egress is not None else runner.adk_events()).subscribe()
     failures: Any = runner.failure_signal().subscribe()
     f_task = loop.create_task(failures.__anext__())
     a_task = loop.create_task(abort_signal.wait()) if abort_signal is not None else None
-    e_task: asyncio.Task[Event] | None = None
+    e_task: asyncio.Task[Any] | None = None
     try:
         if not inject():
             raise RuntimeError("the session's runner is closed; it accepted no input")
@@ -73,6 +79,9 @@ async def run_turn(
                         "for this invocation"
                     ) from None
                 e_task = None
+                if not isinstance(event, Event):
+                    yield event
+                    return
                 stamped = event.model_copy(update={"invocation_id": invocation_id})
                 if stamped.partial:
                     if sse:

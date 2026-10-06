@@ -1,0 +1,10 @@
+# A node that returns a types.Content: ADK hands on its content, no output.
+agent_class: adk_libpetri.net.PetriNet
+name: content_net
+nodes:
+  - [.agent.to_content]
+places:
+  c: {type: Content}
+transitions:
+  Content_Convert: {in: [userIn], out: c, node: to_content}
+  Content_Emit: {in: [c], out: eventOut, action: emit}

@@ -1,0 +1,14 @@
+# A node writes the answer straight to eventOut: it is the turn's event at
+# once, while the slow node still runs.
+agent_class: adk_libpetri.net.PetriNet
+name: direct_net
+nodes:
+  - [.agent.fast_answer, .agent.slow_answer]
+places:
+  goFast: {type: Content}
+  goSlow: {type: Content}
+  late: {type: str}
+transitions:
+  Direct_Start: {in: [userIn], out: {and: [goFast, goSlow]}}
+  Direct_Fast: {in: [goFast], out: eventOut, node: fast_answer}
+  Direct_Slow: {in: [goSlow], out: late, node: slow_answer}

@@ -1,0 +1,13 @@
+# The stock LlmAgent subnet, configured from an ADK LlmAgent's YAML.
+agent_class: adk_libpetri.net.PetriNet
+name: assistant_net
+nodes:
+  - [helper.yaml]
+subnets:
+  assistant:
+    stock: llm_agent
+    from: helper
+    bind: {userIn: userIn, eventOut: eventOut, turnAbort: turnAbort}
+prove:
+  claims:
+    - place_bound: {place: assistant/LlmAgent_turnActive, bound: 1}

@@ -1,0 +1,6 @@
+# The assistant the stock llm_agent subnet is configured from: its model,
+# instruction and tools. A test swaps the model for a ScriptedLlm.
+agent_class: LlmAgent
+name: summarizer
+model: gemini-2.5-flash
+instruction: You summarize the answers you are given in one sentence.

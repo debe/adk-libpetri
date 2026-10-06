@@ -1,0 +1,28 @@
+# The race with inhibitor-guarded commits and no permit: its own claim is violated.
+agent_class: adk_libpetri.net.PetriNet
+name: child_bad_race
+nodes:
+  - [bp_compose.agent.quick, bp_compose.agent.careful]
+places:
+  question: {type: str}
+  answer: {type: str}
+  qa: {type: str}
+  qb: {type: str}
+  a: {type: str}
+  b: {type: str}
+  won: {}
+ports:
+  question: {direction: in}
+  answer: {direction: out}
+transitions:
+  Race_Start: {in: [question], out: {and: [qa, qb]}, reset: [won]}
+  Race_RunA: {in: [qa], out: a, node: quick}
+  Race_RunB: {in: [qb], out: b, node: careful}
+  Race_CommitA: {in: [a], out: {and: [answer, won]}, inhibit: [won]}
+  Race_CommitB: {in: [b], out: {and: [answer, won]}, inhibit: [won]}
+prove:
+  options:
+    environment: {question: {arrivals: 1}}
+  claims:
+    - place_bound: {place: won, bound: 1}
+      label: child one winner

@@ -1,0 +1,4 @@
+agent_class: Workflow
+name: inwf
+edges:
+  - [START, net_text.yaml, .agent.after, net_value.yaml, .agent.after2]

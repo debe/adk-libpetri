@@ -1,0 +1,20 @@
+# Two levels of YAML refs: top -> bp_mid/mid.yaml -> bp_leaf/leaf.yaml. Each
+# file's leading-dot refs resolve in its own package.
+agent_class: adk_libpetri.net.PetriNet
+name: nested_net
+nodes:
+  - [bp_mid/mid.yaml]
+  - [.agent.text_of]
+  - [.agent.wrap_top]
+  - [.agent.render]
+places:
+  question: {type: str}
+  note: {type: .agent.TopNote}
+  shown: {type: str}
+subnets:
+  middle: {net: mid, bind: {inp: question, out: mid_out}}
+transitions:
+  Top_Read: {in: [userIn], out: question, node: text_of}
+  Top_Wrap: {in: [mid_out], out: note, node: wrap_top}
+  Top_Render: {in: [note], out: shown, node: render}
+  Top_Emit: {in: [shown], out: eventOut, action: emit}

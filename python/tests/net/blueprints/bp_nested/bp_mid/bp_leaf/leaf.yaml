@@ -1,0 +1,12 @@
+agent_class: adk_libpetri.net.PetriNet
+name: leaf
+nodes:
+  - [.agent.wrap_leaf]
+places:
+  inp: {type: str}
+  note: {type: .agent.LeafNote}
+ports:
+  inp: {direction: in}
+  note: {direction: out}
+transitions:
+  Leaf_Wrap: {in: [inp], out: note, node: wrap_leaf}

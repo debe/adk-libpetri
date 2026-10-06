@@ -50,6 +50,32 @@ libpetri-py `>=7.2,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
     `PetriWorkflow.from_config` also compiles an `agent_class: Workflow` file.
   - Tests run ADK's own workflow samples (google/adk-python v2.11.0,
     vendored under `tests/workflow/adk_samples`) natively and compiled.
+- **Net blueprints in ADK's YAML (experimental).** `agent_class:
+  adk_libpetri.net.PetriNet` writes a net in ADK's YAML agent config, so
+  `adk web` and `adk run` serve it ([ADR 0008](docs/adr/0008-petri-net-blueprints.md)).
+  - `nodes:` (a `list[EdgeItem]` field, resolved by ADK's loader), `places:`
+    with types and seeds, and `transitions:` with every arc, output and timing
+    form; actions are `move`, `emit` or `node:` (an ADK node run inside the
+    invocation, its route picking a labelled xor branch, a failure taking the
+    `error` branch).
+  - The turn is `PetriAgent`'s (`userIn` in, the first `eventOut` token out).
+    A session's net serves one turn at a time; a node transition that fires
+    between turns runs in the next turn. `PetriNet.inject` fills `env:` places.
+  - `subnets:` mounts another blueprint by YAML ref, with port binding and an
+    `inst/` prefix, or a stock subnet (`llm_agent`, `llm_step`,
+    `tool_dispatch`, `router`) configured from an ADK `LlmAgent`.
+  - `prove:` states Z3 claims (`deadlock_free`, `place_bound`, `unreachable`,
+    `mutual_exclusion`) on the composed net, run by `PetriNet.verify()`, at
+    load with `on_load: true`, or by the new `adk-libpetri check` /
+    `adk-libpetri verify [--k N] [--recursive]` CLI. By default the inputs
+    come turn by turn: one turn for a safety claim, two for `deadlock_free`.
+  - Load errors name the YAML key path and a fix. A JSON Schema
+    (`net/schema.json`) and an authoring guide (`net/AUTHORING.md`) ship with
+    the package. Patterns A, B and C have YAML twins with their Python nets'
+    fingerprints and proofs.
+  - `PetriWorkflow` and `PetriNet` share their turn and session-runner logic
+    (`_net_node.py`). Known gaps: no interrupts, and timeout outputs do not
+    run yet (a libpetri-py decode bug).
 - **Cross-language fixtures.** `spec/fixtures/nets` holds every stock subnet's
   structure. Java's new `SpecFixturesTest` writes and golden-checks it, and so
   does Python's `tests/conformance`.

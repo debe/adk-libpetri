@@ -1,0 +1,53 @@
+# Pattern A's race blueprint mounted twice, under two prefixes, feeding a stock
+# llm_agent subnet configured from an LlmAgent YAML. Each race instance keeps
+# its own permit, winner marker and discards (first/..., second/...); the
+# composed net is one flat NetSpec, and prove: checks it as a whole.
+#
+# This file sits next to the pattern packages, not inside one: ADK's loader
+# rejects a config_path that leaves the referencing file's directory
+# (../yaml_race/root_agent.yaml is "path traversal"). Its own refs are fully
+# qualified, because a leading dot here would mean the package `yaml`.
+agent_class: adk_libpetri.net.PetriNet
+name: composed_agent
+description: Two speculative races, then an LLM summary of both winners
+nodes:
+  - [yaml_race/root_agent.yaml]
+  - [yaml_composed/helper.yaml]
+  - [yaml_composed.agent.brief]
+places:
+  q1: {type: Content}
+  q2: {type: Content}
+  question: {type: Content}
+subnets:
+  first: {net: race_agent, bind: {userIn: q1, eventOut: a1}}
+  second: {net: race_agent, bind: {userIn: q2, eventOut: a2}}
+  assistant:
+    stock: llm_agent
+    from: summarizer
+    bind: {userIn: question, eventOut: eventOut, transfer: transfer, turnAbort: turnAbort}
+transitions:
+  # The user's message goes to both races.
+  Composed_Fork: {in: [userIn], out: {and: [q1, q2]}}
+  # Both winners in, one question out.
+  Composed_Brief: {in: [a1, a2], out: question, node: brief}
+  # A turn ends on eventOut only: a transfer must answer it too, or the turn
+  # (and every turn after it) would hang.
+  Composed_Handoff: {in: [transfer], out: eventOut, action: emit}
+prove:
+  claims:
+    - place_bound: {place: first/raceWon, bound: 1}
+    - place_bound: {place: second/raceWon, bound: 1}
+    - place_bound: {place: eventOut, bound: 1}
+    # One turn: the default, two turns one after the other, has more state
+    # classes than the proof can close here (a turn alone has some 155 000).
+    # The turn comes to rest with its answer on eventOut, the assistant's
+    # permit back, and each race's winner marker and discards; a loser that
+    # never started keeps its trigger, excused only once that race is won.
+    - deadlock_free:
+      options:
+        initial_marking: {userIn: 1}
+        sinks: [eventOut, assistant/turnPermit,
+                first/raceWon, first/raceDiscarded, second/raceWon, second/raceDiscarded]
+        sinks_when:
+          first/raceWon: [first/triggerA, first/triggerB, first/triggerC]
+          second/raceWon: [second/triggerA, second/triggerB, second/triggerC]

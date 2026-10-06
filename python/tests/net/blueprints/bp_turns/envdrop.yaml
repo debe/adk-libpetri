@@ -1,0 +1,24 @@
+# Places the runtime fills from outside: `cancel` (env:) and turnAbort (the
+# runner signals it on a failure). The proofs let both arrive.
+agent_class: adk_libpetri.net.PetriNet
+name: envdrop
+nodes:
+  - [.agent.boom]
+env: [cancel]
+places:
+  cancel: {}
+  cancelled: {}
+  aborted: {}
+  work: {}
+transitions:
+  Drop_Answer: {in: [userIn], out: {and: [eventOut, work]}, action: emit}
+  Drop_Boom: {in: [work], node: boom}
+  Drop_Cancel: {in: [cancel], out: cancelled}
+  Drop_Abort: {in: [turnAbort], out: aborted}
+prove:
+  claims:
+    - label: never cancelled
+      unreachable: [cancelled]
+      options: {initial_marking: {userIn: 1}}
+    - label: never aborted
+      unreachable: [aborted]

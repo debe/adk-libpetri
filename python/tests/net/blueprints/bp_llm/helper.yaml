@@ -1,0 +1,6 @@
+agent_class: LlmAgent
+name: helper
+model: gemini-2.5-flash
+instruction: You answer weather questions briefly.
+tools:
+  - name: bp_llm.agent.get_weather

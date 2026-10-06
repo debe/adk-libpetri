@@ -1,0 +1,67 @@
+# Pattern C, optimistic commit (test_pattern_c_optimistic_commit_demo.py), as a
+# blueprint. The cheap and slow paths start together; the cheap result goes
+# through a validation whose xor output marks validationPassed or
+# validationFailed; on pass the cheap path commits and the slow result drains to
+# slowDiscarded, on fail the slow path commits. Same places, arcs and priorities
+# as the demo's SPEC.
+agent_class: adk_libpetri.net.PetriNet
+name: opt_agent
+description: Optimistic commit with structural fallback
+nodes:
+  - [.agent.cheap, .agent.slow, .agent.validate]
+places:
+  cheapTrigger: {}
+  slowTrigger: {}
+  cheapDone: {type: .agent.BranchResult}
+  slowDone: {type: .agent.BranchResult}
+  validationPassed: {}
+  validationFailed: {}
+  committed: {}
+  slowDiscarded: {type: .agent.BranchResult}
+  # Validation consumes cheapDone but emits only a verdict; the result waits
+  # here for Opt_CommitCheap to author the event.
+  cheapPending: {type: .agent.BranchResult}
+transitions:
+  Opt_StartBoth:
+    in: [userIn]
+    out: {and: [cheapTrigger, slowTrigger]}
+    reset: [committed, validationPassed, validationFailed, cheapTrigger, slowTrigger,
+            cheapDone, slowDone, cheapPending, slowDiscarded]
+  Opt_RunCheap: {in: [cheapTrigger], out: cheapDone, node: cheap}
+  # Don't bother if cheap already won.
+  Opt_RunSlow: {in: [slowTrigger], out: slowDone, inhibit: [committed], node: slow}
+  # The validate node's route picks the branch.
+  Opt_Validate:
+    in: [cheapDone]
+    out:
+      xor:
+        pass: {and: [validationPassed, cheapPending]}
+        fail: {and: [validationFailed, cheapPending]}
+    node: validate
+  Opt_CommitCheap:
+    in: [validationPassed, cheapPending]
+    out: {and: [eventOut, committed]}
+    inhibit: [committed]
+    priority: 10
+    action: emit
+  Opt_CommitSlow:
+    in: [slowDone]
+    out: {and: [eventOut, committed]}
+    read: [validationFailed]
+    inhibit: [committed]
+    priority: 10
+    action: emit
+  Opt_DiscardSlow: {in: [slowDone], out: slowDiscarded, read: [committed], priority: -10}
+prove:
+  options:
+    initial_marking: {userIn: 1}
+    sinks: [eventOut, committed, slowDiscarded, validationPassed, validationFailed, cheapPending]
+    # slowTrigger is stranded by design once the cheap path commits (Opt_RunSlow
+    # is inhibited by committed: that is the cancellation).
+    sinks_when: {committed: [slowTrigger]}
+  claims:
+    - label: "one commit per turn: place_bound(COMMITTED, 1)"
+      place_bound: {place: committed, bound: 1}
+    - label: "validation verdicts exclusive: mutual_exclusion(PASSED, FAILED)"
+      mutual_exclusion: [validationPassed, validationFailed]
+    - deadlock_free

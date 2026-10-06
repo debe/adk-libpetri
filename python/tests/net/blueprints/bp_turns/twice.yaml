@@ -1,0 +1,19 @@
+# One PetriNet node, run by two transitions at once.
+agent_class: adk_libpetri.net.PetriNet
+name: twice_net
+nodes:
+  - [inner.yaml]
+  - [.agent.read, .agent.pre_b, .agent.join]
+places:
+  q1: {type: str}
+  q2: {type: str}
+  qb: {type: str}
+  ra: {type: str}
+  rb: {type: str}
+  eventOut: {type: str}
+transitions:
+  Twice_Read: {in: [userIn], out: {and: [q1, q2]}, node: read}
+  Twice_PreB: {in: [q2], out: qb, node: pre_b}
+  Twice_RunA: {in: [q1], out: ra, node: inner_net}
+  Twice_RunB: {in: [qb], out: rb, node: inner_net}
+  Twice_Join: {in: [ra, rb], out: eventOut, node: join}

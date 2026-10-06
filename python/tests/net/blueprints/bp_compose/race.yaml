@@ -1,0 +1,26 @@
+# A reusable race: a question in on one port, the first answer out on the other.
+agent_class: adk_libpetri.net.PetriNet
+name: two_way_race
+nodes:
+  - [.agent.quick]
+  - [.agent.careful]
+places:
+  question: {type: str}
+  answer: {type: str}
+  qa: {type: str}
+  qb: {type: str}
+  a: {type: str}
+  b: {type: str}
+  permit: {}
+  won: {}
+ports:
+  question: {direction: in}
+  answer: {direction: out}
+transitions:
+  Race_Start: {in: [question], out: {and: [qa, qb, permit]}, reset: [won, permit]}
+  Race_RunA: {in: [qa], out: a, inhibit: [won], node: quick}
+  Race_RunB: {in: [qb], out: b, inhibit: [won], node: careful}
+  Race_CommitA: {in: [a, permit], out: {and: [answer, won]}, priority: 10}
+  Race_CommitB: {in: [b, permit], out: {and: [answer, won]}, priority: 10}
+  Race_DiscardA: {in: [a], read: [won], priority: -10}
+  Race_DiscardB: {in: [b], read: [won], priority: -10}

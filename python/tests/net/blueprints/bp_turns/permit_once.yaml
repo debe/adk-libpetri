@@ -1,0 +1,14 @@
+# The permit is never given back: the second turn cannot be answered. One
+# turn is fine; deadlock_free, which covers two turns, is violated.
+agent_class: adk_libpetri.net.PetriNet
+name: permit_once
+places:
+  permit: {seed: 1}
+transitions:
+  Once_Answer: {in: [userIn, permit], out: eventOut, action: emit}
+prove:
+  claims:
+    - deadlock_free
+    - label: one turn
+      deadlock_free:
+      options: {initial_marking: {userIn: 1}}

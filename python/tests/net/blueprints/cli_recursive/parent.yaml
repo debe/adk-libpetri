@@ -1,0 +1,17 @@
+# Mounts child.yaml; verify --recursive also proves the child's own claims.
+agent_class: adk_libpetri.net.PetriNet
+name: cli_parent
+nodes:
+  - [child.yaml]
+  - [bp_compose.agent.text_of]
+places:
+  q: {type: str}
+subnets:
+  race: {net: child_race, bind: {question: q, answer: r}}
+transitions:
+  Parent_Read: {in: [userIn], out: q, node: text_of}
+  Parent_Emit: {in: [r], out: eventOut, action: emit}
+prove:
+  claims:
+    - place_bound: {place: eventOut, bound: 1}
+    - place_bound: {place: race/won, bound: 1}

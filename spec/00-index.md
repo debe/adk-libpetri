@@ -13,6 +13,7 @@ unless marked otherwise. Each port's tests cite the IDs they cover; the
 | [Session registry](05-registry.md) | REG | Java, Python |
 | [Verification](06-verification.md) | VER | Java, Python |
 | [Compiled workflows](07-workflow.md) | WF | Python |
+| [Net blueprints](08-blueprints.md) | NET | Python |
 
 ## Fixture format
 

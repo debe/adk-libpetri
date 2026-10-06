@@ -43,20 +43,18 @@ answers as ``ctx.resume_inputs``) is a *resume*: they go to the net's
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncGenerator, Iterable, Mapping
 from typing import Any
 
-from google.adk.workflow import BaseNode, Workflow
+from google.adk.workflow import Workflow
 from google.adk.workflow._graph import EdgeItem
 from pydantic import Field, PrivateAttr
 
 from .._aio import OrchestratorLoop
 from .._experimental import experimental
-from ..runner.petri_runner import PetriRunner
-from ..runner.session_key import SessionKey
+from .._net_node import NetNodeBase
+from ..runner.petri_runner import Builder, PetriRunner
 from ..runner.session_registry import SessionExecutorRegistry
-from ..runner.turn import abort_turns_on_failure, run_turn
 from .compiler import (
     INPUT,
     RESUME_IN,
@@ -69,11 +67,9 @@ from .compiler import (
 from .report import NotInterruptibleError
 from .tokens import Resumed
 
-_SCOPE = "adk_libpetri.workflow.turn_scope"
-
 
 @experimental
-class PetriWorkflow(BaseNode):
+class PetriWorkflow(NetNodeBase):
     rerun_on_resume: bool = True
 
     # Set from YAML (or by keyword): the Workflow to compile, and how.
@@ -87,9 +83,6 @@ class PetriWorkflow(BaseNode):
     multi_route: MultiRoute = "reject"
 
     _compiled: CompiledWorkflow = PrivateAttr()
-    _registry: SessionExecutorRegistry = PrivateAttr()
-    _orchestrator: OrchestratorLoop = PrivateAttr()
-    _event_store: Any = PrivateAttr(default=None)
 
     @classmethod
     def from_workflow(
@@ -135,10 +128,12 @@ class PetriWorkflow(BaseNode):
             output_schema=wf.output_schema,
         )
         node._compiled = compiled
-        node._registry = registry or SessionExecutorRegistry.strong_owned()
-        node._orchestrator = orchestrator
-        node._event_store = event_store
+        node._serve_on(orchestrator, registry, event_store)
         return node
+
+    def _net_spec(self) -> Any:
+        compiled = getattr(self, "_compiled", None)
+        return compiled.spec if compiled is not None else None
 
     def model_post_init(self, context: Any, /) -> None:
         super().model_post_init(context)
@@ -159,8 +154,7 @@ class PetriWorkflow(BaseNode):
             multi_route=self.multi_route,
             state=self.state,
         )
-        self._registry = SessionExecutorRegistry.strong_owned()
-        self._orchestrator = OrchestratorLoop.shared()
+        self._serve_on(OrchestratorLoop.shared())
 
     @classmethod
     def from_config(
@@ -185,9 +179,7 @@ class PetriWorkflow(BaseNode):
         if isinstance(node, PetriWorkflow):
             if compile_options:
                 raise TypeError("a PetriWorkflow YAML sets its compile options itself")
-            node._orchestrator = loop
-            node._registry = registry or node._registry
-            node._event_store = event_store
+            node._serve_on(loop, registry if registry is not None else node.registry, event_store)
             return node
         if not isinstance(node, Workflow):
             raise TypeError(
@@ -206,36 +198,22 @@ class PetriWorkflow(BaseNode):
     def compiled(self) -> CompiledWorkflow:
         return self._compiled
 
-    @property
-    def registry(self) -> SessionExecutorRegistry:
-        return self._registry
-
-    async def _start_runner(self, key: SessionKey) -> PetriRunner:
+    def _runner_builder(self, scope: TurnScope) -> Builder:
         compiled = self._compiled
-        scope = TurnScope()
         builder = (
             PetriRunner.builder(compiled.spec, compiled.actions(scope))
             .environment_place(INPUT)
             .initial_marking(compiled.initial_marking())
-            .orchestrator(self._orchestrator)
         )
         if compiled.spec.has_place(RESUME_IN):
             builder.environment_place(RESUME_IN)
         if self._event_store is not None:
             builder.event_store(self._event_store)
-        runner = await builder.astart()
-        runner.attachments[_SCOPE] = scope
-        return runner
+        return builder
 
     async def _run_impl(self, *, ctx: Any, node_input: Any) -> AsyncGenerator[Any, None]:
+        runner, scope = await self._open_turn(ctx)
         ic = ctx.get_invocation_context()
-        key = SessionKey.of(ic.session, scope=self.name)
-        runner = await self._registry.aget_or_create(key, self._start_runner)
-        abort_turns_on_failure(runner)
-        scope: TurnScope = runner.attachments[_SCOPE]
-        scope.ctx = ctx
-        scope.loop = asyncio.get_running_loop()
-        ctx.event_author = self.name
 
         resume_inputs = ctx.resume_inputs
         if resume_inputs:
@@ -260,32 +238,12 @@ class PetriWorkflow(BaseNode):
                 return runner.inject(INPUT, start)
 
         scope.result = None
-        async for _ in run_turn(
-            ic.invocation_id,
-            runner,
-            inject,
-            abort_signal=getattr(ic, "_abort_signal", None),
-        ):
+        async for _ in self._turn(ctx, runner, inject):
             pass  # the net's marker event; its result is on the scope
         result = scope.result
         if result is None:
             return  # aborted
-        if result.kind == "output":
-            # The terminal node ran with use_as_output, so its event is this
-            # node's output event already (Workflow._finalize does the same).
-            ctx.output = result.output
-            ctx._output_delegated = True
-        elif result.kind == "waiting":
-            ctx._interrupt_ids = set(result.interrupt_ids)
-        elif result.kind == "failed":
-            failure = result.failure
-            assert failure is not None
-            if failure.from_node and failure.error is not None:
-                # Its runner has recorded the error event: fail as Workflow does.
-                ctx._error = failure.error
-                ctx._error_node_path = failure.node_path
-            else:
-                raise failure.error or RuntimeError(failure.message)
+        self._settle(ctx, result)
         return
         yield  # an async generator, as BaseNode._run_impl must be
 

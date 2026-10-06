@@ -1,0 +1,34 @@
+# Inline nodes (an LlmAgent and a PetriNet, each inside a list) and a child
+# YAML in a subdirectory.
+agent_class: adk_libpetri.net.PetriNet
+name: inline_net
+nodes:
+  - [.agent.shout, .agent.unwrap]
+  - [sub/child.yaml]
+  - [{agent_class: LlmAgent, name: helper, model_code: {name: bp_inline.agent.LLM}, instruction: Be brief.}]
+  - - agent_class: adk_libpetri.net.PetriNet
+      name: inline_child
+      nodes:
+        - [.agent.to_note]
+      places:
+        q: {type: str}
+        r: {type: .agent.Note}
+      ports:
+        q: {direction: in}
+        r: {direction: out}
+      transitions:
+        Inline_Note: {in: [q], out: r, node: to_note}
+places:
+  shouted: {type: str}
+  tagged: {type: str}
+  noted: {type: .agent.Note}
+  plain: {type: str}
+  llm_out: {type: object}
+subnets:
+  tagger: {net: sub_child, bind: {q: shouted, r: tagged}}
+  noter: {net: inline_child, bind: {q: tagged, r: noted}}
+transitions:
+  Inline_Shout: {in: [userIn], out: shouted, node: shout}
+  Inline_Unwrap: {in: [noted], out: plain, node: unwrap}
+  Inline_Ask: {in: [plain], out: llm_out, node: helper}
+  Inline_Emit: {in: [llm_out], out: eventOut, action: emit}

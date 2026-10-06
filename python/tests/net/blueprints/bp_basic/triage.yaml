@@ -1,0 +1,26 @@
+# A route-labelled xor, an error branch, a move and an emit.
+agent_class: adk_libpetri.net.PetriNet
+name: triage_net
+nodes:
+  - [.agent.text_of, .agent.triage]
+  - [.agent.handle]
+  - [.agent.apologise]
+places:
+  question: {type: str}
+  urgent: {type: str}
+  later: {type: str}
+  failed: {type: NodeError}
+  answer: {type: str}
+transitions:
+  Triage_Read: {in: [userIn], out: question, node: text_of}
+  Triage_Route:
+    in: [question]
+    out: {xor: {urgent: urgent, default: later}}
+    node: triage
+  Triage_Handle:
+    in: [urgent]
+    out: {xor: {ok: answer, error: failed}}
+    node: handle
+  Triage_Later: {in: [later], out: answer}
+  Triage_Apologise: {in: [failed], out: answer, node: apologise}
+  Triage_Answer: {in: [answer], out: eventOut, action: emit}

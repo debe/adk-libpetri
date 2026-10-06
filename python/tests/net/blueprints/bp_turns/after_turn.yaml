@@ -1,0 +1,17 @@
+# A delayed node transition gives the permit back after the answer, when no
+# turn is open: its node runs in the next turn's invocation.
+agent_class: adk_libpetri.net.PetriNet
+name: after_turn
+nodes:
+  - [.agent.later_fn]
+places:
+  permit: {seed: 1}
+  later: {}
+  back: {type: str}
+transitions:
+  After_Answer: {in: [userIn, permit], out: {and: [eventOut, later]}, action: emit}
+  After_Later: {in: [later], out: back, timing: {delayed: 200}, node: later_fn}
+  After_Return: {in: [back], out: permit}
+prove:
+  options: {sinks: [eventOut, permit]}
+  claims: [deadlock_free, {place_bound: {place: permit, bound: 1}}]

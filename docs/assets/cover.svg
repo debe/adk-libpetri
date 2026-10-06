@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 344" width="860" height="344" role="img" aria-labelledby="cover-title">
+  <title id="cover-title">adk-libpetri: an ADK 2 Workflow, a YAML or JSON net, or code compiles into one Petri net, which Z3 proves before it runs and the stock ADK Runner then serves</title>
+  <!-- Intended display width: 860 px (1:1). Styles follow docs/assets/diagram-legend.svg
+       (grey = ADK or library component, yellow = the net, blue = your code, green = a proof).
+       A white card with no colour-scheme media query: inside an img element the media
+       query follows the OS, not the GitHub theme. -->
+  <style>
+    svg { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .bg { fill: #ffffff; stroke: #d0d7de; }
+    .title { font-size: 26px; font-weight: 700; fill: #1f2328; }
+    .sub { font-size: 14px; fill: #59636e; }
+    .head { font-size: 11.5px; font-weight: 700; letter-spacing: 1.5px; fill: #59636e; }
+    .t { font-size: 13.5px; font-weight: 600; fill: #1f2328; }
+    .m { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; fill: #424a53; }
+    .cap { font-size: 11.5px; fill: #59636e; }
+    .you { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1.2; }
+    .box { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1; }
+    .proof { fill: #dafbe1; stroke: #4ac26b; stroke-width: 1.2; }
+    .net { fill: #fff8e1; stroke: #b08800; stroke-width: 1.2; }
+    .arc { stroke: #1f2328; stroke-width: 1.3; fill: none; }
+    .place { fill: #ffffff; stroke: #1f2328; stroke-width: 1.3; }
+    .trans { fill: #fff1b8; stroke: #b08800; stroke-width: 1.2; }
+  </style>
+  <defs>
+    <marker id="cv-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path fill="#1f2328" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0.5" y="0.5" width="859" height="343" rx="8"/>
+  <text class="title" x="430" y="46" text-anchor="middle">adk-libpetri</text>
+  <text class="sub" x="430" y="70" text-anchor="middle">Compile ADK agents into Petri nets, prove them with Z3, run them on ADK</text>
+
+  <text class="head" x="140" y="104" text-anchor="middle">WRITE</text>
+  <text class="head" x="430" y="104" text-anchor="middle">COMPILE TO ONE NET</text>
+  <text class="head" x="712" y="104" text-anchor="middle">PROVE, THEN RUN</text>
+
+  <!-- WRITE: three ways in -->
+  <rect class="you" x="24" y="116" width="232" height="50" rx="6"/>
+  <text class="t" x="38" y="137">ADK 2 Workflow</text>
+  <text class="m" x="38" y="155">from_workflow(workflow)</text>
+
+  <rect class="you" x="24" y="176" width="232" height="50" rx="6"/>
+  <text class="t" x="38" y="197">YAML or JSON net</text>
+  <text class="m" x="38" y="215">agent_class: …net.PetriNet</text>
+
+  <rect class="you" x="24" y="236" width="232" height="50" rx="6"/>
+  <text class="t" x="38" y="257">Python or Java code</text>
+  <text class="m" x="38" y="275">NetSpec · PetriNet.builder</text>
+
+  <path class="arc" d="M256,141 C268,141 268,201 278,201" marker-end="url(#cv-m)"/>
+  <path class="arc" d="M256,201 L278,201" marker-end="url(#cv-m)"/>
+  <path class="arc" d="M256,261 C268,261 268,201 278,201" marker-end="url(#cv-m)"/>
+
+  <!-- COMPILE: a slice of Pattern A's race, drawn as the generated diagrams draw it -->
+  <rect class="net" x="282" y="116" width="296" height="170" rx="8"/>
+  <g font-family="Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle">
+    <path class="arc" d="M368,140 L384,140" marker-end="url(#cv-m)"/>
+    <path class="arc" d="M466,140 L484,140" marker-end="url(#cv-m)"/>
+    <path d="M530,152 C530,176 510,184 494,193" class="arc" marker-end="url(#cv-m)"/>
+    <path class="arc" d="M371,206 L382,206" marker-end="url(#cv-m)"/>
+    <path class="arc" d="M445,218 C445,236 360,240 346,250" marker-end="url(#cv-m)"/>
+    <path class="arc" d="M445,218 C445,236 500,240 514,250" marker-end="url(#cv-m)"/>
+    <ellipse cx="330" cy="140" rx="38" ry="12" fill="#f8d7da" stroke="#721c24" stroke-width="2" stroke-dasharray="4 2"/>
+    <text x="330" y="144" fill="#1f2328">userIn</text>
+    <rect x="386" y="128" width="80" height="24" fill="#fff3cd" stroke="#856404"/>
+    <text x="426" y="144" fill="#1f2328">Race_Start</text>
+    <ellipse cx="530" cy="140" rx="42" ry="12" fill="#ffffff" stroke="#333333" stroke-width="1.5"/>
+    <text x="530" y="144" fill="#1f2328">racePermit</text>
+    <ellipse cx="331" cy="206" rx="40" ry="12" fill="#ffffff" stroke="#333333" stroke-width="1.5"/>
+    <text x="331" y="210" fill="#1f2328">branchADone</text>
+    <rect x="384" y="194" width="122" height="24" fill="#fff3cd" stroke="#856404"/>
+    <text x="445" y="210" fill="#1f2328">Race_CommitA prio=10</text>
+    <ellipse cx="340" cy="262" rx="38" ry="12" fill="#ffffff" stroke="#333333" stroke-width="1.5"/>
+    <text x="340" y="266" fill="#1f2328">raceWon</text>
+    <ellipse cx="520" cy="262" rx="40" ry="13" fill="#cce5ff" stroke="#004085" stroke-width="2"/>
+    <ellipse cx="520" cy="262" rx="36" ry="9.5" fill="none" stroke="#004085" stroke-width="2"/>
+    <text x="520" y="266" fill="#1f2328">eventOut</text>
+  </g>
+  <text class="cap" x="430" y="304" text-anchor="middle">one net per session · Pattern A's commit, as the diagrams render it</text>
+
+  <path class="arc" d="M578,170 C588,170 586,141 594,141" marker-end="url(#cv-m)"/>
+  <path class="arc" d="M578,232 C588,232 586,261 594,261" marker-end="url(#cv-m)"/>
+
+  <!-- PROVE, THEN RUN -->
+  <rect class="proof" x="598" y="116" width="238" height="50" rx="6"/>
+  <text class="t" x="612" y="137">Z3, before it runs</text>
+  <text class="m" x="612" y="155">deadlock_free ✓  place_bound ✓</text>
+
+  <rect class="box" x="598" y="236" width="238" height="50" rx="6"/>
+  <text class="t" x="612" y="257">stock ADK Runner</text>
+  <text class="m" x="612" y="275">adk run · adk web · Runner(...)</text>
+
+  <path d="M717,166 L717,232" fill="none" stroke="#57606a" stroke-width="1.2" stroke-dasharray="5 3" marker-end="url(#cv-m)"/>
+  <text class="cap" x="726" y="204">proven nets run</text>
+
+  <text class="cap" x="24" y="330">Python · ADK 2.11   ·   Java · ADK 1.10   ·   no fork of ADK</text>
+  <text class="cap" x="836" y="330" text-anchor="end">an experiment, not a product</text>
+</svg>
