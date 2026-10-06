@@ -1,0 +1,29 @@
+agent_class: adk_libpetri.net.PetriNet
+name: race
+nodes: [[.agent.fast], [.agent.slow]]
+places:
+  triggerA: {}
+  triggerB: {}
+  done: {type: str}
+  permit: {}
+  won: {}
+  late: {type: str}
+transitions:
+  Race_Start: {in: [userIn], out: {and: [triggerA, triggerB, permit]}}
+  Race_RunA:  {in: [triggerA], out: done, inhibit: [won], node: fast}
+  Race_RunB:  {in: [triggerB], out: done, inhibit: [won], node: slow}
+  Race_Commit:
+    in: [done, permit]
+    out: {and: [eventOut, won]}
+    priority: 10
+    action: emit
+  Race_Drop:  {in: [done], out: late, read: [won], priority: -10}
+prove:
+  options:
+    initial_marking: {userIn: 1}
+    sinks: [eventOut, won, late]
+    sinks_when: {won: [triggerA, triggerB]}
+  claims:
+    - label: one answer per turn
+      place_bound: {place: eventOut, bound: 1}
+    - deadlock_free

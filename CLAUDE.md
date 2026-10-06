@@ -75,13 +75,16 @@ the nets the tests run (whole nets or named-transition views) into
 `docs/diagrams/dot/`; without
 `-Dreadme.diagrams.write=true` it is a golden check, and a drifted DOT
 file fails `mvn verify`. `python/tests/readme_diagrams` does the same for
-the Python-net diagrams (the compiled-workflow `workflow-*.dot` views):
-with `READMEDIAGRAMS_WRITE=1` it writes them, otherwise a drifted DOT file
-fails `pytest`. `npm run build` then writes the illustrative
-`dot/sketch-*.dot` files from `src/index.ts` and renders every DOT file
-to SVG. Only that last step needs Node.js 20 or later and graphviz
-`dot`; CI needs neither. Hand-drawn SVGs live in `docs/assets/`. Keep
-every diagram, the cover included, a white card with no
+the Python-net diagrams (the compiled-workflow `workflow-*.dot` views and
+the README hero's `hero-race.dot`, plus the hero's YAML copies and
+`adk-libpetri verify` excerpts in `docs/diagrams/hero/`): with
+`READMEDIAGRAMS_WRITE=1` it writes them, otherwise drift fails `pytest`.
+`npm run build` then writes the illustrative `dot/sketch-*.dot` files from
+`src/index.ts`, renders every DOT file to SVG, and composes the README's
+opening figure `svg/hero.svg` (`src/hero.ts`) from those generated files.
+Only that last step needs Node.js 20 or later and graphviz `dot`; CI needs
+neither. Hand-drawn SVGs live in `docs/assets/`. Keep every diagram a
+white card with no
 `prefers-color-scheme` block: inside `<img>` the media query follows the
 OS, not the GitHub theme.
 

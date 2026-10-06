@@ -23,6 +23,10 @@ its graph, and renders it again:
   as the Java views are (``ClusterSource.NONE``), so the subgraphs and their
   invisible ``ltail``/``lhead`` layout edges go.
 
+* **Free test arcs** (``Diagram.free_tests``, the hero only). Inhibitor and
+  read arcs get ``constraint=false``, so graphviz does not rank the
+  transition a test arc guards below the place it tests.
+
 Every diagram also gets ``bgcolor=white``, ``pad=0.15``, ``nodesep=0.3`` and
 12 pt edge labels.
 """
@@ -48,6 +52,9 @@ _ATTR = re.compile(r'([A-Za-z_]+)=("(?:[^"\\]|\\.)*"|[^,\s]+)')
 _SANITIZE = re.compile(r"[^A-Za-z0-9_]")
 
 Attrs = dict[str, str]
+_INHIBITOR = r'color="#dc3545".*arrowhead="odot"'
+_READ = r'color="#6c757d", style="dashed".*'
+_TEST_ARC = re.compile(rf"^(\s*\w+ -> \w+ \[(?:{_INHIBITOR}|{_READ}))\];$", re.M)
 
 
 def place_id(name: str) -> str:
@@ -86,6 +93,9 @@ class Diagram:
     view: tuple[str, ...]
     env: frozenset[str]
     seeds: Mapping[str, str]
+    # Leave inhibitor and read arcs out of the ranking (``constraint=false``),
+    # so a test arc does not push the transition it guards down the page.
+    free_tests: bool = False
 
 
 def _touched(t: TransitionSpec) -> list[str]:
@@ -127,7 +137,10 @@ def render(d: Diagram) -> str:
             environment_places=sorted(d.env),
         ),
     )
-    return _rewrite(d, raw, cut, seeds, noop)
+    dot = _rewrite(d, raw, cut, seeds, noop)
+    if d.free_tests:
+        dot = _TEST_ARC.sub(r"\1, constraint=false];", dot)
+    return dot
 
 
 def _rewrite(d: Diagram, raw: str, cut: set[str], seeds: Mapping[str, str], noop: set[str]) -> str:

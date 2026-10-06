@@ -5,24 +5,30 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 <!-- add PyPI badge at python/v0.1.0 -->
 
-<p align="center"><img src="docs/assets/cover.svg" alt="adk-libpetri: an ADK 2 Workflow, a YAML or JSON net, or code compiles into one Petri net, which Z3 proves before it runs and the stock ADK Runner then serves" width="860"></p>
-
 adk-libpetri compiles Google ADK agents into Coloured Time Petri nets, proves
-them with Z3 before they run, and runs them under ADK's own `Runner`. The
-runtime is [libpetri](https://github.com/debe/libpetri). Races, joins,
-cancellation, retries and loop bounds become places and arcs that a solver
-can check, not flags in callbacks.
+properties of them with Z3 before they run, and runs them under ADK's own
+`Runner` on the [libpetri](https://github.com/debe/libpetri) runtime. A race,
+a join, a cancellation, a retry and a loop bound each become places and arcs,
+which the solver can check.
+
+<p align="center"><img src="docs/diagrams/svg/hero.svg" alt="A Petri-net blueprint in ADK YAML, the net it builds, and adk-libpetri verify: both claims proven, and with the permit arc removed, a counterexample in which two branches both answer" width="980"></p>
+
+*A complete blueprint, the net it builds, and what `adk-libpetri verify`
+reports. Two branches race for one `permit`; the first to finish answers.
+Remove the red `permit` arc and Z3 finds the run in which both answer. All
+three panels are generated from the file.*
 
 In Python (ADK 2.11) there are three ways in:
 
-- **Compile an ADK 2 `Workflow`.** `from_workflow` turns the graph into a net,
-  proves it, and serves it as `PetriWorkflow`, a drop-in for
-  `Runner(node=workflow)`. 22 of ADK's 24 runnable workflow samples compile
-  and match ADK event for event.
+- **Compile an ADK 2 `Workflow`.** `from_workflow` turns the graph into a net
+  and proves it, and `PetriWorkflow` serves the net wherever
+  `Runner(node=workflow)` served the graph. 22 of ADK's 24 runnable workflow
+  samples compile and emit the same events as under ADK.
 - **Write the net in YAML or JSON.** `agent_class: adk_libpetri.net.PetriNet`
-  is an ADK agent config, so `adk run` and `adk web` serve it. A JSON Schema,
-  an authoring guide for agents, and `adk-libpetri check` / `verify` catch a
-  wrong net before it runs. Blueprints mount each other by file reference.
+  is an ADK agent config, so `adk run` and `adk web` serve it.
+  `adk-libpetri check` and `verify` catch a wrong net before it runs, and a
+  JSON Schema and an authoring guide help people and agents write one.
+  Blueprints mount each other by file reference.
 - **Compose it in code** from stock subnets (`LlmAgent`, `ToolDispatch`,
   `Router`, ...) and run it as a `PetriAgent`, an ordinary `BaseAgent`.
 
@@ -71,10 +77,10 @@ runner = InMemoryRunner(node=PetriWorkflow.from_compiled(compiled, orchestrator=
 ```
 
 `agent_class: adk_libpetri.workflow.PetriWorkflow` with a Workflow's `edges:`
-does the same from `root_agent.yaml`. Each ADK node still runs through ADK's
-own node runner, inside the invocation; the net takes over the scheduling
-(triggers, routes, joins, retries, concurrency, interrupts, the turn) and with
-it the claims Z3 can prove:
+does the same from `root_agent.yaml`. The net schedules the work (triggers,
+routes, joins, retries, concurrency, interrupts, the turn), and each ADK node
+still runs through ADK's own node runner inside the invocation. Z3 proves
+these claims about the schedule:
 
 | Claim | ADK's `Workflow` | Compiled net |
 |---|---|---|
@@ -86,10 +92,11 @@ it the claims Z3 can prove:
 | a loop is bounded | no bound | opt-in `back_edge_budget` ([ADR 0007](docs/adr/0007-compiled-workflow-back-edge-budgets.md)) |
 | route coverage (a lint) | logs, ends the branch | `unreachable(wf/<node>/unmatched)` |
 
-A retry is a loop of places with a timed backoff transition at ADK's delay;
-the proofs fold it into its run, which is sound and as cheap as no retry. A
-cycle without a budget compiles and is reported as approximated: safety and
-deadlock freedom are provable, termination is not. `back_edge_budget={(a, b):
+A retry is a loop of places with a timed backoff transition at ADK's delay.
+The proofs fold each loop into its run; the folding is sound and costs no
+more than a node without retries. A cycle without a budget compiles, and the
+report marks it approximated: safety and deadlock freedom are provable, and
+termination is open. `back_edge_budget={(a, b):
 K}` routes the edge through K permits, and a fallback transition fails the run
 with `LoopBudgetExhausted` once they are spent. It is the
 [reask-budget](#g2-bounded-autonomous-loops-reask-budget) shape:
@@ -103,8 +110,8 @@ run natively and compiled with a scripted model, compared event by event
 `run_async` raises). 22 compile and match, 10 of them with
 `state="legacy_read"` because they read session state. 2 use `mode='task'`
 agents and are rejected. One gap is open: a resumable app gets no
-`agent_state` checkpoints from the compiled node. What the compiler cannot
-translate faithfully it rejects; what it approximates it reports.
+`agent_state` checkpoints from the compiled node. The compiler rejects what it
+cannot translate faithfully and reports what it approximates.
 
 <details><summary>The compiled router sample, as a net</summary>
 
@@ -117,56 +124,12 @@ the two turn endings and omits the abort, empty, failed and two-output ones.*
 
 ### Write the net in YAML or JSON
 
-A Workflow cannot say what a net says: a race with one winner, a quorum, a
-permit, an inhibitor fallback. A `PetriNet` blueprint writes the net itself,
-in the ADK agent config format people and ADK's Agent Builder Assistant
-already write. Pattern A's race, with branch A shown and B and C elided:
-
-```yaml
-# root_agent.yaml
-agent_class: adk_libpetri.net.PetriNet
-name: race_agent
-nodes: [[.agent.fast], [.agent.medium], [.agent.slow]]   # ADK nodes, resolved by ADK's loader
-places:
-  triggerA: {}                                           # no type: a unit place
-  branchADone: {type: .agent.BranchResult}
-  racePermit: {}
-  raceWon: {}
-  raceDiscarded: {type: .agent.BranchResult}
-  # ... triggerB, triggerC, branchBDone, branchCDone
-transitions:
-  Race_Start:      {in: [userIn], out: {and: [triggerA, triggerB, triggerC, racePermit]},
-                    reset: [racePermit, raceWon, triggerA, triggerB, triggerC,
-                            branchADone, branchBDone, branchCDone, raceDiscarded]}
-  Race_RunBranchA: {in: [triggerA], out: branchADone, inhibit: [raceWon], node: fast}
-  Race_CommitA:    {in: [branchADone, racePermit], out: {and: [eventOut, raceWon]}, priority: 10, action: emit}
-  Race_DiscardA:   {in: [branchADone], out: raceDiscarded, read: [raceWon], priority: -10}
-  # ... the same three for B (node: medium) and C (node: slow)
-prove:
-  options: {initial_marking: {userIn: 1}, sinks: [eventOut, raceWon, raceDiscarded],
-            sinks_when: {raceWon: [triggerA, triggerB, triggerC]}}
-  claims:
-    - {label: "one commit per turn: place_bound(RACE_WON, 1)", place_bound: {place: raceWon, bound: 1}}
-    - {label: "one egress event per turn: place_bound(EVENT_OUT, 1)", place_bound: {place: eventOut, bound: 1}}
-    - deadlock_free
-    # ... and the permit claim over two turns
-```
-
-```text
-$ adk-libpetri verify root_agent.yaml
-PROVEN   one commit per turn: place_bound(RACE_WON, 1)  [place_bound]
-PROVEN   one egress event per turn: place_bound(EVENT_OUT, 1)  [place_bound]
-PROVEN   deadlock_free  [deadlock_free]
-PROVEN   permit never stacks: place_bound(RACE_PERMIT, 1)  [place_bound]
-4 proven, 0 violated, 0 unknown
-```
-
-The full file is
-[`yaml_race/root_agent.yaml`](python/tests/demos/patterns/yaml/yaml_race/root_agent.yaml).
-It builds the same net, place for place and arc for arc, as the hand-written
-Pattern A, which the diagrams render like this:
-
-<p align="center"><img src="docs/diagrams/svg/speculative-race.svg" alt="Speculative race exported from PatternA: Race_Start resets the per-turn places and mints racePermit; three RunBranch transitions, inhibited by raceWon; each Commit consumes racePermit and marks raceWon; Discard transitions read raceWon and drain to raceDiscarded" width="640"></p>
+A `Workflow` has no way to express a race with one winner, a quorum, a permit
+or an inhibitor fallback. A `PetriNet` blueprint writes the net itself, in
+the agent config format that people and ADK's Agent Builder Assistant already
+write; the figure at the top is a complete one. The YAML twins of Patterns A,
+B and C ([`demos/patterns/yaml`](python/tests/demos/patterns/yaml)) build the
+same nets as the hand-written demos and pass the same tests and proofs.
 
 - **The turn** is `PetriAgent`'s: the input lands on `userIn`, and the first
   token on `eventOut` answers. A `node:` transition runs its ADK node inside
@@ -186,8 +149,8 @@ Pattern A, which the diagrams render like this:
   [`net/schema.json`](python/src/adk_libpetri/net/schema.json) and the guide
   for agents is [`net/AUTHORING.md`](python/src/adk_libpetri/net/AUTHORING.md).
 
-The proofs are structural and untimed, with every xor a free choice, so a
-claim holds whatever the nodes return. By default inputs arrive turn by turn:
+The proofs are structural and untimed, and they treat every xor as a free
+choice, so a claim holds for any value a node returns. By default inputs arrive turn by turn:
 a safety claim covers one turn, `deadlock_free` two. The design is
 [ADR 0008](docs/adr/0008-petri-net-blueprints.md); the format is in
 [`python/README.md`](python/README.md#3-write-the-net-in-yaml-petrinet).
@@ -218,9 +181,8 @@ runner = InMemoryRunner(agent=PetriAgent.builder("my_agent", registry, start).bu
 # session-end hook: await registry.aclose(SessionKey.of(session))
 ```
 
-This agent carries [G1](#g1-one-turn-at-a-time-and-no-stranded-turn) and
-[G2](#g2-bounded-autonomous-loops-reask-budget), proved in CI for the
-`LlmAgent` subnet.
+CI proves [G1](#g1-one-turn-at-a-time-and-no-stranded-turn) and
+[G2](#g2-bounded-autonomous-loops-reask-budget) for this subnet.
 
 ## Java
 
@@ -283,42 +245,41 @@ behaviour), **Proven, no foil**, **Behavioural + foil**, **Behavioural**
 | [Voice composition deadlock-free](#g6-full-duplex-vad-barge-in-chunk-drop-ordering-experimental) | Env places modelled `bounded(1)` | No counterpart | Proven, no foil | `deadlock_free` only |
 | [VAD edges recovered](#g6-full-duplex-vad-barge-in-chunk-drop-ordering-experimental) | `VadTapGemini` plus the `Vad` window | ADK Java 1.10.1 maps them to an error | Behavioural + foil | Java only; ADK Python keeps the edges |
 | [Compiled workflow safety](#compile-a-workflow) | Turn permit, idle place per node, terminal-conflict place | Raises at finalize; ends the branch on an unmatched route | Proven, no foil | Python only |
-| [Blueprint claims](#write-the-net-in-yaml-or-json) | Whatever the YAML's `prove:` states | No counterpart | Proven, no foil | Python only; per the claim's printed scope |
+| [Blueprint claims](#write-the-net-in-yaml-or-json) | The claims in `prove:` | No counterpart | Proven, no foil | Python only; per the claim's printed scope |
 
 Unless a row says otherwise, both ports run the same proof.
 
 ## Why a Petri net
 
-ADK Java builds an agent process as a tree of sequences, with concurrency
-layered on at run time over RxJava. ADK Python 2 replaced that tree with a
-graph `Workflow`, which concedes that nested sequence and parallel shapes are
-too narrow for a concurrent process. A Coloured Time Petri net goes further:
+ADK Java builds an agent process as a tree of sequences and runs its
+concurrency on RxJava. ADK Python 2 replaced the tree with a graph
+`Workflow`, because nested sequence and parallel shapes cannot hold a
+concurrent process. A Coloured Time Petri net goes further:
 
-- **Concurrency is the default.** Transitions with disjoint inputs fire
-  independently.
-- **Loops are cycles; a join is one transition with several inputs; a branch
-  is an XOR output.** The diagram is the behaviour.
-- **Inhibitor, read and reset arcs, and time, are first-class.** "Fire only if
-  X is absent", "read without consuming", "fire after 3 s of silence" and
-  "clear this region" are arcs, not guard code.
-- **The marking is the state.** Tokens carry typed colours (`LlmRequest`,
-  `Content`, `ToolCalls`); no external state object races against itself.
+- Transitions with disjoint inputs fire concurrently.
+- A loop is a cycle, a join is one transition with several inputs, and a
+  branch is an XOR output, so the diagram shows the behaviour.
+- Inhibitor, read and reset arcs and timings state "fire only while X is
+  empty", "read without consuming", "fire after 3 s of silence" and "clear
+  this region" in the net itself.
+- The marking is the state. Tokens carry typed colours (`LlmRequest`,
+  `Content`, `ToolCalls`), and no external state object can race against
+  itself.
 
-On the axes that decide orchestration correctness, a net is a superset of
-the graph: a transition with several input places is an AND-join, a shared
-place feeding competing transitions is a race, and exclusion, bounded loops
-and pre-emption are arcs and priorities. The difference is *when* correctness
-is established: a graph runtime tracks its state at run time, while a net's
-properties are proved before it runs. A plain graph is simpler to write for a
-linear flow; where ordering, exclusion and cancellation matter, the net keeps
-a verifiable model inside the ADK contract.
+A net expresses everything a graph `Workflow` does: a transition with several
+input places is an AND-join, and a shared place that feeds competing
+transitions is a race. Exclusion, bounded loops and pre-emption are arcs and
+priorities. A graph runtime learns its state while it runs; a net's
+properties can be proved before it runs. For a linear flow a plain graph is
+simpler to write. Where ordering, exclusion or cancellation matter, the net
+gives you a model to check, and it still runs under ADK.
 
 ADK supplies what libpetri alone lacks: sessions and session services, the
 `Content`/`Event` wire protocol shared with the Gemini API, and `BaseTool`
 with its MCP adapters. ADK's evaluator and the deploy targets behind
-`BaseAgent` (A2A, Vertex Agent Engine, Cloud Run) should work too; no test
-here exercises them. A project
-that needs none of that can drive libpetri directly.
+`BaseAgent` (A2A, Vertex Agent Engine, Cloud Run) should work too, though no
+test here exercises them. A project that needs none of this can drive
+libpetri directly.
 
 ## Guarantees
 
@@ -342,7 +303,7 @@ both. Sketches are marked Illustrative.
   Green: no producer in the view. Blue, double outline: no consumer. Dotted
   grey: continues outside the view.
 - `●` marks a place seeded with one token; `●×K` a place one firing fills with
-  K tokens (the proofs bound such firings, not tokens).
+  K tokens (the proofs count such firings).
 - Boxes are transitions. `prio=N` ranks enabled transitions; `[3000, ∞]ms` is
   a firing window, shown on timed diagrams only.
 - ✚ sends a token to every branch, ✕ to exactly one. On an input arc, `×3`
@@ -381,9 +342,9 @@ Python's `Workflow` does not model it either.
   input landing in one pass would let `StartTurn` take the permit and
   `AbortTurn` wipe the fresh turn.
 
-The permit is a seeded token, not an inhibitor on `TURN_ACTIVE`: the verifier
-lets an inhibitor-guarded transition start twice from one marking, so
-exclusion needs a token both contenders consume (ADR 0005).
+The permit is a seeded token because the verifier lets an inhibitor-guarded
+transition start twice from one marking; exclusion needs a token that both
+contenders consume (ADR 0005).
 
 <p align="center"><img src="docs/diagrams/svg/llm-agent-turn-shell.svg" alt="LlmAgent turn shell exported from LlmAgentSubnet: StartTurn takes userIn and the seeded turnPermit and marks turnActive; BuildPrompt builds the request; EmitAnswer and EmitTransfer consume turnActive and return the permit; AbortTurn consumes turnAbort and turnActive, resets the turn's places and returns the permit; DropAbort reads the permit and drops a stray turnAbort" width="860"></p>
 
@@ -392,16 +353,16 @@ one budget seed, one permit however aborts arrive, one outcome per input, and
 recovery from a failure at any step.
 
 **Limits.** The permit serialises turns but does not stamp them (N1). A second
-input waits in `USER_IN` and is not coalesced. What an abort does to the late
-output of an action still running is not covered (ADR 0005).
+input waits in `USER_IN` for the next turn. ADR 0005 leaves open what an
+abort does to the late output of an action still running.
 
 ### G2 Bounded autonomous loops (reask budget)
 
 **Status: Proven, no foil.**
 
 **ADK side.** `BaseLlmFlow` re-asks the model until an event is final. Its
-only cap, `RunConfig.maxLlmCalls` (`max_llm_calls`), raises once exceeded: it
-fails the invocation instead of answering.
+only cap, `RunConfig.maxLlmCalls` (`max_llm_calls`), raises once exceeded, so
+the invocation fails and the user gets no answer.
 
 **Net.** `LlmAgent_BuildPrompt` fills `REASK_BUDGET` with K tokens.
 `LlmAgent_ReAsk` (priority 10) spends one per tool round, so it fires at most
@@ -414,8 +375,8 @@ budget is empty. K is `reaskBudget` / `reask_budget` (default 3).
 **Proved.** `budgetPlaceBounded(REASK_BUDGET, 1)`: the budget never holds a
 second turn's seed ([How to read the proofs](#how-to-read-the-proofs)).
 
-**Limits.** The budget bounds autonomous runaway, not loops in general: the
-LLM-and-tool loop, and in Python a workflow back edge the caller budgets
+**Limits.** The budget bounds autonomous runaway only: the LLM-and-tool loop,
+and in Python a workflow back edge the caller budgets
 ([ADR 0007](docs/adr/0007-compiled-workflow-back-edge-budgets.md)).
 
 ### G3 Typed fallbacks: no dead letters
@@ -439,8 +400,8 @@ Every token has a consumer.
 
 **Proved.** k transfers reach exactly k outcomes; the multi-agent demo net is
 deadlock-free with one event per turn (`MultiAgentDemoTest`), and
-`hallucinated_agent_name_surfaces_as_typed_error_event_not_npe` drives the
-error end to end through `InMemoryRunner`.
+`hallucinated_agent_name_surfaces_as_typed_error_event_not_npe` runs the typed
+error through `InMemoryRunner`.
 
 **Limits.** The target set is fixed when the net is built.
 
@@ -458,8 +419,7 @@ successor fires once per branch, and losers are not cancelled
 
 **Net.** Each pattern commits through one structural gate.
 
-- **A, first wins** (`PatternA_SpeculativeRaceDemoTest`, diagram
-  [above](#write-the-net-in-yaml-or-json)). `Race_Start` mints one
+- **A, first wins** (`PatternA_SpeculativeRaceDemoTest`). `Race_Start` mints one
   `RACE_PERMIT`; each `Race_Commit*` consumes it. Unstarted branches are held
   off by `inhibitor(RACE_WON)`; a branch in flight finishes and drains through
   `Race_Discard*`. The gate is a consumed permit because an inhibitor reads
@@ -470,6 +430,8 @@ successor fires once per branch, and losers are not cancelled
 - **C, preference plus fallback** (`PatternC_OptimisticCommitDemoTest`). Cheap
   and slow paths start together; `Opt_Validate` XOR-routes to a verdict, and
   `Opt_CommitCheap` or `Opt_CommitSlow` commits.
+
+<p align="center"><img src="docs/diagrams/svg/speculative-race.svg" alt="Speculative race exported from PatternA: Race_Start resets the per-turn places and mints racePermit; three RunBranch transitions, inhibited by raceWon; each Commit consumes racePermit and marks raceWon; Discard transitions read raceWon and drain to raceDiscarded" width="760"></p>
 
 <p align="center"><img src="docs/diagrams/svg/quorum.svg" alt="Quorum exported from PatternB: Quorum_Start fans out to five branches that feed quorumResult; Quorum_Synthesize consumes exactly three results; Quorum_AbsorbLate reads quorumMet and drains late results to quorumDiscarded" width="860"></p>
 
@@ -642,7 +604,7 @@ Add your own colours for in-net state, one typed place per concept, never a
 
 ### Stock subnets
 
-Templates, not the framework: you compose your own. Each is a `SubnetDef`
+Starting points for your own compositions. Each is a `SubnetDef`
 (Java) or a module with `DEF: NetSpec` and `action_bindings(...)` (Python);
 `NetSpec.build` and `SubnetActions.bindComposed` reject a missing, unknown or
 doubly bound action.
@@ -660,7 +622,7 @@ doubly bound action.
 | `StreamingLlmAgent` *(exp.)* | `USER_IN`, `TURN_ABORT` | `EVENT_OUT`, `TRANSFER` | `LlmAgent` over `LlmStreamingStep` |
 
 The voice subnets (`BargeIn`, `LiveApiRecovery`, `Vad`) are test-scope
-exemplars under `demos/voice/`, not library code.
+exemplars under `demos/voice/`; the library does not ship them.
 `RawProviderPassthroughDemoTest` shows a provider feature ADK does not model
 yet, reached with one typed place and one transition.
 
@@ -739,8 +701,7 @@ language's conventions (`strongOwned` / `strong_owned`). Java's
 
 ## Design commitments
 
-Each exists to make a class of bug impossible to write, not merely
-discouraged.
+Each one rules out a class of bug by construction.
 
 1. **Interaction is env-place injection only.** A user message, a scroll
    event, a webhook or an audio frame enters through `inject` on its own
@@ -761,10 +722,10 @@ discouraged.
 6. **Autonomous loops are bounded structurally**, by the
    [reask-budget pattern](#g2-bounded-autonomous-loops-reask-budget): the
    LLM-and-tool loop and, in Python, a workflow back edge the caller budgets.
-   It is not a generic loop bound.
-7. **Stock subnets are templates, not the framework.** The framework is the
-   composition primitives: `compose` and `SubnetDef.fromNet` in Java,
-   `NetSpec.compose` and blueprints in Python.
+   Other loops need bounds of their own.
+7. **The framework is the composition primitives**: `compose` and
+   `SubnetDef.fromNet` in Java, `NetSpec.compose` and blueprints in Python.
+   Stock subnets are starting points.
 8. **Per-session runner lifetime is caller-owned.** Every registry mode has a
    teardown route; the library holds no shared executor.
 
@@ -816,7 +777,8 @@ Structural validators (`AdkNetInvariants`, `adk_libpetri.verify`) need no
 solver: `singleLegacySessionWriter`, `transferDemuxHasUnknownFallback` and
 `endInvocationInhibitsAll`. Java's state-class graph of the composed BIDI
 subnets completes from one request; Python, without that binding, proves the
-same composition one-bounded with SMT. Timing claims are clock tests, not Z3.
+same composition one-bounded with SMT. The verifier is untimed; clock tests
+check the timing claims.
 
 ### When the proofs caught us
 
@@ -841,8 +803,8 @@ same composition one-bounded with SMT. Timing claims are clock tests, not Z3.
 ## Project status
 
 Early-stage, versioned **0.x**: a minor release may break API. The runtime,
-the stock subnets and the proved demos pass on every build; the shape of the
-ADK seam is still being found. Settled: the turn-based path (`PetriAgent`,
+the stock subnets and the proved demos pass on every build, and the boundary
+between the net and ADK is still moving. Settled: the turn-based path (`PetriAgent`,
 the non-streaming subnets, `SessionExecutorRegistry`). Experimental, and
 marked so in source: SSE, BIDI/live, checkpoints, `from_workflow` and
 blueprints.
@@ -878,8 +840,8 @@ cd java && ./mvnw verify          # the SMT tests need z3 4.8+ on PATH or LIBPET
   [ADR 0002](docs/adr/0002-adk-version-compat.md) for Java,
   [ADR 0006](docs/adr/0006-python-port-and-adk-python-compat.md) for Python.
 
-adk-libpetri is a sibling of [libpetri](https://github.com/debe/libpetri), not
-a fork, and each port uses the matching libpetri port. Python's libpetri is a
+adk-libpetri is a sibling project of [libpetri](https://github.com/debe/libpetri),
+and each port uses the matching libpetri port. Python's libpetri is a
 binding over the Rust runtime, which may start a transition again while an
 earlier firing is in flight. The design principles (env-place interaction,
 typed colours, marking as state, `EventStore` observability) come from

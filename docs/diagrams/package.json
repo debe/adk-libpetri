@@ -7,7 +7,8 @@
   "scripts": {
     "sketches": "tsx src/index.ts",
     "render": "mkdir -p svg && for f in dot/*.dot; do dot -Tsvg \"$f\" -o \"svg/$(basename \"$f\" .dot).svg\" || exit 1; done",
-    "build": "npm run sketches && npm run render"
+    "build": "npm run sketches && npm run render && npm run hero",
+    "hero": "tsx src/hero.ts"
   },
   "dependencies": {
     "libpetri": "^2.5.0"

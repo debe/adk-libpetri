@@ -41,7 +41,7 @@ arc to a place no transition produces. Each Java and Python export
 starts with a `// GENERATED` header naming its source; do not edit it,
 or a sketch DOT, by hand.
 
-Hand-drawn SVGs (the cover, the legend, the runner seam, ingress and
+Hand-drawn SVGs (the legend, the runner seam, ingress and
 egress, the BIDI halves, the repository layout) live in `docs/assets/`,
 not here.
 
@@ -58,8 +58,10 @@ cd ../docs/diagrams && npm install && npm run build
 The first two steps rewrite the Java and Python exports in `dot/` (the
 Python step runs in the `python/` venv); skip the one whose port you
 did not touch. `npm run build` runs `sketches`
-(writes `dot/sketch-*.dot`) and then `render`, which runs graphviz
-`dot -Tsvg` over every `dot/*.dot` into `svg/`. Both directories are
+(writes `dot/sketch-*.dot`), then `render`, which runs graphviz
+`dot -Tsvg` over every `dot/*.dot` into `svg/`, then `hero`, which
+composes `svg/hero.svg` from the hero blueprint, its rendered net and the
+`adk-libpetri verify` output the Python step wrote to `hero/`. Both directories are
 checked in, so a reader on GitHub sees the diagrams without running
 anything. When a diagram is removed, delete its `.dot` and its `.svg`.
 
@@ -77,12 +79,14 @@ Section names are the root README's headings.
 
 | File | Source | Embedded in (root README) |
 |---|---|---|
+| `hero` | `src/hero.ts`, composed from `hero/race.yaml`, `svg/hero-race.svg` and `hero/verify-*.txt` | the opening figure |
+| `hero-race` | Python, `python/tests/readme_diagrams/hero/race.yaml`, the whole net, inhibitor and read arcs left out of the ranking | inside `hero` |
 | `workflow-router` | Python, `compile_workflow(samples.router())`, view: `Wf_Start`, `Wf_classify_Run`, `Wf_handle_bug_Run`, `Wf_handle_other_Run`, `Wf_EndTurnOutput` | Quick start (Python) › Compile a Workflow (collapsed) |
 | `workflow-back-edge-budget` | Python, `compile_workflow(samples.looping(), back_edge_budget={('counter', 'counter'): 3})`, view: `Wf_Start`, `Wf_counter_Run`, `Wf_Edge_counter_counter`, `Wf_Edge_counter_counter_Exhausted`, `Wf_finish_Run` | Quick start (Python) › Compile a Workflow |
 | `llm-agent-turn-shell` | Java view of `LlmAgentSubnet.DEF`: StartTurn, BuildPrompt, EmitAnswer, EmitTransfer, AbortTurn, DropAbort | G1 One turn at a time, and no stranded turn |
 | `reask-budget` | Java view of `LlmAgentSubnet.DEF`: BuildPrompt, ReAsk, ReAskExhaustedFallback, EmitAnswer | G2 Bounded autonomous loops (reask budget) |
 | `transfer-router` | Java, `TransferRouterSubnet.def` with `billing` and `tech_support` | G3 Typed fallbacks: no dead letters |
-| `speculative-race` | Java, `PatternA_SpeculativeRaceDemoTest.buildNet()` | Quick start (Python) › Write the net in YAML or JSON (the YAML twin builds the same net) |
+| `speculative-race` | Java, `PatternA_SpeculativeRaceDemoTest.buildNet()` | G4 At most one commit per turn: race, optimistic commit, quorum |
 | `quorum` | Java, `PatternB_QuorumDemoTest.buildNet()` | G4 At most one commit per turn: race, optimistic commit, quorum |
 | `optimistic-commit` | Java, `PatternC_OptimisticCommitDemoTest.buildNet()` | G4 At most one commit per turn: race, optimistic commit, quorum (collapsed) |
 | `escalation-ladder` | Java, `LiveApiRecoverySubnet.def(Config.defaults())` composed into a net, timing shown, one cluster | G5 Escalation ladders: timed recovery as places |
