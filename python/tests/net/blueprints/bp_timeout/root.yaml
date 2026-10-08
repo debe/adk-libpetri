@@ -1,0 +1,21 @@
+# The answer comes from a timeout branch; another transition completes after it.
+agent_class: adk_libpetri.net.PetriNet
+name: timeout_net
+nodes: [[.agent.slow], [.agent.medium]]
+places:
+  a: {}
+  b: {}
+  late: {type: str}
+  other: {type: str}
+transitions:
+  To_Start:
+    in: [userIn]
+    out: {and: [a, b]}
+  To_Slow:
+    in: [a]
+    node: slow
+    out: {xor: [late, {timeout: 50, child: eventOut}]}
+  To_Medium:
+    in: [b]
+    node: medium
+    out: other

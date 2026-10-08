@@ -68,6 +68,18 @@ async def session(node: Any, app_name: str = "app") -> Session:
     return Session(runner, s.id)
 
 
+def answers(events: list[Event], net: str) -> list[Event]:
+    """The net's own answer events: emitted under the transition that answered
+    (``<net>@1/<Transition>@1``), the net's output (``output_for`` names the net)."""
+    path = f"{net}@1"
+    return [
+        e
+        for e in events
+        if e.node_info.path == path
+        or (path in (e.node_info.output_for or []) and e.node_info.path.startswith(path + "/"))
+    ]
+
+
 def text_of(e: Event) -> str:
     if e.content is None or not e.content.parts:
         return ""

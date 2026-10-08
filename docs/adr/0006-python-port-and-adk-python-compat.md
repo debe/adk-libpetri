@@ -137,7 +137,10 @@ compiled) and must be re-read in `workflow/_workflow.py` and `_graph.py`:
   node path (`runners.py`, `run_async`);
 - `Runner.run` (sync) creates a loop per call;
 - `GeminiLlmConnection.receive` forwards voice activity;
-- ADK's transfer resolution falls back to `root_agent.find_agent`.
+- ADK's transfer resolution falls back to `root_agent.find_agent`;
+- the web UI seams `adk-libpetri web` uses (the duck-typed `graph` field, the
+  builder assistant's name and tools, `get_fast_api_app(agent_loader=)`): see
+  [ADR 0009](0009-web-ui-and-builder-assistant.md#re-check-on-an-adk-bump).
 
 ## Re-check procedure
 

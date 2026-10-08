@@ -60,11 +60,15 @@ class NetRun:
     """The marking after the drained runner came to rest."""
 
     def answer(self) -> tuple[Event, float]:
-        """The net's own event (path ``<name>@1``, not a node run's) and when it came."""
+        """The net's own event and when it came: the net's output, emitted under the
+        transition that answered (``<name>@1/<Transition>@1``), not a node run's."""
+        own = f"{self.node.name}@1"
+        answering = {t.split("/", 1)[0] for t in self.node.spec.transition_names}
         [(event, at)] = [
             (e, t)
             for e, t in zip(self.events, self.at, strict=True)
-            if e.node_info.path == f"{self.node.name}@1"
+            if e.node_info.path.startswith(own + "/")
+            and e.node_info.path.removeprefix(own + "/").split("@")[0] in answering
         ]
         return event, at
 

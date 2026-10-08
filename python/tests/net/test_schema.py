@@ -13,7 +13,7 @@ from jsonschema import Draft202012Validator
 
 from adk_libpetri.net import BlueprintError, parse_blueprint
 from adk_libpetri.net import blueprint as B
-from adk_libpetri.net.node import PetriNet
+from adk_libpetri.net.node import _DERIVED, PetriNet
 
 from .conftest import BLUEPRINTS
 
@@ -146,7 +146,8 @@ def test_the_loader_rejects_what_the_schema_rejects(data: dict[str, Any]) -> Non
 def test_the_schema_names_every_key_the_loader_accepts() -> None:
     props = SCHEMA["properties"]
     defs = SCHEMA["$defs"]
-    assert set(PetriNet.model_fields) | {"agent_class"} == set(props)
+    # A derived field (graph) is one the loader rejects.
+    assert (set(PetriNet.model_fields) - set(_DERIVED)) | {"agent_class"} == set(props)
     assert set(B.TOP_KEYS) <= set(props)
     assert set(B._TRANSITION_KEYS) == set(defs["transition"]["properties"])
     assert set(B._OPTION_KEYS) == set(defs["proofOptions"]["properties"])

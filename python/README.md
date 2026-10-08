@@ -290,7 +290,10 @@ adk-libpetri check root_agent.yaml                     # parse and build, no Z3
 adk-libpetri verify root_agent.yaml --k 2 --recursive  # run prove:, children's too
 ```
 
-`verify` prints each claim's verdict and exits nonzero on a violated claim.
+`verify` prints each claim's verdict and exits nonzero on a violated or
+unknown claim;
+`--json` prints the verdicts as data, a violated claim's counterexample
+included.
 `PetriNet.verify(k=2)` returns the same verdicts in Python. The proofs are on the net's
 structure, untimed, with every xor a free choice, so a claim holds whatever
 the nodes return. By default the user's inputs come turn by turn, the next
@@ -299,6 +302,65 @@ two, and `--k` sets the number for both. Safety claims also let `turnAbort`
 and every `env:` place arrive; `deadlock_free` covers runs where nothing
 fails. Running a `{timeout: ...}` output is broken in libpetri-py
 for now (ADR 0008).
+
+### In ADK's web UI
+
+```bash
+adk-libpetri web agents/        # ADK dev UI: http://127.0.0.1:8000/dev-ui/
+```
+
+This is ADK's own dev UI, used as you use it today; nothing in it is
+patched. The server answers the UI's own requests with Petri-aware data:
+
+- **The graph panel** (Info, and the fullscreen "Agent Structure") draws
+  the net as a Petri net in the UI's light or dark theme: places with their
+  seed tokens, transitions with what they run, inhibitor and read arcs. Mounted
+  blueprints are clusters and a stock subnet is one node; in a net of more
+  than 15 places each mounted blueprint is one node too, and clicking it in
+  "Agent Structure" opens it (a stock subnet opens as a compact drawing).
+  Run a turn and each `node:` transition lights up as its node answers,
+  with the path back to `userIn`; select the net's answer and the
+  transition that answered lights with the branch that won (the answer is
+  emitted under that transition, `race@1/Race_Commit@1`, and shows as a
+  message, not as JSON); a failed turn lights the transition or subnet that
+  failed. A place nothing in the net produces is dotted. A function node in a mounted blueprint runs as
+  `<mount>·<node>` (`second·fast`), so each mount lights for its own runs.
+- **The builder assistant** (the pencil button) is ADK's own, with tools to
+  read `AUTHORING.md` and the schema, to write blueprints (nothing is
+  written unless every blueprint loads), and to check and verify them. It
+  fixes a net from the counterexample until every claim is proven, and its
+  replies end with the net's size and each claim's verdict. When the builder
+  opens on a net it proves the claims and greets you with the net's size and
+  verdicts, and `verify` or `check` answers any time, all without a model
+  call; with no `GOOGLE_API_KEY` it says where to put one. `verify` lists
+  each claim, the step where a violated one breaks and the steps before it,
+  and its counterexample as a picture of what each step changed; click it
+  for full size, with the net drawn at the bad step. The net drawing needs
+  Graphviz `dot` on `PATH` (or `ADK_LIBPETRI_DOT`); without it the full
+  picture has the steps only.
+- **The builder canvas** shows the net's root (a `PetriNet` or a
+  `PetriWorkflow`) with the functions and agents it runs, updated after each
+  reply. It is read-only for a net: the YAML it saves before each message is
+  ignored for a net (even one with a syntax error), what was added there is
+  dropped and the assistant says so (Save with a sub-agent added there
+  writes nothing and keeps the builder open), and Save ships the
+  assistant's latest net to the graph panel and to chat. (In ADK alone, Save on a net app fails
+  with 400.) A file you edit in an editor while the builder is open survives
+  Save; one changed both there and by the assistant stops it, and the
+  assistant tells you which.
+
+Stock `adk web` serves the same blueprints; its graph view draws the net's
+places and transitions as plain boxes, each `node:` transition beside the
+ADK node it runs. To get the assistant there, serve it as an app:
+`root_agent = create_petri_builder_assistant()` from
+`adk_libpetri.web.builder`.
+
+For hand-editing and debugging, the server also has `/petri`, an unlisted
+power tool: a YAML editor beside the drawn net, a counterexample you step
+across the drawing, and a replay of any session's markings, which ADK's
+graph panel cannot show. It loads CodeMirror and viz.js from CDNs;
+`build_app(petri_page=False)` leaves it out. See
+[ADR 0009](../docs/adr/0009-web-ui-and-builder-assistant.md).
 
 ## What is different from Java
 

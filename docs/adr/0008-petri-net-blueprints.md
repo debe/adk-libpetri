@@ -164,7 +164,10 @@ subnets:
   port's; an undeclared parent place takes the port's type.
 - Every other child place and transition is renamed `inst/<name>`, so one
   blueprint mounts twice; nesting gives `outer/inner/...`. Seeds, unbound env
-  places and actions carry over under the prefix.
+  places and actions carry over under the prefix. A function node the child
+  runs runs as `inst·<name>` (`outer·inner·<name>` nested; `blueprint.run_name`),
+  so its event path tells the mounts apart (ADR 0009); agents, nets and
+  workflows keep their own names.
 - An unknown port, an unbound in-port, a type conflict and a ref cycle
   (`a.yaml -> b.yaml -> a.yaml`) are load errors.
 - The result is one flat `NetSpec`, so the parent's `prove:` checks the

@@ -20,6 +20,13 @@ any `root_agent.yaml`. The JSON Schema next to this file
    That transition's arcs are the bug. Re-run `verify`. Exit code 0 means
    every claim is proven.
 
+In ADK's dev UI under `adk-libpetri web`, the builder assistant runs the
+same loop through its tools (`write_petri_blueprints`,
+`verify_petri_blueprint`); a violated claim's result has `steps` (what each
+firing changed) and a `picture` line to copy into the reply as given. After
+Save, the graph panel draws the net. `check --json` and `verify --json`
+print the results as data.
+
 `verify --k 3` checks every claim over three turns instead of the default
 (one turn for a safety claim, two for `deadlock_free`). `verify --recursive`
 also proves each mounted child blueprint's own `prove:` on the child alone.
@@ -396,6 +403,9 @@ it under `subnets:`, binding each port to a parent place.
 
 - The child's other places and transitions are renamed `<inst>/<name>`.
   The same file can be mounted twice, and claims can name `inst/won`.
+- A function node the child runs runs as `<inst>·<name>` (`second·fast`;
+  nested, `outer·inner·fast`): its events' node path says which mount ran
+  it. Agents, nets and workflows keep their own names.
 - Every `in` port must be bound.
 - A bound place takes the port's type. An undeclared parent place is
   created with it.

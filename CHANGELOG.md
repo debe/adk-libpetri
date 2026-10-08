@@ -76,6 +76,57 @@ libpetri-py `>=7.2,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
   - `PetriWorkflow` and `PetriNet` share their turn and session-runner logic
     (`_net_node.py`). Known gaps: no interrupts, and timeout outputs do not
     run yet (a libpetri-py decode bug).
+- **Nets in ADK's web UI (experimental).** `PetriNet` and `PetriWorkflow`
+  carry a derived `graph` that stock `adk web`'s graph view draws. A
+  `PetriNet`'s answer is emitted as a `Workflow`'s terminal node's is: under
+  a child named after the transition that answered
+  (`race@1/Race_Commit@1`, `output_for` naming the net), at once whatever
+  its type, and with a text part when it is a value.
+  `adk-libpetri web AGENTS_DIR` serves ADK's own dev UI, unpatched, and
+  answers three of its requests for net apps (and serves counterexample
+  pictures)
+  ([ADR 0009](docs/adr/0009-web-ui-and-builder-assistant.md)):
+  - the graph panel draws the net as a Petri net in the UI's theme, mounted
+    blueprints as clusters (one node each in a net of more than 15 places,
+    opened in "Agent Structure" with ADK's breadcrumbs), each stock subnet
+    as one node (opened as a compact drawing, its model call marked), and a
+    key of its shapes. ADK's highlighting lights each `node:` transition as
+    its node runs, the transition that answered with the branch that won,
+    and the path back to `userIn` through joins on a permit; a failed turn
+    lights where it broke, never the out port. A function node mounted in a subnet runs
+    as `<mount>·<node>` (`second·fast`), so each mount lights for its own
+    runs and the Events tab says which mount ran;
+  - the builder assistant (the pencil button) gains tools to write, check
+    and verify blueprints (each on a copy of the draft under a package name
+    of its own); it writes nothing that fails to load, ends its replies with
+    each claim's verdict, and shows a violated claim's counterexample as a
+    picture in the UI's theme (`/dev/petri/counterexamples/{id}.svg`; the
+    full-size view draws the net, which needs Graphviz `dot`). Without a
+    model call it greets a net app with the net's size and each claim's
+    verdict, answers `verify` (each claim, the steps that break a violated
+    one, its picture) and `check`, and says how to set a Gemini key where
+    ADK showed a bare "Error Code: ValueError" (the main chat's model error
+    leads with the fix too). Verdicts are remembered per net, its mounted
+    files and code included;
+  - the builder canvas lists what a net or `PetriWorkflow` runs, cannot
+    overwrite one (a file that does not parse included), and Save ships the
+    assistant's latest net, which chat then runs (in ADK alone, a net's Save
+    failed with 400); what the canvas dropped is told in the next reply.
+    The draft is kept in step with the app: a file edited in an editor or
+    `/petri` while the builder is open survives Save, and one edited in
+    both stops it. After any Save the graph panel and chat show what was
+    saved, a net or not.
+    Save on a net root with a sub-agent added on the canvas writes nothing
+    and keeps the builder open, saying why;
+  - helper packages without an agent are left out of the app list (an app
+    whose `agent` module is a package is listed), and "Create new app" never
+    writes into one. One app's folder (`adk-libpetri web agents/race`) is
+    served as ADK serves it, guard and canvas included.
+
+  `/petri` is an unlisted power tool: a YAML editor beside the net, steppable
+  counterexamples, and a replay of each session's markings
+  (`bridge.MarkingTraces`, an event-store decorator). `check` and `verify`
+  take `--json`.
 - **Cross-language fixtures.** `spec/fixtures/nets` holds every stock subnet's
   structure. Java's new `SpecFixturesTest` writes and golden-checks it, and so
   does Python's `tests/conformance`.

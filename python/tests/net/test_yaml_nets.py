@@ -19,7 +19,7 @@ from adk_libpetri._spec import NetSpec, Place, TransitionSpec, and_, one, out
 from adk_libpetri.net import BlueprintError, PetriNet
 from adk_libpetri.runner import SessionExecutorRegistry
 
-from ._harness import runner_of, session, settled, text_of
+from ._harness import answers, runner_of, session, settled, text_of
 from .conftest import BLUEPRINTS, Serve
 
 BASIC = BLUEPRINTS / "bp_basic"
@@ -62,8 +62,11 @@ async def test_a_minimal_net_runs_a_node_and_emits(
     turn = await s.say("hello")
     assert turn.error is None
     assert turn.texts == ["HELLO"]
-    [answer] = [e for e in turn.events if e.node_info.path == "echo_net@1"]
+    [answer] = answers(turn.events, "echo_net")
     assert answer.author == "echo_net"
+    # Under the transition that put it on eventOut: ADK's dev UI lights it.
+    assert answer.node_info.path == "echo_net@1/Echo_Emit@1"
+    assert answer.node_info.output_for == ["echo_net@1/Echo_Emit@1", "echo_net@1"]
     [shout] = [e for e in turn.events if e.node_info.path == "echo_net@1/shout@1"]
     assert shout.output == "HELLO"
     # One net per session, across turns.
@@ -80,7 +83,7 @@ async def test_route_labelled_xor_error_branch_move_and_emit(
     s = await session(node)
 
     later = await s.say("later please")  # default route -> move
-    assert later.by("triage_net")[-1].node_info.path == "triage_net@1"
+    assert later.by("triage_net")[-1].node_info.path.startswith("triage_net@1/Triage_")
     assert text_of(later.events[-1]) == "later please"
 
     urgent = await s.say("now!")  # route urgent -> handle succeeds
@@ -123,8 +126,10 @@ async def test_a_plain_value_on_event_out_is_the_nodes_output(
     node = load(BASIC / "value.yaml", serve)
     s = await session(node)
     turn = await s.say("one two three")
-    [final] = [e for e in turn.events if e.node_info.path == "value_net@1"]
+    [final] = answers(turn.events, "value_net")
     assert final.output == 3
+    # A text part too: the dev UI shows the answer as a message, not as JSON.
+    assert text_of(final) == "```json\n3\n```"
 
 
 # ----------------------------------------------------------------------------
@@ -186,7 +191,7 @@ async def test_the_race_answers_with_the_fast_branch_and_drains_the_slow_one(
     s = await session(node)
     turn = await s.say("which branch wins?")
     assert turn.error is None
-    [answer] = [e for e in turn.events if e.node_info.path == "speculative_race@1"]
+    [answer] = answers(turn.events, "speculative_race")
     assert text_of(answer) == "answer from fast"
     # The answer streams out before the slow branch is done ...
     assert turn.first_event_after is not None

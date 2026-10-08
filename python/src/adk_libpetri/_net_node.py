@@ -153,14 +153,28 @@ class NetNodeBase(BaseNode):
 
         return TurnScope()
 
-    def _runner_builder(self, scope: TurnScope) -> Builder:
-        """The session's runner, bound to ``scope``; the base sets the orchestrator."""
+    def _runner_builder(self, scope: TurnScope, event_store: Any) -> Builder:
+        """The session's runner, bound to ``scope``; the base sets the orchestrator.
+
+        ``event_store`` is the session's observability chain (or ``None``).
+        """
         raise NotImplementedError
 
+    def _initial_counts(self) -> dict[str, int]:
+        """Seed tokens per place of a new session's net."""
+        return {}
+
+    def _session_event_store(self, key: SessionKey) -> Any:
+        """The node's event store, or its link for ``key`` if it keeps one per session
+        (``for_session(key, initial_counts)``, as ``MarkingTraces`` does)."""
+        store = self._event_store
+        per_session = getattr(store, "for_session", None)
+        return per_session(key, self._initial_counts()) if callable(per_session) else store
+
     async def _start_runner(self, key: SessionKey) -> PetriRunner:
-        del key
         scope = self._new_scope()
-        builder = self._runner_builder(scope).orchestrator(self.orchestrator)
+        store = self._session_event_store(key)
+        builder = self._runner_builder(scope, store).orchestrator(self.orchestrator)
         runner = await builder.astart()
         runner.attachments[SCOPE_ATTACHMENT] = scope
         return runner

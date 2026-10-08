@@ -229,3 +229,31 @@ def test_the_module_runs_as_a_program() -> None:
     )
     assert bad.returncode == 1
     assert "unknown place 'wonn'" in bad.stdout
+
+
+# -- --json -----------------------------------------------------------------------
+
+
+def test_check_json_names_the_key_and_the_fix() -> None:
+    code, out = run("check", "--json", str(CLI / "typo.yaml"))
+    assert code == 1
+    report = json.loads(out)
+    assert report["ok"] is False
+    assert report["key_path"].startswith("transitions.Typo_Emit")
+    good_code, good = run("check", "--json", str(RACE / "race.yaml"))
+    assert good_code == 0
+    assert json.loads(good)["net"]["name"] == "speculative_race"
+
+
+@requires_z3
+def test_verify_json_matches_the_text_verdicts() -> None:
+    path = str(CLI / "parent_bad.yaml")
+    text_code, text = run("verify", "--recursive", path)
+    json_code, out = run("verify", "--recursive", "--json", path)
+    assert json_code == text_code
+    report = json.loads(out)
+    assert f"{report['proven']} proven, {report['violated']} violated" in text
+    for claim in report["claims"]:
+        assert f"{claim['verdict'].upper():<9}{claim['label']}" in text
+        if claim["verdict"] == "violated":
+            assert "  fires: " + " -> ".join(claim["fires"]) in text

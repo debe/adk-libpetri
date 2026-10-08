@@ -20,6 +20,11 @@ class Kind(enum.Enum):
     """The transition exceeded the deadline of its timing."""
 
 
+SAYS_ITS_FIX = frozenset({"ModelKeyMissing"})
+"""Exception types whose message leads with what the user must do: the failure's
+message keeps it first, the transition after it."""
+
+
 class TransitionFailure(RuntimeError):
     def __init__(
         self,
@@ -52,8 +57,13 @@ class TransitionFailure(RuntimeError):
         if event.type == "TransitionFailed":
             error = str(event.payload().get("error", ""))
             exc_type, msg = split_error(error)
+            text = (
+                f"{msg} ({name})"
+                if exc_type in SAYS_ITS_FIX
+                else f"Transition {name} failed: {msg} ({exc_type})"
+            )
             return cls(
-                f"Transition {name} failed: {msg} ({exc_type})",
+                text,
                 transition_name=name,
                 kind=Kind.ACTION_THREW,
                 occurred_at=at,

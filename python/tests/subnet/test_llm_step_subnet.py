@@ -194,6 +194,23 @@ async def test_llm_error_without_recovery_callback_fails_on_model_error_transiti
     assert "network down" in failed[0].payload()["error"]
 
 
+async def test_a_missing_api_key_fails_with_the_fix_first() -> None:
+    from adk_libpetri.bridge import TransitionFailure
+
+    said = "No API key was provided. Please pass a valid API key. Learn how to create one."
+    fixture = await run(
+        ScriptedLlm.of(ValueError(said)), llm_step.Callbacks.none(), simple_request("q")
+    )
+    [failed] = fixture.failures()
+    failure = TransitionFailure.from_event(failed)
+    assert failure is not None
+    message = str(failure)
+    # ADK's snackbar cuts a long message: the fix leads, the transition trails.
+    assert message.startswith("No Gemini API key: put GOOGLE_API_KEY=... in ")
+    assert message.endswith(f"(The model said: No API key was provided.) ({T.ON_MODEL_ERROR})")
+    assert "Learn how" not in message and "no recovery callback" not in message
+
+
 # ============================================================
 #  Subnet shape + binding validation
 # ============================================================

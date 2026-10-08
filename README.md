@@ -150,6 +150,14 @@ same nets as the hand-written demos and pass the same tests and proofs.
   nonzero on a violation, with the counterexample. The schema is
   [`net/schema.json`](python/src/adk_libpetri/net/schema.json) and the guide
   for agents is [`net/AUTHORING.md`](python/src/adk_libpetri/net/AUTHORING.md).
+- **In ADK's web UI.** `adk-libpetri web AGENTS_DIR` is ADK's own dev UI,
+  unpatched, with nets made first-class. Its graph panel draws the Petri net
+  (light or dark) and lights up each transition as its node runs. Its builder
+  assistant writes, checks and proves blueprints, writes nothing that fails
+  to load, and shows a violated claim's counterexample as a picture. Its
+  canvas lists what the net runs, and Save ships the net instead of
+  overwriting it. Stock `adk web` serves the same blueprints with a plainer
+  graph ([ADR 0009](docs/adr/0009-web-ui-and-builder-assistant.md)).
 
 The proofs are structural and untimed, and they treat every xor as a free
 choice, so a claim holds for any value a node returns. By default inputs arrive turn by turn:

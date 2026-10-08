@@ -32,6 +32,7 @@ import contextlib
 import difflib
 import inspect
 import os
+import re
 import threading
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -154,6 +155,9 @@ class NetScope(TurnScope):
     phase: TurnPhase = "closed"
     egress: HotStream[Any] = field(default_factory=HotStream)
     running: int = 0
+    answered_by: list[tuple[str | None, Any]] = field(default_factory=list)
+    """Each ``eventOut`` token of this turn with the transition that put it there
+    (None when no event named it), in order; the net's egress tap appends."""
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _drained: asyncio.Event | None = field(default=None, repr=False)
     _deferred: list[tuple[str, cf.Future[int]]] = field(default_factory=list, repr=False)
@@ -187,6 +191,7 @@ class NetScope(TurnScope):
             self.phase = "waiting"
             self.result = None
             self.run_ids.clear()
+            self.answered_by.clear()
             waiting, self._deferred = self._deferred, []
             self.running += len(waiting)
             turn = self.turn
@@ -299,8 +304,9 @@ class ActionPlan:
     node: Any = None
     author: str = ""
 
-    def action(self, scope: NetScope) -> Action:
-        return _plan_action(self, scope)
+    def action(self, scope: NetScope, prefix: str = "") -> Action:
+        """The action, for a blueprint mounted at ``prefix`` (``""``: the root)."""
+        return _plan_action(self, scope, prefix)
 
 
 @dataclass(frozen=True)
@@ -310,8 +316,9 @@ class Mount:
     prefix: str
     places: Mapping[str, str]
     """Child place name -> parent place name (a bound port, or ``prefix/name``)."""
-    actions: Callable[[Any], Mapping[str, Action]]
-    """Per session: the child's actions under the child's own names."""
+    actions: Callable[[Any, str], Mapping[str, Action]]
+    """Per session (and the prefix the parent is mounted at): the child's actions
+    under the child's own names."""
     asynchronous: tuple[str, ...] = ()
     """The child's transitions (parent names) whose actions do not fire in one step."""
     rest: tuple[str, ...] = ()
@@ -320,6 +327,10 @@ class Mount:
     """The child blueprint's name (``stock:<kind>`` for a stock subnet)."""
     node_transitions: tuple[str, ...] = ()
     """The child's ``node:`` transitions (parent names): a turn drains their runs."""
+    child: Blueprint | None = field(default=None, compare=False, repr=False)
+    """The child blueprint (``net:`` mounts; for drawing it)."""
+    agent: str | None = None
+    """The ``from:`` LlmAgent's name (stock mounts)."""
 
     def transition(self, name: str) -> str:
         return f"{self.prefix}/{name}"
@@ -407,11 +418,16 @@ class Blueprint:
     def initial_counts(self) -> dict[str, int]:
         return {p: len(ts) for p, ts in self.seeds.items() if ts}
 
-    def actions(self, scope: NetScope) -> dict[str, Action]:
-        """Per-session bindings for every transition, mounted ones included."""
-        acts: dict[str, Action] = {t: plan.action(scope) for t, plan in self.plans.items()}
+    def actions(self, scope: NetScope, prefix: str = "") -> dict[str, Action]:
+        """Per-session bindings for every transition, mounted ones included.
+
+        ``prefix``: where this blueprint is mounted (``""`` at the root). A
+        function node mounted under a prefix runs under a name of its own
+        (:func:`run_name`).
+        """
+        acts: dict[str, Action] = {t: plan.action(scope, prefix) for t, plan in self.plans.items()}
         for m in self.mounts:
-            for name, act in m.actions(scope).items():
+            for name, act in m.actions(scope, f"{prefix}/{m.prefix}".strip("/")).items():
                 acts[m.transition(name)] = _renamed(act, m.places)
         self.spec.check_bindings(acts)
         return acts
@@ -656,6 +672,18 @@ def _parse(
         plans[tname] = plan
     if not own and not mounts:
         raise BlueprintError("transitions", "a net needs at least one transition or subnet")
+    for m in mounts:
+        # The drawing titles a collapsed subnet by its prefix, as it titles a
+        # place or transition by its name; one name may not mean both.
+        clash = (
+            "place" if m.prefix in places.by_name else "transition" if m.prefix in plans else None
+        )
+        if clash is not None:
+            raise BlueprintError(
+                f"subnets.{m.prefix}",
+                f"subnet instance {m.prefix!r} has the name of a {clash}",
+                "rename the instance or the " + clash,
+            )
 
     # -- env -----------------------------------------------------------------
     for i, pn in enumerate(_list("env", data.get("env"))):
@@ -1208,15 +1236,21 @@ def _mount(
                 or "list the child blueprint under nodes: (- [child.yaml])",
             )
         spec, ports, seeds, env = bp.spec, bp.spec.ports, bp.seeds, bp.env
-        source: Callable[[Any], Mapping[str, Action]] = bp.actions
+        source: Callable[[Any, str], Mapping[str, Action]] = bp.actions
         child_async, child_rest, net = bp.asynchronous, bp.rest, bp.name
         child_nodes = bp.node_transitions
+        child_bp: Blueprint | None = bp
+        agent_name: str | None = None
     else:
-        spec, ports, seeds, source = _stock(path, d, nodes)
+        spec, ports, seeds, stock_source = _stock(path, d, nodes)
+        source = _ignoring_prefix(stock_source)
+
         env = ()
         child_async = spec.transition_names
         net = f"stock:{d['stock']}"
         child_nodes = ()
+        child_bp = None
+        agent_name = getattr(nodes.get(d.get("from", "")), "name", None)
         child_rest = tuple(
             p.name for p in (C.EVENT_OUT, C.TURN_PERMIT, C.TRANSFER) if spec.has_place(p)
         )
@@ -1282,8 +1316,19 @@ def _mount(
     asynchronous = tuple(f"{inst}/{t}" for t in child_async)
     rest = tuple(mapping[p] for p in child_rest if mapping[p].startswith(f"{inst}/"))
     nodes_of = tuple(f"{inst}/{t}" for t in child_nodes)
-    mount = Mount(inst, mapping, source, asynchronous, rest, net, nodes_of)
+    mount = Mount(inst, mapping, source, asynchronous, rest, net, nodes_of, child_bp, agent_name)
     return mount, renamed, child_seeds, child_env
+
+
+def _ignoring_prefix(
+    actions: Callable[[Any], Mapping[str, Action]],
+) -> Callable[[Any, str], Mapping[str, Action]]:
+    """A stock subnet's actions, as a mount's source (it runs no named nodes)."""
+
+    def source(scope: Any, prefix: str = "") -> Mapping[str, Action]:
+        return actions(scope)
+
+    return source
 
 
 def _stock(
@@ -1789,7 +1834,25 @@ def _node_value(plan: ActionPlan, place: Place[Any], value: Any) -> Any:
     return value
 
 
-def _plan_action(plan: ActionPlan, scope: NetScope) -> Action:
+def run_name(prefix: str, node: Any) -> str:
+    """The name a ``node:`` transition's node runs under, mounted at ``prefix``.
+
+    A function node mounted in a subnet runs as ``<prefix>·<name>``
+    (``second·fast``; a nested mount ``first·inner·leaf``): its event path
+    then says which mount ran it, in ADK's Events tab and for the dev UI's
+    graph, where two mounts of one blueprint would otherwise be told apart by
+    nothing. Any other node (an agent, a workflow, a net) keeps its own name.
+    """
+    from google.adk.workflow import FunctionNode
+
+    name = str(getattr(node, "name", ""))
+    if not prefix or not isinstance(node, FunctionNode):
+        return name
+    parts = [re.sub(r"\W", "_", part) for part in prefix.split("/") if part]
+    return "·".join([*parts, name])
+
+
+def _plan_action(plan: ActionPlan, scope: NetScope, prefix: str = "") -> Action:
     if plan.kind == "move":
 
         def move(ctx: Ctx) -> None:
@@ -1808,15 +1871,18 @@ def _plan_action(plan: ActionPlan, scope: NetScope) -> Action:
 
         return emit
 
-    return _node_action(plan, scope)
+    return _node_action(plan, scope, prefix)
 
 
-def _node_action(plan: ActionPlan, scope: NetScope) -> Action:
+def _node_action(plan: ActionPlan, scope: NetScope, prefix: str = "") -> Action:
     from ..workflow.compiler import _error_code, _run_node
     from ..workflow.tokens import WfToken, WorkflowFailure
 
     node = plan.node
     name = node.name
+    run_as = run_name(prefix, node)
+    if run_as != name:
+        node = node.model_copy(update={"name": run_as})
 
     def fail(failure: WorkflowFailure, turn: int) -> NoReturn:
         scope.record_failure(turn, TurnResult("failed", failure=failure))
@@ -1830,7 +1896,7 @@ def _node_action(plan: ActionPlan, scope: NetScope) -> Action:
         loop = scope.loop
         assert loop is not None
         outcome = await on_loop(
-            scope.tracked(_run_node(scope, node, WfToken(value), scope.next_run_id(name), False)),
+            scope.tracked(_run_node(scope, node, WfToken(value), scope.next_run_id(run_as), False)),
             loop=loop,
         )
         err: BaseException | None = outcome.error
@@ -1848,7 +1914,7 @@ def _node_action(plan: ActionPlan, scope: NetScope) -> Action:
                     f"node {name!r} routed {outcome.route!r}, which matches no branch of "
                     f"{plan.transition!r} ({sorted(plan.routes)}) and there is no default"
                 )
-                fail(WorkflowFailure(name, "NetRunError", msg, NetRunError(msg)), turn)
+                fail(WorkflowFailure(run_as, "NetRunError", msg, NetRunError(msg)), turn)
             if plan.branches:
                 try:
                     tokens = [
@@ -1864,7 +1930,7 @@ def _node_action(plan: ActionPlan, scope: NetScope) -> Action:
                 return
             fail(
                 WorkflowFailure(
-                    name,
+                    run_as,
                     code,
                     str(err),
                     err,

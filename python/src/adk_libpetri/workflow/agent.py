@@ -81,6 +81,9 @@ class PetriWorkflow(NetNodeBase):
     """``[from, to, budget]`` per budgeted back edge (ADR 0007)."""
     state: StateMode = "reject"
     multi_route: MultiRoute = "reject"
+    graph: Any = None
+    """The compiled net as a :class:`~adk_libpetri.net.graph.NetGraph` (derived,
+    not set from YAML); ADK's dev UI draws a node's ``graph`` field."""
 
     _compiled: CompiledWorkflow = PrivateAttr()
 
@@ -128,12 +131,16 @@ class PetriWorkflow(NetNodeBase):
             output_schema=wf.output_schema,
         )
         node._compiled = compiled
+        node.graph = _graph(compiled)
         node._serve_on(orchestrator, registry, event_store)
         return node
 
     def _net_spec(self) -> Any:
         compiled = getattr(self, "_compiled", None)
         return compiled.spec if compiled is not None else None
+
+    def _initial_counts(self) -> dict[str, int]:
+        return {p: n for p, n in self._compiled.initial_counts().items() if n}
 
     def model_post_init(self, context: Any, /) -> None:
         super().model_post_init(context)
@@ -154,6 +161,7 @@ class PetriWorkflow(NetNodeBase):
             multi_route=self.multi_route,
             state=self.state,
         )
+        self.graph = _graph(self._compiled)
         self._serve_on(OrchestratorLoop.shared())
 
     @classmethod
@@ -198,7 +206,7 @@ class PetriWorkflow(NetNodeBase):
     def compiled(self) -> CompiledWorkflow:
         return self._compiled
 
-    def _runner_builder(self, scope: TurnScope) -> Builder:
+    def _runner_builder(self, scope: TurnScope, event_store: Any) -> Builder:
         compiled = self._compiled
         builder = (
             PetriRunner.builder(compiled.spec, compiled.actions(scope))
@@ -207,8 +215,8 @@ class PetriWorkflow(NetNodeBase):
         )
         if compiled.spec.has_place(RESUME_IN):
             builder.environment_place(RESUME_IN)
-        if self._event_store is not None:
-            builder.event_store(self._event_store)
+        if event_store is not None:
+            builder.event_store(event_store)
         return builder
 
     async def _run_impl(self, *, ctx: Any, node_input: Any) -> AsyncGenerator[Any, None]:
@@ -250,3 +258,16 @@ class PetriWorkflow(NetNodeBase):
 
 def compiled_resumes(compiled: CompiledWorkflow) -> bool:
     return compiled.spec.has_place(RESUME_IN)
+
+
+def _graph(compiled: CompiledWorkflow) -> Any:
+    """The compiled net's graph, each ``Wf_N_Run`` beside the node N it runs."""
+    from dataclasses import replace
+
+    from ..net.graph import net_graph
+
+    seeds = {p: n for p, n in compiled.initial_counts().items() if n}
+    env = tuple(p.name for p in (INPUT, RESUME_IN) if compiled.spec.has_place(p))
+    g = net_graph(compiled.spec, seeds=seeds, env=env)
+    runs = {t: n for t, n in compiled.run_nodes().items() if t in compiled.spec.transition_names}
+    return replace(g, adk_nodes=runs)

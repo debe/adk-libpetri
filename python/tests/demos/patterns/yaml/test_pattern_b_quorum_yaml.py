@@ -81,8 +81,10 @@ async def test_synthesis_fires_at_kth_result_without_waiting_for_slower_branches
         f"synthesis after {synthesized:.3f}s; quorum means < {first_late}s"
     )
     assert synthesized < run.node_run_at("b4") < run.node_run_at("b5")
-    # ... but the str answer is the node's output, which ADK yields at the end.
-    assert at >= max(agent.DELAYS.values())
+    # ... and so does the answer, a str on eventOut: emitted as the net's output
+    # at once, under the transition that answered, not when the losers are done.
+    assert at < first_late
+    assert event.node_info.path.endswith("@1/Quorum_Synthesize@1")
 
     # Drained after b4 and b5 finished: still one synthesis, and the late results
     # are kept on quorumDiscarded rather than lost.

@@ -5,6 +5,8 @@
     adk-libpetri check  agents/my_net/root_agent.yaml       # load and build, no Z3
     adk-libpetri verify agents/my_net/root_agent.yaml       # run the prove: claims
     adk-libpetri verify FILE --k 2 --recursive              # 2 arrivals; children too
+    adk-libpetri verify FILE --json                         # verdicts as JSON
+    adk-libpetri web agents/                                # ADK's dev UI, Petri-aware
     adk-libpetri guide                                      # print AUTHORING.md
     adk-libpetri schema                                     # print the JSON Schema
 
@@ -21,221 +23,95 @@ bad usage.
 from __future__ import annotations
 
 import argparse
-import contextlib
-import os
+import json
 import sys
-import warnings
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from importlib import resources
-from typing import Any, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
+
+if TYPE_CHECKING:
+    from .net.report import ClaimResult
 
 _EXIT_OK, _EXIT_FAIL = 0, 1
 
 
-class _LoadError(Exception):
-    """A file that does not load; ``str()`` is the one-line message."""
+def _check(path: str, out: TextIO, *, as_json: bool = False) -> int:
+    from .net.report import check_file
 
-
-@contextlib.contextmanager
-def _agents_dir_on_path(path: str) -> Iterator[None]:
-    """``adk web``'s ``sys.path``: the folder holding the agent's folder."""
-    agents_dir = os.path.dirname(os.path.dirname(os.path.abspath(path)))
-    added = agents_dir not in sys.path
-    if added:
-        sys.path.insert(0, agents_dir)
-    try:
-        yield
-    finally:
-        if added:
-            with contextlib.suppress(ValueError):
-                sys.path.remove(agents_dir)
-
-
-def _blueprint_error(err: BaseException) -> Any:
-    """The ``BlueprintError`` behind ``err``, if ADK's loader wrapped one."""
-    from .net import BlueprintError
-
-    seen: set[int] = set()
-    e: BaseException | None = err
-    while e is not None and id(e) not in seen:
-        if isinstance(e, BlueprintError):
-            return e
-        seen.add(id(e))
-        e = e.__cause__ or e.__context__
-    return None
-
-
-def _validation_error(err: BaseException) -> Any:
-    """The pydantic ``ValidationError`` behind ``err``, if that is what failed."""
-    from pydantic import ValidationError
-
-    seen: set[int] = set()
-    e: BaseException | None = err
-    while e is not None and id(e) not in seen:
-        if isinstance(e, ValidationError):
-            return e
-        seen.add(id(e))
-        e = e.__cause__ or e.__context__
-    return None
-
-
-_HINTS = {
-    "nodes": "write each entry as a list: - [file.yaml], - [.agent.fn] or - [{agent_class: ...}]",
-    "name": "use a Python identifier: letters, digits and _, not starting with a digit",
-}
-_MAX_ERRORS = 3
-
-
-def _validation_lines(path: str, err: Any) -> str:
-    """A pydantic error as ``check``'s lines: ``<file>: <key path>: <message>. Fix: <hint>``.
-
-    One line per field, at most a few: a ``nodes:`` entry fails every branch
-    of ADK's edge union, and pydantic reports each.
-    """
-    lines: dict[str, str] = {}
-    for e in err.errors():
-        loc = [str(x) for x in e.get("loc", ())]
-        field = ".".join(loc[:2] if loc[:1] == ["nodes"] else loc[:1]) or "<top>"
-        if field in lines:
-            continue
-        message = str(e.get("msg", "invalid")).removeprefix("Value error, ").rstrip(".")
-        hint = _HINTS.get(loc[0] if loc else "")
-        lines[field] = f"{path}: {field}: {message}" + (f". Fix: {hint}" if hint else "")
-    shown = list(lines.values())[:_MAX_ERRORS]
-    if len(lines) > _MAX_ERRORS:
-        shown[-1] += f" (and {len(lines) - _MAX_ERRORS} more)"
-    return "\nERROR ".join(shown)
-
-
-def _load(path: str) -> Any:
-    """Build the ``PetriNet`` in ``path`` through ADK's loader, or raise :class:`_LoadError`."""
-    if not os.path.isfile(path):
-        raise _LoadError(f"{path}: no such file")
-    from google.adk.agents.config_agent_utils import from_config
-
-    from .net import PetriNet
-
-    with _agents_dir_on_path(path), warnings.catch_warnings():
-        # ADK announces its experimental YAML loader on every load.
-        warnings.simplefilter("ignore", UserWarning)
-        try:
-            node = from_config(path)
-        except Exception as err:
-            bp = _blueprint_error(err)
-            if bp is not None:
-                raise _LoadError(str(bp.with_source(os.path.abspath(path)))) from err
-            invalid = _validation_error(err)
-            if invalid is not None:
-                raise _LoadError(_validation_lines(os.path.abspath(path), invalid)) from err
-            raise _LoadError(f"{path}: {type(err).__name__}: {err}") from err
-    if not isinstance(node, PetriNet):
-        raise _LoadError(
-            f"{path}: defines a {type(node).__name__}, not a PetriNet. "
-            "Fix: write agent_class: adk_libpetri.net.PetriNet"
-        )
-    return node
-
-
-def _summary(node: Any) -> str:
-    bp = node.blueprint
-    spec = bp.spec
-    return (
-        f"PetriNet {node.name!r}: {len(spec.places)} places, {len(spec.transitions)} "
-        f"transitions, {len(bp.mounts)} subnets, {len(bp.proof.claims)} claims"
-    )
-
-
-def _check(path: str, out: TextIO) -> int:
-    try:
-        node = _load(path)
-    except _LoadError as err:
-        print(f"ERROR {err}", file=out)
-        return _EXIT_FAIL
-    print(f"OK {path}: {_summary(node)}", file=out)
-    return _EXIT_OK
-
-
-def _children(node: Any) -> list[Any]:
-    """The child ``PetriNet``s ``node`` mounts with ``subnets: {x: {net: name}}``, once each."""
-    from .net import PetriNet
-
-    by_name: dict[str, Any] = {}
-    for item in node.nodes:
-        for el in item if isinstance(item, list | tuple) else (item,):
-            if isinstance(el, PetriNet):
-                by_name[el.name] = el
-    children: list[Any] = []
-    for decl in node.subnets.values():
-        name = decl.get("net") if isinstance(decl, dict) else None
-        child = by_name.get(name) if isinstance(name, str) else None
-        if child is not None and all(c is not child for c in children):
-            children.append(child)
-    return children
+    report = check_file(path)
+    if as_json:
+        _dump(report.to_dict(), out)
+    elif report.ok:
+        assert report.net is not None
+        print(f"OK {path}: {report.net.line()}", file=out)
+    else:
+        print(f"ERROR {report.error}", file=out)
+    return _EXIT_OK if report.ok else _EXIT_FAIL
 
 
 def _indent(text: str, prefix: str = "    ") -> str:
     return "\n".join(prefix + line if line else line for line in text.splitlines())
 
 
-def _counterexample(result: Any) -> str:
+def _counterexample(claim: ClaimResult) -> str:
     lines: list[str] = []
-    fired = result.counterexample_transitions
-    if fired:
-        lines.append("  fires: " + " -> ".join(fired))
-    trace = result.counterexample_trace
-    if trace:
+    if claim.fires:
+        lines.append("  fires: " + " -> ".join(claim.fires))
+    if claim.markings:
         lines.append("  markings:")
-        for i, marking in enumerate(trace):
+        for i, marking in enumerate(claim.markings):
             shown = ", ".join(f"{p}: {n}" for p, n in sorted(marking.items())) or "empty"
             lines.append(f"    {i}: {{{shown}}}")
-    if result.report:
+    if claim.report:
         lines.append("  report:")
-        lines.append(_indent(result.report.rstrip()))
+        lines.append(_indent(claim.report.rstrip()))
     return "\n".join(lines)
 
 
 def _verify_one(node: Any, k: int | None, out: TextIO) -> tuple[int, int, int]:
     """Print every claim's verdict; ``(proven, violated, unknown)``."""
+    from .net.report import verify_net
+
     source = node.blueprint.source or "<python>"
     print(f"verify {node.name} ({source})", file=out)
     if not node.blueprint.proof.claims:
         print("  no claims under prove:", file=out)
         return 0, 0, 0
     proven = violated = unknown = 0
-    for proof in node.verify(k):
-        verdict = proof.result.verdict
-        print(f"{verdict.upper():<9}{proof.label}  [{proof.kind}]", file=out)
-        if proof.scope:
-            print(f"  under: {proof.scope}", file=out)
-        for note in proof.notes:
+    for claim in verify_net(node, k):
+        print(f"{claim.verdict.upper():<9}{claim.label}  [{claim.kind}]", file=out)
+        if claim.scope:
+            print(f"  under: {claim.scope}", file=out)
+        for note in claim.notes:
             print(f"  note: {note}", file=out)
-        if proof.proven:
+        if claim.verdict == "proven":
             proven += 1
-        elif proof.violated:
+        elif claim.verdict == "violated":
             violated += 1
-            print(_counterexample(proof.result), file=out)
+            print(_counterexample(claim), file=out)
         else:
             unknown += 1
-            reason = proof.result.reason or proof.result.report
-            if reason:
-                print(_indent(str(reason).rstrip(), "  "), file=out)
+            if claim.reason:
+                print(_indent(claim.reason.rstrip(), "  "), file=out)
     return proven, violated, unknown
 
 
-def _verify(path: str, k: int | None, recursive: bool, out: TextIO) -> int:
+def _verify(
+    path: str, k: int | None, recursive: bool, out: TextIO, *, as_json: bool = False
+) -> int:
+    from .net.report import LoadError, load_net, nets_of, verify_file
+
+    if as_json:
+        report = verify_file(path, k, recursive=recursive)
+        _dump(report.to_dict(), out)
+        return _EXIT_OK if report.ok else _EXIT_FAIL
     try:
-        node = _load(path)
-    except _LoadError as err:
+        node = load_net(path)
+    except LoadError as err:
         print(f"ERROR {err}", file=out)
         return _EXIT_FAIL
-    nets = [node]
-    if recursive:
-        i = 0
-        while i < len(nets):
-            nets.extend(c for c in _children(nets[i]) if all(c is not n for n in nets))
-            i += 1
     totals = [0, 0, 0]
-    for net in nets:
+    for net in nets_of(node, recursive=recursive):
         for j, n in enumerate(_verify_one(net, k, out)):
             totals[j] += n
     proven, violated, unknown = totals
@@ -250,6 +126,18 @@ def _verify(path: str, k: int | None, recursive: bool, out: TextIO) -> int:
                 file=out,
             )
     return _EXIT_FAIL if violated or unknown else _EXIT_OK
+
+
+def _dump(data: Any, out: TextIO) -> None:
+    json.dump(data, out, indent=2, default=str)
+    out.write("\n")
+
+
+def _web(args: argparse.Namespace) -> int:
+    from .web.server import serve
+
+    serve(args.agents_dir, host=args.host, port=args.port, reload_agents=args.reload)
+    return _EXIT_OK
 
 
 def _packaged(name: str) -> str:
@@ -272,8 +160,10 @@ def _parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
     c = sub.add_parser("check", help="load the YAML through ADK's loader and build the net (no Z3)")
     c.add_argument("file")
+    c.add_argument("--json", action="store_true", help="print the result as JSON")
     v = sub.add_parser("verify", help="run the prove: claims; exit 1 on violated or unknown")
     v.add_argument("file")
+    v.add_argument("--json", action="store_true", help="print the verdicts as JSON")
     v.add_argument(
         "--k",
         type=_positive,
@@ -285,6 +175,15 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also verify each mounted child PetriNet's own prove:, on the child alone",
     )
+    w = sub.add_parser(
+        "web",
+        help="serve ADK's dev UI for Petri nets: the net in its graph panel, "
+        "and a builder assistant that writes and proves blueprints",
+    )
+    w.add_argument("agents_dir", nargs="?", default=".", help="the folder holding the agents")
+    w.add_argument("--host", default="127.0.0.1")
+    w.add_argument("--port", type=int, default=8000)
+    w.add_argument("--reload", action="store_true", help="reload agents when their files change")
     sub.add_parser("guide", help="print the authoring guide (AUTHORING.md)")
     sub.add_parser("schema", help="print the JSON Schema of the YAML format")
     return p
@@ -296,9 +195,11 @@ def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int
     stream = out if out is not None else sys.stdout
     match args.command:
         case "check":
-            return _check(args.file, stream)
+            return _check(args.file, stream, as_json=args.json)
         case "verify":
-            return _verify(args.file, args.k, args.recursive, stream)
+            return _verify(args.file, args.k, args.recursive, stream, as_json=args.json)
+        case "web":
+            return _web(args)
         case "guide":
             stream.write(_packaged("AUTHORING.md"))
             return _EXIT_OK

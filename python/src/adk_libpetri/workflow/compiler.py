@@ -249,6 +249,10 @@ class CompiledWorkflow:
     def node_names(self) -> list[str]:
         return list(self._plans)
 
+    def run_nodes(self) -> dict[str, BaseNode]:
+        """``Wf_N_Run`` -> the ADK node N it runs."""
+        return {f"Wf_{n}_Run": p.node for n, p in self._plans.items()}
+
     @property
     def terminal_nodes(self) -> list[str]:
         return [n for n, p in self._plans.items() if p.terminal]

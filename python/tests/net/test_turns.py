@@ -196,6 +196,9 @@ async def test_a_node_output_that_is_no_value_fails_its_transition_by_name(
     assert isinstance(t.error, NetRunError), t.error
     assert "node 'to_content'" in str(t.error)
     assert "place 'c'" in str(t.error) and "Event(output=content)" in str(t.error)
+    # The error event is the failing node's, not the net's (whose name every event carries).
+    [err] = [e for e in await s.stored_events() if e.error_code]
+    assert err.author == "to_content"
 
 
 async def test_a_node_writing_eventout_streams_the_answer_before_slow_runs_finish(

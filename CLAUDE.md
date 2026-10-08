@@ -298,6 +298,26 @@ structural changes. Python-specific rules:
   `.agent.fn` and `x.yaml` refs for, relative to the YAML file. Do not retype
   it. Subnets mount by YAML ref, bound ports fused, the rest prefixed `inst/`.
   Tests and fixture blueprints are in `tests/net/`.
+- **`web/`** (`adk-libpetri web`, ADR 0009) wraps ADK's dev server, never
+  patches it or its JS. ADK's dev UI is the product: `PetriAgentLoader`
+  (traced nets, the Petri builder assistant under
+  `__adk_agent_builder_assistant`) plus routes inserted at
+  `app.router.routes[0]` that answer the UI's own requests for a net and call
+  ADK's handler for the rest: `graph_view` (graph panel DOT), `builder_guard`
+  (canvas saves cannot overwrite a net), `canvas_view` (the canvas card),
+  `proof_view` (counterexample SVGs). Load a builder draft
+  (`<app>/tmp/<app>`) only through `web/staging.staged` (a copy under a
+  package name of its own), never under its app's package name: that races
+  ADK's loader for `sys.modules`. Make drafts with `web/drafts.make_draft`
+  (it records the baseline `reconcile` needs so Save never puts back an
+  older app file). Every event under a net carries the net's name as its
+  author, so the drawing never titles or labels anything with it (ADK's
+  highlighting would light that node on every event). `/petri` is an
+  unlisted power tool;
+  never point users at it as the main path. `net/report.py`, `net/graph.py`
+  and `net/counterexample.py` are the data the CLI, the routes and the
+  builder tools share; change output there, not in each caller. A UI change
+  needs a real-browser check (ADR 0009's re-check list).
 - **`_net_node.py`** (`NetNodeBase`) holds the turn and per-session runner
   logic both `PetriWorkflow` and `PetriNet` subclass; change it once.
 - **A compiled workflow is a `BaseNode`** (`PetriWorkflow`), not a

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Union
 
 from google.adk.models.base_llm import BaseLlm
@@ -99,6 +100,35 @@ DEF = NetSpec(
 )
 
 
+_NO_KEY = (
+    "No API key was provided",
+    "Missing key inputs argument",
+    "API key not valid",
+    "API_KEY_INVALID",
+)
+
+
+class ModelKeyMissing(RuntimeError):
+    """The model refused the call: no (valid) Gemini API key. The message leads with the fix."""
+
+
+def key_hint(message: str) -> str:
+    """The fix for a model error that says no (valid) Gemini API key is set; else ""."""
+    if not any(m in message for m in _NO_KEY):
+        return ""
+    folder = Path.cwd().name or "."
+    return (
+        f"No Gemini API key: put GOOGLE_API_KEY=... in {folder}/.env, the folder the "
+        "server runs from (or set GOOGLE_GENAI_USE_VERTEXAI=1 with a Vertex project), "
+        "and restart it."
+    )
+
+
+def _first_sentence(message: str) -> str:
+    head = message.strip().split(". ", 1)[0].rstrip(".")
+    return head + "."
+
+
 async def first_response(llm: BaseLlm, request: LlmRequest) -> LlmResponse:
     """The first response of a non-streaming ``generate_content_async``."""
     agen = llm.generate_content_async(request, stream=False)
@@ -137,6 +167,10 @@ def action_bindings(llm: BaseLlm, callbacks: Callbacks | None = None) -> dict[st
     async def on_model_error(ctx: Ctx) -> None:
         error = ctx.input(Places.LLM_ERROR)
         if cb.on_model_error is None:
+            fix = key_hint(error.message)
+            if fix:
+                # The fix first: ADK's error snackbar cuts a long message short.
+                raise ModelKeyMissing(f"{fix} (The model said: {_first_sentence(error.message)})")
             raise RuntimeError(
                 f"{Transitions.ON_MODEL_ERROR} fired with no recovery callback bound: "
                 f"{error.message} ({error.exception_type})"

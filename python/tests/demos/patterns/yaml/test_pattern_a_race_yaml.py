@@ -68,6 +68,9 @@ async def test_fastest_branch_commits_first_and_losers_drain_to_discard(
     # The answer is the fast branch's, and it comes before the slow branch is done.
     event, at = run.answer()
     assert event.output == agent.BranchResult("fast", "answer from fast")
+    # Emitted under the commit that answered (ADK's dev UI lights it), as a message.
+    assert event.node_info.path.endswith("@1/Race_CommitA@1")
+    assert event.content is not None and event.content.parts[0].text == "answer from fast"
     assert at < agent.SLOW, f"answer after {at:.3f}s; first-wins means < {agent.SLOW}s"
     # The invocation itself lasts until the losers' node runs are over: they run
     # inside it (PetriAgent, in the Python demo, ends the turn at the answer).

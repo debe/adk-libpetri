@@ -20,7 +20,7 @@ from adk_libpetri.net import BlueprintError, PetriNet, parse_blueprint
 from adk_libpetri.subnet import llm_agent
 from support.fake_llm import ScriptedLlm, call, text
 
-from ._harness import runner_of, session, text_of
+from ._harness import answers, runner_of, session, text_of
 from .conftest import BLUEPRINTS, Serve
 
 
@@ -56,11 +56,13 @@ async def test_a_child_blueprint_mounted_twice(
     s = await session(node)
     turn = await s.say("q")
     assert turn.error is None
-    [answer] = [e for e in turn.events if e.node_info.path == "double_race@1"]
+    [answer] = answers(turn.events, "double_race")
     assert text_of(answer) == "quick(q) + quick(q)"
     paths = {e.node_info.path for e in turn.events}
     # Both instances ran both branches; the careful losers drained in the turn.
-    assert {f"double_race@1/{n}@{i}" for n in ("quick", "careful") for i in (1, 2)} <= paths
+    # A mounted function node runs as <mount>·<node>: its path names the mount.
+    runs = {f"double_race@1/{m}·{n}@1" for m in ("first", "second") for n in ("quick", "careful")}
+    assert runs <= paths
     snap = await runner_of(node, s).snapshot()
     assert snap.marking.count("first/won") == snap.marking.count("second/won") == 1
 
@@ -91,7 +93,7 @@ async def test_nested_yaml_refs_two_levels_deep(
     turn = await s.say("x")
     assert turn.error is None
     assert text_of(turn.events[-1]) == "top[mid[leaf[x]]]"
-    assert "nested_net@1/wrap_leaf@1" in {e.node_info.path for e in turn.events}
+    assert "nested_net@1/middle·inner·wrap_leaf@1" in {e.node_info.path for e in turn.events}
 
 
 # ----------------------------------------------------------------------------
@@ -140,6 +142,24 @@ async def test_stock_llm_agent_runs_the_agents_model_and_tools(
     ]
     assert responses[0] is not None
     assert responses[0].response == {"city": "Paris", "forecast": "sunny"}
+
+
+async def test_a_failing_stock_subnet_is_the_error_events_author(
+    serve: Serve,
+) -> None:
+    """Not the net: ADK's dev UI lights the drawn node an event's author names, and the
+    net's name is on its answer and on every event of its nodes."""
+    node = load(BLUEPRINTS / "bp_llm" / "root.yaml", serve)
+    [helper] = node.nodes[0]
+    helper.model = ScriptedLlm.of(
+        ValueError("No API key was provided. Please pass a valid API key.")
+    )
+    s = await session(node)
+    turn = await s.say("weather in Paris?")
+    assert turn.error is not None
+    [err] = [e for e in await s.stored_events() if e.error_code]
+    assert err.author == "assistant" and err.author != node.name
+    assert "GOOGLE_API_KEY" in str(err.error_message)  # the fix, in the chat
 
 
 def text_of_content(c: Any) -> str:
@@ -255,3 +275,11 @@ def test_every_stock_subnet_mounts_from_an_llm_agent() -> None:
     assert b.spec.place_named("calls") is not None
     acts = b.actions(NetScope())  # every transition bound, the stock actions under their prefix
     assert set(acts) == names
+
+
+def test_a_subnet_instance_may_not_share_a_places_name() -> None:
+    """The drawing titles a collapsed subnet by its prefix: one name, one thing."""
+    with pytest.raises(BlueprintError) as info:
+        mount({"q": "question", "r": "answer"}, answer={"type": "str"}, c={})
+    assert info.value.path == "subnets.c"
+    assert "has the name of a place" in str(info.value)

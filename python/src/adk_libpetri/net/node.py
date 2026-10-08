@@ -37,8 +37,13 @@ session nets on :meth:`OrchestratorLoop.shared`.
 **The turn** follows ``PetriAgent``'s protocol: the invocation's input (the
 node input, a ``str`` made a user ``Content`` when ``userIn`` takes one, else
 the user's message) is injected on ``userIn``; the first non-partial token on
-``eventOut`` ends the turn. An ``Event`` token is yielded as this node's
-event; any other value becomes the node's output. A ``node:`` transition runs
+``eventOut`` ends the turn. It is this node's output, emitted as a
+``Workflow``'s terminal node emits it: under a child named after the
+transition that put it there (path ``race@1/Race_Commit@1``, so ADK's dev UI
+lights that transition), an ``Event`` token as that event, any other value as
+the event's ``output`` with a text part (its ``text``, else JSON) the dev UI
+shows as a message. It comes as soon as the token does; node runs still in
+flight (a race's losers) finish inside the invocation after it. A ``node:`` transition runs
 its ADK node inside the turn's invocation; a node that fails with no
 ``error`` branch fails this node as it fails a ``Workflow``. A session's net
 serves one turn at a time; a node transition that fires between turns runs
@@ -68,6 +73,7 @@ from .. import colours as C
 from .._aio import HotStream, OrchestratorLoop
 from .._experimental import experimental
 from .._net_node import SCOPE_ATTACHMENT, NetNodeBase
+from .._spec import And, NetSpec, Out, Timeout, Xor, _out_places
 from ..bridge import TransitionFailure
 from ..runner.petri_runner import Builder, PetriRunner
 from ..runner.session_registry import SessionExecutorRegistry
@@ -81,6 +87,7 @@ from .blueprint import (
     package_of,
     parse_blueprint,
 )
+from .graph import blueprint_graph
 from .proofs import NetProof, verify_blueprint
 
 _LOADER = "google.adk.agents.config_agent_utils"
@@ -119,6 +126,9 @@ def _nearest_source() -> str | None:
     return paths[0] if paths else None
 
 
+_DERIVED = ("graph",)
+
+
 class _PetriNetConfig(BaseModel):
     """ADK's loader validates a file against this before it resolves ``nodes:``.
 
@@ -148,6 +158,13 @@ class _PetriNetConfig(BaseModel):
             for key in data:
                 k = str(key)
                 base = k.removesuffix("_code") if k.endswith("_code") else k
+                if k in _DERIVED:
+                    raise BlueprintError(
+                        k,
+                        f"{k!r} is derived from the net, not written",
+                        f"delete the {k}: key",
+                        source,
+                    )
                 if k == "agent_class" or base in fields:
                     continue
                 import difflib
@@ -190,24 +207,88 @@ def _check_node_entries(items: Any, source: str | None) -> None:
 # ----------------------------------------------------------------------------
 
 
+def timeout_places(spec: NetSpec) -> dict[str, frozenset[str]]:
+    """Per transition with a ``timeout`` output branch, the places that branch puts to."""
+    out: dict[str, frozenset[str]] = {}
+
+    def walk(o: Out) -> list[str]:
+        match o:
+            case Timeout(_, child):
+                return [p.name for p in _out_places(child)]
+            case And(cs) | Xor(cs):
+                return [p for c in cs for p in walk(c)]
+            case _:
+                return []
+
+    for t in spec.transitions:
+        names = walk(t.output) if t.output is not None else []
+        if names:
+            out[t.name] = frozenset(names)
+    return out
+
+
 class _EgressTap:
-    """Event-store link that hands every ``EVENT_OUT`` token (``Event`` or not) to the turn."""
+    """Event-store link that hands every ``EVENT_OUT`` token (``Event`` or not) to the turn,
+    and records which transition put each one there (``scope.answered_by``).
+
+    A firing's ``TokenAdded`` events come just before its ``TransitionCompleted``,
+    which names them. A ``timeout`` output branch has no ``TransitionCompleted``:
+    its tokens come right after the transition's ``ActionTimedOut``, and are told
+    from the next firing's (which may follow with no event between) by the
+    places the branch puts to (``timeouts``). Tokens no event names stay unnamed.
+    """
 
     captures_tokens = True
 
-    def __init__(self, delegate: Any) -> None:
+    def __init__(
+        self,
+        delegate: Any,
+        scope: NetScope | None = None,
+        timeouts: Mapping[str, frozenset[str]] | None = None,
+    ) -> None:
         self._delegate = delegate
+        self._scope = scope
+        self._timeouts = timeouts or {}
+        self._pending: list[Any] = []
+        self._timed_out: tuple[str, frozenset[str]] | None = None
         self.stream: HotStream[Any] = HotStream()
 
     def is_enabled(self) -> bool:
         return True
 
+    def _record(self, name: str | None, tokens: list[Any]) -> None:
+        if tokens and self._scope is not None:
+            self._scope.answered_by.extend((name, token) for token in tokens)
+
+    def _name(self, name: str | None) -> None:
+        self._record(name, self._pending)
+        self._pending = []
+
     def append(self, event: Any) -> None:
         t = event.type
-        if t == "TokenAdded" and event.place_name == C.EVENT_OUT.name:
-            self.stream.publish(getattr(event, "token", None))
-        elif t == "ExecutionCompleted":
-            self.stream.complete()
+        if t == "TokenAdded":
+            place = event.place_name
+            branch = self._timed_out
+            if branch is not None and place not in branch[1]:
+                self._timed_out = branch = None
+            if place == C.EVENT_OUT.name:
+                token = getattr(event, "token", None)
+                if branch is not None:
+                    self._record(branch[0], [token])
+                else:
+                    self._pending.append(token)
+                self.stream.publish(token)
+        else:
+            self._timed_out = None
+            if t == "TransitionCompleted":
+                self._name(str(event.transition_name))
+            else:
+                self._name(None)
+                if t == "ActionTimedOut":
+                    name = str(event.transition_name)
+                    self._timed_out = (name, self._timeouts.get(name, frozenset()))
+                elif t == "ExecutionCompleted":
+                    self.stream.complete()
         if self._delegate is not None:
             self._delegate.append(event)
 
@@ -218,6 +299,114 @@ class _EgressTap:
 _NOTHING: Any = object()
 
 
+def _failure_author(transition: str) -> str:
+    """Who the error event of a failed transition is from: its top-level subnet
+    (``assistant`` for ``assistant/LlmStep_OnModelError``), else the transition.
+
+    ADK's dev UI lights the graph node titled (or labelled) by an event's
+    author; the net's drawing titles a collapsed subnet by its prefix and a
+    transition by its name.
+    """
+    return transition.split("/", 1)[0] or transition
+
+
+class _Answer(BaseNode):
+    """The net's answer, emitted as the output of a child named after the transition
+    that put it on ``eventOut``."""
+
+    event: Any = None
+
+    async def _run_impl(self, *, ctx: Any, node_input: Any) -> AsyncGenerator[Any, None]:
+        yield self.event
+
+
+def answer_text(value: Any) -> str:
+    """The text the dev UI shows for an answer that is a value, not a message.
+
+    Its ``text`` (a field or key holding a ``str``), else the value as JSON.
+    """
+    import dataclasses
+    import json
+
+    from pydantic import BaseModel
+
+    text = value.get("text") if isinstance(value, Mapping) else getattr(value, "text", None)
+    if isinstance(text, str):
+        return text
+    if isinstance(value, str):
+        return value
+    if isinstance(value, BaseModel):
+        data: Any = value.model_dump(mode="json")
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        data = dataclasses.asdict(value)
+    else:
+        data = value
+    try:
+        body = json.dumps(data, indent=2, default=str, ensure_ascii=False)
+    except (TypeError, ValueError):
+        body = str(value)
+    return f"```json\n{body}\n```"
+
+
+def _is_token(token: Any, item: Any) -> bool:
+    """Whether ``item`` (what the turn took off the egress) is ``token``; the turn
+    hands on a copy of an ``Event`` that keeps its ``id``."""
+    if token is item:
+        return True
+    return isinstance(token, Event) and isinstance(item, Event) and token.id == item.id
+
+
+async def _answering(scope: NetScope, item: Any) -> str | None:
+    """The drawn name of the transition that put ``item`` on ``eventOut``, or None.
+
+    Its naming event follows the token by a moment, on another thread: waited
+    for briefly. A transition inside a subnet answers as the subnet's top-level
+    mount, which is how the net's drawing titles it.
+    """
+    for _ in range(20):
+        for name, token in list(scope.answered_by):
+            if _is_token(token, item):
+                if name is None:
+                    return None
+                top = name.split("/", 1)[0]
+                return top if top.isidentifier() else None
+        await asyncio.sleep(0.005)
+    return None
+
+
+async def _answer_as(ctx: Any, scope: NetScope, source: str, item: Any) -> None:
+    """Emit the turn's answer ``item`` as the output of a child node named ``source``.
+
+    As a ``Workflow``'s terminal node does: the event's node path ends in
+    ``source`` (``race_agent@1/Race_CommitA@1``) and its output is this node's
+    (``use_as_output``), author and branch as for any child. ADK's dev UI then
+    lights the transition that answered and walks back from it through the
+    branch that won.
+    """
+    event = (
+        item.model_copy(update={"branch": None}, deep=True)
+        if isinstance(item, Event)
+        else Event(output=item)
+    )
+    if event.content is None and event.output is not None:
+        # A text part: the dev UI shows the answer as a message, not as one more
+        # JSON bubble among the node outputs of the turn.
+        event.content = types.Content(
+            role="model", parts=[types.Part(text=answer_text(event.output))]
+        )
+    child = await ctx._run_node_internal(
+        _Answer(name=source, event=event),
+        node_input=None,
+        use_as_output=True,
+        return_ctx=True,
+        run_id=scope.next_run_id(source),
+        skip_run_id_validation=True,
+    )
+    if child.output is not None:
+        ctx.output = child.output
+        ctx._output_delegated = True
+
+
 @experimental
 class PetriNet(NetNodeBase):
     """A Petri-net blueprint as an ADK node; see the module docstring for the format."""
@@ -226,16 +415,22 @@ class PetriNet(NetNodeBase):
     rerun_on_resume: bool = True
     """ADK runs a node's children dynamically only under a node that reruns on resume."""
 
-    nodes: list[EdgeItem] = Field(default_factory=list)
+    nodes: list[EdgeItem] = Field(default_factory=list, exclude=True)
     """ADK nodes the transitions (``node:``) and subnets (``net:``, ``from:``)
     name. Typed as a ``Workflow``'s edges so ADK's loader resolves each entry
-    (``- [agent.yaml]``, ``- [.agent.fn]``, an inline node) relative to the file."""
+    (``- [agent.yaml]``, ``- [.agent.fn]``, an inline node) relative to the file.
+    Left out of serialization: ADK's dev UI serializer reads a ``nodes`` field as
+    a list of nodes, not of edge items (the ``graph`` field lists what runs)."""
     places: dict[str, Any] = Field(default_factory=dict)
     transitions: dict[str, Any] = Field(default_factory=dict)
     env: list[str] = Field(default_factory=list)
     ports: dict[str, Any] | None = None
     subnets: dict[str, Any] = Field(default_factory=dict)
     prove: dict[str, Any] | None = None
+    graph: Any = None
+    """The net as a :class:`~adk_libpetri.net.graph.NetGraph`, derived from the
+    fields above (a file cannot set it). Named ``graph`` because ADK's dev UI
+    draws a node's ``graph`` field: places, transitions and the nodes they run."""
 
     _blueprint: Blueprint = PrivateAttr()
 
@@ -255,6 +450,7 @@ class PetriNet(NetNodeBase):
         self._blueprint = parse_blueprint(
             self.name, data, nodes=nodes, package=package_of(source), source=source
         )
+        self.graph = blueprint_graph(self._blueprint)
         if self._blueprint.proof.on_load:
             failed = [p for p in self.verify() if not p.proven]
             if failed:
@@ -348,6 +544,9 @@ class PetriNet(NetNodeBase):
     def _net_spec(self) -> Any:
         return self._blueprint.spec
 
+    def _initial_counts(self) -> dict[str, int]:
+        return self._blueprint.initial_counts()
+
     def _new_scope(self) -> TurnScope:
         return NetScope()
 
@@ -359,10 +558,10 @@ class PetriNet(NetNodeBase):
         runner.on_drain(scope.close)
         return runner
 
-    def _runner_builder(self, scope: TurnScope) -> Builder:
+    def _runner_builder(self, scope: TurnScope, event_store: Any) -> Builder:
         assert isinstance(scope, NetScope)
         bp = self._blueprint
-        tap = _EgressTap(self._event_store)
+        tap = _EgressTap(event_store, scope, timeout_places(bp.spec))
         scope.egress = tap.stream
         builder = (
             PetriRunner.builder(bp.spec, bp.actions(scope))
@@ -403,15 +602,25 @@ class PetriNet(NetNodeBase):
                         item = x
                 finally:
                     scope.answered()
-                if isinstance(item, Event):
-                    # A copy that is ours: ADK's node runner stamps author, path and branch.
-                    yield item.model_copy(update={"branch": None}, deep=True)
-                elif item is not _NOTHING:
-                    ctx.output = item
-            except TransitionFailure:
+                if item is not _NOTHING:
+                    source = await _answering(scope, item)
+                    if source is not None:
+                        await _answer_as(ctx, scope, source, item)
+                    elif isinstance(item, Event):
+                        # A copy that is ours: ADK's node runner stamps author, path, branch.
+                        yield item.model_copy(update={"branch": None}, deep=True)
+                    else:
+                        ctx.output = item
+            except TransitionFailure as failed:
                 result = scope.result
                 if result is None or result.failure is None:
+                    # The net's own transition failed: the error event names
+                    # where (_failure_author), not the net, whose name its
+                    # answer and every event of its nodes carry.
+                    ctx.event_author = _failure_author(failed.transition_name)
                     raise
+                if not result.failure.from_node:
+                    ctx.event_author = result.failure.node or self.name
                 self._fail(ctx, result.failure)
             finally:
                 # The node runs this turn started run inside its invocation: let
