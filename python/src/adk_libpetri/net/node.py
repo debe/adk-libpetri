@@ -47,7 +47,10 @@ flight (a race's losers) finish inside the invocation after it. A ``node:`` tran
 its ADK node inside the turn's invocation; a node that fails with no
 ``error`` branch fails this node as it fails a ``Workflow``. A session's net
 serves one turn at a time; a node transition that fires between turns runs
-in the next turn's invocation.
+in the next turn's invocation. With ``turn: {release: place}`` the next turn
+starts when a token reaches that place (ADR 0010): the turn yields an event
+with ``custom_metadata`` :data:`RELEASED`, and node runs that start after
+the next turn opened run in its invocation.
 
 **Leading-dot types** (``type: .agent.Draft``) resolve against the package of
 the YAML file being loaded (its directory name, ADK's rule for ``.agent.fn``
@@ -91,6 +94,23 @@ from .graph import blueprint_graph
 from .proofs import NetProof, verify_blueprint
 
 _LOADER = "google.adk.agents.config_agent_utils"
+
+RELEASED: Mapping[str, str] = {"adk_libpetri": "released"}
+"""The ``custom_metadata`` of the event a turn yields when it is released
+(``turn: {release: place}``, ADR 0010)."""
+
+
+def is_released(event: Any) -> bool:
+    """Whether ``event`` is the one a turn yields when a token reaches its release place."""
+    meta = getattr(event, "custom_metadata", None)
+    return isinstance(meta, Mapping) and meta.get("adk_libpetri") == RELEASED["adk_libpetri"]
+
+
+class _Release:
+    """What the egress tap publishes for a token on the release place."""
+
+
+_RELEASE = _Release()
 
 
 # ----------------------------------------------------------------------------
@@ -245,10 +265,12 @@ class _EgressTap:
         delegate: Any,
         scope: NetScope | None = None,
         timeouts: Mapping[str, frozenset[str]] | None = None,
+        release: str | None = None,
     ) -> None:
         self._delegate = delegate
         self._scope = scope
         self._timeouts = timeouts or {}
+        self._release = release
         self._pending: list[Any] = []
         self._timed_out: tuple[str, frozenset[str]] | None = None
         self.stream: HotStream[Any] = HotStream()
@@ -277,7 +299,12 @@ class _EgressTap:
                     self._record(branch[0], [token])
                 else:
                     self._pending.append(token)
-                self.stream.publish(token)
+                if self._scope is not None:
+                    self._scope.route_answer(token)
+                else:
+                    self.stream.publish(token)
+            elif place == self._release and self._scope is not None:
+                self._scope.route_release(_RELEASE)
         else:
             self._timed_out = None
             if t == "TransitionCompleted":
@@ -289,6 +316,8 @@ class _EgressTap:
                     self._timed_out = (name, self._timeouts.get(name, frozenset()))
                 elif t == "ExecutionCompleted":
                     self.stream.complete()
+                    if self._scope is not None:
+                        self._scope.ended()
         if self._delegate is not None:
             self._delegate.append(event)
 
@@ -297,6 +326,10 @@ class _EgressTap:
 
 
 _NOTHING: Any = object()
+
+
+def _is_release(item: Any) -> bool:
+    return item is _RELEASE
 
 
 def _failure_author(transition: str) -> str:
@@ -374,7 +407,7 @@ async def _answering(scope: NetScope, item: Any) -> str | None:
     return None
 
 
-async def _answer_as(ctx: Any, scope: NetScope, source: str, item: Any) -> None:
+async def _answer_as(ctx: Any, scope: TurnScope, source: str, item: Any) -> None:
     """Emit the turn's answer ``item`` as the output of a child node named ``source``.
 
     As a ``Workflow``'s terminal node does: the event's node path ends in
@@ -426,6 +459,7 @@ class PetriNet(NetNodeBase):
     env: list[str] = Field(default_factory=list)
     ports: dict[str, Any] | None = None
     subnets: dict[str, Any] = Field(default_factory=dict)
+    turn: dict[str, Any] | None = None
     prove: dict[str, Any] | None = None
     graph: Any = None
     """The net as a :class:`~adk_libpetri.net.graph.NetGraph`, derived from the
@@ -447,6 +481,8 @@ class PetriNet(NetNodeBase):
         }
         if self.ports is not None:
             data["ports"] = self.ports
+        if self.turn is not None:
+            data["turn"] = self.turn
         self._blueprint = parse_blueprint(
             self.name, data, nodes=nodes, package=package_of(source), source=source
         )
@@ -561,8 +597,7 @@ class PetriNet(NetNodeBase):
     def _runner_builder(self, scope: TurnScope, event_store: Any) -> Builder:
         assert isinstance(scope, NetScope)
         bp = self._blueprint
-        tap = _EgressTap(event_store, scope, timeout_places(bp.spec))
-        scope.egress = tap.stream
+        tap = _EgressTap(event_store, scope, timeout_places(bp.spec), bp.release)
         builder = (
             PetriRunner.builder(bp.spec, bp.actions(scope))
             .initial_marking(bp.initial_marking())
@@ -587,45 +622,64 @@ class PetriNet(NetNodeBase):
         scope = runner.attachments[SCOPE_ATTACHMENT]
         assert isinstance(scope, NetScope)
 
+        # A second invocation of this session waits here: for the turn before it
+        # to end, or, with a release place, to be released (ADR 0010).
+        turn = await scope.open_turn(self.name, ctx, asyncio.get_running_loop())
+        # As Workflow does: child events are attributed to this node.
+        ctx.event_author = self.name
+
         def inject() -> bool:
+            scope.injected(turn)
             return runner.inject(C.USER_IN.name, start)
 
-        # One turn at a time: a second invocation of this session waits here.
-        async with scope.turn_slot(self.name):
-            # As Workflow does: child events are attributed to this node.
-            ctx.event_author = self.name
-            scope.open_turn(ctx, asyncio.get_running_loop())
-            item = _NOTHING
+        def released() -> Event:
+            return Event(
+                author=self.name, invocation_id=ic.invocation_id, custom_metadata=dict(RELEASED)
+            )
+
+        item = _NOTHING
+        served = False
+        try:
             try:
-                try:
-                    async for x in self._turn(ctx, runner, inject, egress=scope.egress):
-                        item = x
-                finally:
-                    scope.answered()
-                if item is not _NOTHING:
-                    source = await _answering(scope, item)
-                    if source is not None:
-                        await _answer_as(ctx, scope, source, item)
-                    elif isinstance(item, Event):
-                        # A copy that is ours: ADK's node runner stamps author, path, branch.
-                        yield item.model_copy(update={"branch": None}, deep=True)
-                    else:
-                        ctx.output = item
-            except TransitionFailure as failed:
-                result = scope.result
-                if result is None or result.failure is None:
-                    # The net's own transition failed: the error event names
-                    # where (_failure_author), not the net, whose name its
-                    # answer and every event of its nodes carry.
-                    ctx.event_author = _failure_author(failed.transition_name)
-                    raise
-                if not result.failure.from_node:
-                    ctx.event_author = result.failure.node or self.name
-                self._fail(ctx, result.failure)
+                async for x in self._turn(
+                    ctx, runner, inject, egress=turn.egress, relay=_is_release
+                ):
+                    if x is _RELEASE:
+                        scope.report_release(turn)
+                        yield released()
+                        continue
+                    item = x
             finally:
-                # The node runs this turn started run inside its invocation: let
-                # them finish (a race's loser, say) before the invocation ends.
-                await scope.drain()
+                scope.answered(turn)
+            if item is not _NOTHING:
+                source = await _answering(scope, item)
+                if source is not None:
+                    await _answer_as(ctx, turn, source, item)
+                elif isinstance(item, Event):
+                    # A copy that is ours: ADK's node runner stamps author, path, branch.
+                    yield item.model_copy(update={"branch": None}, deep=True)
+                else:
+                    ctx.output = item
+                # The node runs counted against this turn run inside its
+                # invocation: let them finish (a race's loser, say) before it ends.
+                async for _ in scope.drain(turn):
+                    yield released()
+                served = True
+        except TransitionFailure as failed:
+            result = turn.result
+            if result is None or result.failure is None:
+                # The net's own transition failed: the error event names
+                # where (_failure_author), not the net, whose name its
+                # answer and every event of its nodes carry.
+                ctx.event_author = _failure_author(failed.transition_name)
+                raise
+            if not result.failure.from_node:
+                ctx.event_author = result.failure.node or self.name
+            self._fail(ctx, result.failure)
+        finally:
+            # An answered turn with a release place admits the next at its
+            # release; one that failed or was aborted admits it now.
+            await scope.end(turn, admit=not served or self._blueprint.release is None)
 
     def _user_input(self, value: Any) -> Any:
         """The token the turn puts on ``userIn``: ``value``, of userIn's type."""

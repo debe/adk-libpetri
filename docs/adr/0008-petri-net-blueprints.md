@@ -120,7 +120,8 @@ over unchanged:
   `PetriNet.inject(session, place, value)`; a `turnPermit` place is seeded
   with one token; `turnAbort` is signalled on any transition failure, and a
   mounted child's `turnAbort` fuses with the parent's;
-- a session's net serves one turn at a time (a second invocation waits), and
+- a session's net serves one turn at a time (a second invocation waits;
+  [ADR 0010](0010-turn-release.md) lets it start at a declared release), and
   no transition may consume, read or inhibit `eventOut`, which keeps every
   turn's answer.
 

@@ -1,0 +1,21 @@
+# release.yaml with no turn: release place: the next turn waits for the
+# delivery tail to end, as every net without one does.
+agent_class: adk_libpetri.net.PetriNet
+name: serial_tail
+nodes:
+  - [.agent.shout]
+  - [.agent.guard]
+places:
+  permit: {seed: 1}
+  answer: {type: str}
+  draft: {type: str}
+  guarded: {type: str}
+  turnReleased: {}
+transitions:
+  Rel_Respond: {in: [userIn, permit], out: answer, node: shout}
+  Rel_Fork: {in: [answer], out: {and: [draft, turnReleased, permit]}}
+  Rel_Guard: {in: [draft], out: guarded, node: guard}
+  Rel_Final: {in: [guarded], out: eventOut, action: emit}
+prove:
+  options: {sinks: [eventOut, permit, turnReleased]}
+  claims: [deadlock_free, {place_bound: {place: permit, bound: 1}}]

@@ -203,6 +203,7 @@ class NetNodeBase(BaseNode):
         runner: PetriRunner,
         inject: Callable[[], bool],
         egress: HotStream[Any] | None = None,
+        relay: Callable[[Any], bool] | None = None,
     ) -> AsyncGenerator[Any, None]:
         ic = ctx.get_invocation_context()
         return run_turn(
@@ -211,6 +212,7 @@ class NetNodeBase(BaseNode):
             inject,
             abort_signal=getattr(ic, "_abort_signal", None),
             egress=egress,
+            relay=relay,
         )
 
     # -- the result ------------------------------------------------------------

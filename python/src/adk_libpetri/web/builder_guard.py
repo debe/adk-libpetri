@@ -82,7 +82,7 @@ logger = logging.getLogger(__name__)
 SAVE_PATH = "/dev/apps/{app_name}/builder/save"
 
 NET_KEYS = frozenset(
-    {"nodes", "places", "transitions", "env", "ports", "subnets", "prove"}  # PetriNet
+    {"nodes", "places", "transitions", "env", "ports", "subnets", "turn", "prove"}  # PetriNet
     | {"edges", "back_edge_budget", "state", "multi_route", "max_concurrency", "interruptible"}
 )
 """Keys that make an upload a net of its own (a ``PetriNet`` blueprint or a

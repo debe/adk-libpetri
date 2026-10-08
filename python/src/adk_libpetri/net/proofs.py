@@ -12,7 +12,10 @@ never run). Its options are the shared ``prove.options`` with the claim's own
   (a verification-only transition ``turn:next`` moves that answer to
   ``turn:answered`` and puts the next input down). A safety claim covers one
   turn, ``deadlock_free`` two, so a net whose first turn leaves it unable to
-  answer the next is caught; ``k`` sets the number of turns for both.
+  answer the next is caught; ``k`` sets the number of turns for both. With
+  ``turn: {release: place}`` the next input waits for the release instead
+  (``turn:next`` moves it to ``turn:released``), and node runs of earlier
+  turns may still be in flight (ADR 0010).
 * **environment** -- the places tokens arrive on from outside: the ``env:``
   places, and for a safety claim ``turnAbort`` too (the runner signals it on
   any failure or abort, at any time). By default each arrives at most ``k``
@@ -53,6 +56,7 @@ TURN_NEXT = "turn:next"
 TURNS_LEFT = "turn:remaining"
 TURNS_ANSWERED = "turn:answered"
 TURNS_QUIET = "turn:quiet"
+TURNS_RELEASED = "turn:released"
 
 
 def quiet_place(transition: str) -> str:
@@ -115,13 +119,15 @@ def _lp_mode(mode: EnvMode) -> lp.EnvironmentAnalysisMode:
     return lp.arrivals(lo, hi) if lo else lp.arrivals(hi)
 
 
-def _describe(places: list[str], mode: EnvMode | None, turns: int | None, seeded: int) -> str:
+def _describe(
+    places: list[str], mode: EnvMode | None, turns: int | None, seeded: int, after: str
+) -> str:
     """The run a claim covers, in words (``NetProof.scope``)."""
     parts: list[str] = []
     if turns == 1:
         parts.append("1 turn")
     elif turns is not None:
-        parts.append(f"{turns} turns, each input after the previous answer")
+        parts.append(f"{turns} turns, each input after the previous {after}")
     elif seeded:
         parts.append(f"userIn: the {seeded} token(s) initial_marking seeds, no further turn")
     if places and mode is not None:
@@ -176,6 +182,12 @@ def turn_spec(bp: Blueprint) -> NetSpec | None:
     orders two starts of ``T`` only, and their deposits are tested by
     ``turn:next`` alone, so no behaviour is lost.
 
+    With a release place (``turn.release``, ADR 0010) ``turn:next`` takes the
+    release instead and tests no node run: a turn's tail may still run when
+    the next input comes, so nothing is split and no ``turn:quiet`` token is
+    added (it would order a node's start in one turn against its start in the
+    next, which the runtime allows).
+
     ``None`` when the net has no ``userIn`` environment place or no ``eventOut``.
     """
     spec = bp.spec
@@ -184,6 +196,17 @@ def turn_spec(bp: Blueprint) -> NetSpec | None:
     if user_in is None or event_out is None or C.USER_IN.name not in bp.env:
         return None
     left: Place[Any] = Place(TURNS_LEFT, VOID)
+    if bp.release is not None:
+        release = spec.place_named(bp.release)
+        assert release is not None
+        nxt = TransitionSpec(
+            TURN_NEXT,
+            (one(left), one(release)),
+            And((OutPlace(user_in), OutPlace(Place(TURNS_RELEASED, VOID)))),
+        )
+        return NetSpec(
+            spec.name, (*spec.transitions, nxt), spec.extra_places, spec.ports, spec.membership
+        )
     answered: Place[Any] = Place(TURNS_ANSWERED, event_out.token_type)
     nodes = set(bp.node_transitions)
     ts: list[TransitionSpec] = []
@@ -243,7 +266,8 @@ def _run(bp: Blueprint, claim: Claim, k: int | None) -> _Run:
             m[C.USER_IN.name] = m.get(C.USER_IN.name, 0) + 1
             if n > 1:
                 m[TURNS_LEFT] = n - 1
-                m.update((quiet_place(t), 1) for t in bp.node_transitions)
+                if bp.release is None:
+                    m.update((quiet_place(t), 1) for t in bp.node_transitions)
     abort = C.TURN_ABORT.name
     if not deadlock and bp.spec.has_place(C.TURN_ABORT) and abort not in places + list(seeded):
         places.append(abort)
@@ -263,7 +287,11 @@ def _run(bp: Blueprint, claim: Claim, k: int | None) -> _Run:
         if turns is not None and turns > 1:
             # An answer the next turn's input followed. turn:remaining is no sink:
             # a turn that never answers keeps the next one from coming.
-            sinks += [TURNS_ANSWERED, *(quiet_place(t) for t in bp.node_transitions)]
+            if bp.release is None:
+                sinks += [TURNS_ANSWERED, *(quiet_place(t) for t in bp.node_transitions)]
+            else:
+                # The answers stay on eventOut: turn:next takes the release.
+                sinks += [TURNS_RELEASED]
         kwargs["sink_places"] = sinks
         if o.sinks_when is not None:
             kwargs["sink_places_when"] = {m: list(ps) for m, ps in o.sinks_when.items()}
@@ -275,7 +303,8 @@ def _run(bp: Blueprint, claim: Claim, k: int | None) -> _Run:
             + (", node runs included (assume_atomic_nodes)" if bp.asynchronous else "")
         )
     seeded_inputs = kwargs["initial_marking"].get(C.USER_IN.name, 0) if turns is None else 0
-    scope = _describe(places, mode, turns, seeded_inputs)
+    after = "answer" if bp.release is None else "release"
+    scope = _describe(places, mode, turns, seeded_inputs, after)
     return _Run(kwargs, scope, tuple(notes), turns)
 
 

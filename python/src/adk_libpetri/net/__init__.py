@@ -11,10 +11,11 @@ from .blueprint import (
     NodeError,
     parse_blueprint,
 )
-from .node import PetriNet
+from .node import RELEASED, PetriNet, is_released
 from .proofs import NetProof, verify_blueprint
 
 __all__ = [
+    "RELEASED",
     "ActionPlan",
     "Blueprint",
     "BlueprintError",
@@ -22,6 +23,7 @@ __all__ = [
     "NetRunError",
     "NodeError",
     "PetriNet",
+    "is_released",
     "parse_blueprint",
     "verify_blueprint",
 ]

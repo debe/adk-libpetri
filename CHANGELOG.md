@@ -78,6 +78,13 @@ libpetri-py `>=7.3,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
     (`net/schema.json`) and an authoring guide (`net/AUTHORING.md`) ship with
     the package. Patterns A, B and C have YAML twins with their Python nets'
     fingerprints and proofs.
+  - `turn: {release: place}` lets the next turn start while the last one's
+    delivery tail still runs ([ADR 0010](docs/adr/0010-turn-release.md)): a
+    token on the release place yields an event with `custom_metadata
+    {"adk_libpetri": "released"}` (`is_released`) and admits the next
+    invocation of the session; answers go to turns in order. The proofs'
+    turn model then waits for the release only, with no node split or quiet
+    tokens. Nets without `turn:` are unchanged.
   - `PetriWorkflow` and `PetriNet` share their turn and session-runner logic
     (`_net_node.py`). Known gaps: no interrupts, and timeout outputs do not
     run yet (a libpetri-py decode bug).

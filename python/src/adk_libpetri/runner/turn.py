@@ -44,6 +44,7 @@ async def run_turn(
     abort_signal: asyncio.Event | None = None,
     finish: Callable[[Event], Event] = lambda e: e,
     egress: HotStream[Any] | None = None,
+    relay: Callable[[Any], bool] | None = None,
 ) -> AsyncGenerator[Any, None]:
     """The first of (terminal event, failure, abort) settles the turn.
 
@@ -54,7 +55,8 @@ async def run_turn(
 
     ``egress`` replaces :meth:`PetriRunner.adk_events` as the stream the turn
     waits on. An item on it that is not an ``Event`` is terminal and yielded
-    as is (``PetriNet`` taps every ``EVENT_OUT`` token that way).
+    as is (``PetriNet`` taps every ``EVENT_OUT`` token that way), unless
+    ``relay`` accepts it: then it is yielded and the turn goes on.
     """
     loop = asyncio.get_running_loop()
     events: Any = (egress if egress is not None else runner.adk_events()).subscribe()
@@ -79,6 +81,9 @@ async def run_turn(
                         "for this invocation"
                     ) from None
                 e_task = None
+                if relay is not None and relay(event):
+                    yield event
+                    continue
                 if not isinstance(event, Event):
                     yield event
                     return

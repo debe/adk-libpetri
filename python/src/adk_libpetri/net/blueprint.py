@@ -2,7 +2,7 @@
 
 :func:`parse_blueprint` is a pure function from the YAML mapping of an
 ``agent_class: adk_libpetri.net.PetriNet`` file (``places``, ``transitions``,
-``env``, ``ports``, ``subnets``, ``prove``) and the ADK nodes it names to a
+``env``, ``ports``, ``subnets``, ``turn``, ``prove``) and the ADK nodes it names to a
 :class:`Blueprint`: one flat :class:`~adk_libpetri._spec.NetSpec`, one
 :class:`ActionPlan` per transition, the seeds, the environment places, the
 mounted subnets and the proof claims. It does not need ADK's loader; the
@@ -22,13 +22,13 @@ The format, in short (the full rules are in the docstrings below):
   node | action}}``.
 * ``env: [place, ...]``, ``ports: {name: {place, direction}}``,
   ``subnets: {inst: {net | stock, from, bind}}``, ``prove: {options, claims}``.
+* ``turn: {release: place}`` -- where a turn's admission ends (ADR 0010).
 """
 
 from __future__ import annotations
 
 import asyncio
 import concurrent.futures as cf
-import contextlib
 import difflib
 import inspect
 import os
@@ -62,6 +62,7 @@ from .._spec import (
     Timing,
     TransitionSpec,
     Xor,
+    _out_places,
     at_least,
     deadline,
     delayed,
@@ -139,115 +140,244 @@ TurnPhase = Literal["closed", "waiting", "draining"]
 
 
 @dataclass
-class NetScope(TurnScope):
-    """The invocation a session's blueprint net serves, and the node runs of its turn.
+class OpenTurn(TurnScope):
+    """One turn of a session's net: its invocation, node runs, answer and release.
 
-    Turns are served one at a time (:meth:`turn_slot`). A turn is ``waiting``
-    from its inject to its first ``eventOut`` token, then ``draining`` until
-    every node run it started has finished (they run inside its invocation,
-    which must outlive them), then ``closed``. A node transition that fires
-    while no turn is open (a seeded one, a timed one after the answer) keeps
-    its tokens in flight and runs in the next turn's invocation; if the
-    session's net closes first, it fails.
+    ``waiting`` from its open to its answer (its first ``eventOut`` token),
+    ``draining`` until every node run counted against it has finished (they run
+    inside its invocation, which must outlive them), then ``closed``. ``admits``
+    once the next turn may start: at its release (``turn.release``), when it
+    fails or is aborted, and, with no release place, when it closes.
+    """
+
+    number: int = 0
+    phase: TurnPhase = "waiting"
+    egress: HotStream[Any] = field(default_factory=HotStream)
+    """This turn's ``eventOut`` answer and releases (:meth:`NetScope.route_answer`)."""
+    running: int = 0
+    injected: bool = False
+    answer_routed: bool = False
+    released: bool = False
+    release_reported: bool = False
+    forced: bool = False
+    _wake: asyncio.Event | None = field(default=None, repr=False)
+
+    @property
+    def admits(self) -> bool:
+        return self.released or self.forced
+
+
+@dataclass
+class NetScope(TurnScope):
+    """The turns a session's blueprint net serves: one at a time, or overlapping.
+
+    A turn waits for admission (:meth:`open_turn`) until the newest turn
+    :attr:`OpenTurn.admits`. With no release place that is when it closes, so
+    turns are served one at a time; with one, the next turn may open while
+    the last one's tail still runs (ADR 0010). A node run counts against the
+    newest turn that is not closed and runs in its invocation. A node
+    transition that fires while no turn is open (a seeded one, a timed one
+    after the answer) keeps its tokens in flight and runs in the next turn's
+    invocation; if the session's net closes first, it fails. ``eventOut``
+    tokens and releases go to the oldest turn that has injected and still
+    lacks one.
     """
 
     turn: int = 0
-    phase: TurnPhase = "closed"
-    egress: HotStream[Any] = field(default_factory=HotStream)
-    running: int = 0
     answered_by: list[tuple[str | None, Any]] = field(default_factory=list)
-    """Each ``eventOut`` token of this turn with the transition that put it there
-    (None when no event named it), in order; the net's egress tap appends."""
+    """Each ``eventOut`` token of the open turns with the transition that put it
+    there (None when no event named it), in order; the net's egress tap appends."""
+    _turns: list[OpenTurn] = field(default_factory=list, repr=False)
+    """Turns not yet both closed and admitting, oldest first."""
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
-    _drained: asyncio.Event | None = field(default=None, repr=False)
-    _deferred: list[tuple[str, cf.Future[int]]] = field(default_factory=list, repr=False)
+    _deferred: list[tuple[str, cf.Future[OpenTurn]]] = field(default_factory=list, repr=False)
     _closed: bool = field(default=False, repr=False)
-    _turns: asyncio.Lock | None = field(default=None, repr=False)
-    _turns_loop: asyncio.AbstractEventLoop | None = field(default=None, repr=False)
+    _ended: bool = field(default=False, repr=False)
+    _tickets: int = field(default=0, repr=False)
+    _serving: int = field(default=0, repr=False)
+    _abandoned: set[int] = field(default_factory=set, repr=False)
+    _admission: asyncio.Event | None = field(default=None, repr=False)
+    _admission_loop: asyncio.AbstractEventLoop | None = field(default=None, repr=False)
 
-    @contextlib.asynccontextmanager
-    async def turn_slot(self, net: str) -> AsyncIterator[None]:
-        """Hold the session's net for one turn: a second turn waits for this one to end."""
-        loop = asyncio.get_running_loop()
-        with self._lock:
-            if self._turns is None or self._turns_loop is not loop:
-                if self._turns is not None and self._turns.locked():
-                    raise NetRunError(
-                        f"PetriNet {net!r} got a turn from a second event loop while a turn "
-                        "is open; a session's net serves one turn at a time"
-                    )
-                self._turns = asyncio.Lock()
-                self._turns_loop = loop
-            turns = self._turns
-        async with turns:
-            yield
+    # -- admission (on the invocation's loop) ----------------------------------
 
-    def open_turn(self, ctx: Any, loop: asyncio.AbstractEventLoop) -> None:
-        """Point the scope at this turn's invocation; release node runs that waited for one."""
+    async def open_turn(self, net: str, ctx: Any, loop: asyncio.AbstractEventLoop) -> OpenTurn:
+        """Wait for the newest turn to admit this one, in arrival order, then open it."""
         with self._lock:
-            self.ctx = ctx
-            self.loop = loop
-            self.turn += 1
-            self.phase = "waiting"
-            self.result = None
-            self.run_ids.clear()
+            if any(t.loop is not loop and t.phase != "closed" for t in self._turns):
+                raise NetRunError(
+                    f"PetriNet {net!r} got a turn from a second event loop while a turn "
+                    "is open; a session's net serves its turns on one loop"
+                )
+            ticket = self._tickets
+            self._tickets += 1
+        try:
+            while True:
+                with self._lock:
+                    newest = self._turns[-1] if self._turns else None
+                    if ticket == self._serving and (newest is None or newest.admits):
+                        return self._open(ctx, loop)
+                    if self._admission is None or self._admission_loop is not loop:
+                        self._admission = asyncio.Event()
+                        self._admission_loop = loop
+                    wake = self._admission
+                    wake.clear()
+                await wake.wait()
+        except BaseException:
+            with self._lock:
+                self._abandoned.add(ticket)
+                self._skip_abandoned()
+            self._wake_admission()
+            raise
+
+    def _open(self, ctx: Any, loop: asyncio.AbstractEventLoop) -> OpenTurn:
+        """Open the next turn (lock held); release node runs that waited for one."""
+        self._serving += 1
+        self._skip_abandoned()
+        self.turn += 1
+        turn = OpenTurn(ctx=ctx, loop=loop, number=self.turn, _wake=asyncio.Event())
+        if self._ended:
+            turn.egress.complete()
+        if not self._turns:
             self.answered_by.clear()
-            waiting, self._deferred = self._deferred, []
-            self.running += len(waiting)
-            turn = self.turn
+        self._turns.append(turn)
+        waiting, self._deferred = self._deferred, []
+        turn.running += len(waiting)
         for _, fut in waiting:
             fut.set_result(turn)
+        return turn
 
-    def begin_node(self, transition: str) -> int | cf.Future[int]:
-        """Count a node run in (any thread): its turn, or a future of the next turn's."""
+    def _skip_abandoned(self) -> None:
+        while self._serving in self._abandoned:
+            self._abandoned.discard(self._serving)
+            self._serving += 1
+
+    def _wake_admission(self) -> None:
+        with self._lock:
+            wake, loop = self._admission, self._admission_loop
+        if wake is not None and loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(wake.set)
+
+    def _wake(self, turn: OpenTurn) -> None:
+        wake, loop = turn._wake, turn.loop
+        if wake is not None and loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(wake.set)
+
+    def injected(self, turn: OpenTurn) -> None:
+        """``turn``'s input is about to go onto ``userIn``: answers may be routed to it."""
+        with self._lock:
+            turn.injected = True
+
+    # -- the egress tap (any thread) -------------------------------------------
+
+    def route_answer(self, token: Any) -> None:
+        """An ``eventOut`` token: the answer of the oldest turn still waiting for one."""
+        with self._lock:
+            waiting = (t for t in self._turns if t.injected and t.phase == "waiting")
+            turn = next((t for t in waiting if not t.answer_routed), None)
+            if turn is not None:
+                turn.answer_routed = True
+        if turn is not None:
+            turn.egress.publish(token)
+
+    def route_release(self, item: Any) -> None:
+        """A token on the release place: the release of the oldest turn not yet released."""
+        with self._lock:
+            turn = next((t for t in self._turns if t.injected and not t.released), None)
+            if turn is None:
+                return
+            turn.released = True
+            self._retire()
+        turn.egress.publish(item)
+        self._wake(turn)
+        self._wake_admission()
+
+    def ended(self) -> None:
+        """The session's net completed: no turn gets an answer any more."""
+        with self._lock:
+            self._ended = True
+            turns = list(self._turns)
+        for t in turns:
+            t.egress.complete()
+
+    # -- node runs ---------------------------------------------------------------
+
+    def begin_node(self, transition: str) -> OpenTurn | cf.Future[OpenTurn]:
+        """Count a node run in (any thread): the newest open turn, or a future of the next."""
         with self._lock:
             if self._closed:
                 raise NetRunError(
                     f"transition {transition!r} fired while the session's net is closing"
                 )
-            if self.phase != "closed" and self.ctx is not None and self.loop is not None:
-                self.running += 1
-                return self.turn
-            fut: cf.Future[int] = cf.Future()
+            for turn in reversed(self._turns):
+                if turn.phase != "closed":
+                    turn.running += 1
+                    return turn
+            fut: cf.Future[OpenTurn] = cf.Future()
             self._deferred.append((transition, fut))
             return fut
 
-    async def tracked(self, coro: Coroutine[Any, Any, T]) -> T:
-        """Run ``coro`` (a node run) on the invocation's loop; count it out after."""
+    async def tracked(self, turn: OpenTurn, coro: Coroutine[Any, Any, T]) -> T:
+        """Run ``coro`` (a node run) on ``turn``'s loop; count it out after."""
         try:
             return await coro
         finally:
             with self._lock:
-                self.running -= 1
-                done = self._drained if self.running == 0 else None
-            if done is not None:
-                done.set()
+                turn.running -= 1
+                done = turn.running == 0
+            if done:
+                self._wake(turn)
 
-    def record_failure(self, turn: int, result: TurnResult) -> None:
-        """A node failed: the turn fails, unless it has its answer already."""
+    def record_failure(self, turn: OpenTurn, result: TurnResult) -> None:
+        """A node failed: its turn fails, unless it has its answer already."""
         with self._lock:
-            if self.phase == "waiting" and turn == self.turn:
-                self.result = result
+            if turn.phase == "waiting":
+                turn.result = result
 
-    def answered(self) -> None:
+    # -- the turn's end (on its loop) ------------------------------------------
+
+    def answered(self, turn: OpenTurn) -> None:
         with self._lock:
-            if self.phase == "waiting":
-                self.phase = "draining"
+            if turn.phase == "waiting":
+                turn.phase = "draining"
 
-    async def drain(self) -> None:
-        """Wait (on the invocation's loop) for the turn's node runs, then close it."""
+    def report_release(self, turn: OpenTurn) -> None:
+        with self._lock:
+            turn.release_reported = True
+
+    async def drain(self, turn: OpenTurn) -> AsyncIterator[None]:
+        """Wait for ``turn``'s node runs; yield once for a release not yet reported."""
+        wake = turn._wake
+        assert wake is not None
         while True:
             with self._lock:
-                if self.running == 0:
-                    self.phase = "closed"
-                    self._drained = None
-                    # The invocation is over: do not keep it (or its agent tree) alive.
-                    self.ctx = None
+                report = turn.released and not turn.release_reported
+                if report:
+                    turn.release_reported = True
+                elif turn.running == 0:
                     return
-                self.phase = "draining"
-                self._drained = asyncio.Event()
-                done = self._drained
-            await done.wait()
+                turn.phase = "draining"
+                wake.clear()
+            if report:
+                yield
+                continue
+            await wake.wait()
+
+    async def end(self, turn: OpenTurn, *, admit: bool) -> None:
+        """Close ``turn`` once its node runs finish; ``admit`` lets the next turn start."""
+        async for _ in self.drain(turn):
+            pass
+        with self._lock:
+            turn.phase = "closed"
+            # The invocation is over: do not keep it (or its agent tree) alive.
+            turn.ctx = None
+            turn.forced = turn.forced or admit
+            self._retire()
+        self._wake_admission()
+
+    def _retire(self) -> None:
+        """Forget closed turns that admit (lock held): no answer, release or run is theirs."""
+        self._turns = [t for t in self._turns if not (t.phase == "closed" and t.admits)]
 
     def close(self) -> None:
         """The session's net is draining: node runs still waiting for a turn fail."""
@@ -406,11 +536,15 @@ class Blueprint:
     """Transitions whose action does not fire in one step: nodes, and the stock
     subnets' (which await a model or a tool)."""
     rest: tuple[str, ...] = ()
-    """Where a turn leaves tokens: ``eventOut``, ``turnPermit`` and each mounted
-    subnet's unbound ones (the default ``deadlock_free`` sinks)."""
+    """Where a turn leaves tokens: ``eventOut``, ``turnPermit``, the release
+    place and each mounted subnet's unbound ones (the default ``deadlock_free``
+    sinks)."""
     node_transitions: tuple[str, ...] = ()
     """``node:`` transitions, mounted ones included: the runs a turn drains
     before the next turn can start."""
+    release: str | None = None
+    """``turn.release``: the unit place whose token releases the turn (ADR 0010),
+    or ``None``."""
 
     def initial_marking(self) -> dict[str, list[Any]]:
         return {p: list(ts) for p, ts in self.seeds.items()}
@@ -476,7 +610,7 @@ TYPE_ALIASES: dict[str, Any] = {
 }
 """Short type names a place may use instead of a dotted reference."""
 
-TOP_KEYS = ("places", "transitions", "env", "ports", "subnets", "prove")
+TOP_KEYS = ("places", "transitions", "env", "ports", "subnets", "turn", "prove")
 _TRANSITION_KEYS = ("in", "out", "read", "inhibit", "reset", "priority", "timing", "node", "action")
 _STOCK = ("llm_agent", "llm_step", "tool_dispatch", "router")
 
@@ -718,8 +852,10 @@ def _parse(
         *(t for t, plan in plans.items() if plan.kind == "node"),
         *(t for m in mounts for t in m.asynchronous),
     )
+    release = _release(data.get("turn"), spec, env, seeds)
     rest = (
         *(p.name for p in (C.EVENT_OUT, C.TURN_PERMIT) if spec.has_place(p)),
+        *((release,) if release is not None else ()),
         *(p for m in mounts for p in m.rest),
     )
     proof = _proof(data.get("prove"), spec, tuple(env), asynchronous, mounts)
@@ -735,7 +871,51 @@ def _parse(
         asynchronous=asynchronous,
         rest=tuple(dict.fromkeys(rest)),
         node_transitions=node_transitions,
+        release=release,
     )
+
+
+def _release(raw: Any, spec: NetSpec, env: Sequence[str], seeds: Mapping[str, Any]) -> str | None:
+    """``turn.release``: a unit place some transition marks and none tests."""
+    d = _keys("turn", raw, ("release",), "turn")
+    if "release" not in d:
+        return None
+    path = "turn.release"
+    name = d["release"]
+    p = spec.place_named(name) if isinstance(name, str) else None
+    if p is None:
+        raise BlueprintError(
+            path, f"{name!r} is not a place of the net", "name a declared unit place"
+        )
+    if name in (C.USER_IN.name, C.EVENT_OUT.name) or name in env or name in seeds:
+        raise BlueprintError(
+            path,
+            f"{name!r} cannot release the turn: it is userIn, eventOut, an env: place "
+            "or a seeded place",
+            "declare a unit place of its own, e.g. turnReleased: {}",
+        )
+    if not p.is_unit:
+        raise BlueprintError(path, f"{name!r} has type {p.type_name}", f"declare {name}: {{}}")
+    for t in spec.transitions:
+        tests = (
+            [("in", i.place) for i in t.inputs]
+            + [("read", q) for q in t.reads]
+            + [("inhibit", q) for q in t.inhibitors]
+            + [("reset", q) for q in t.resets]
+        )
+        for key, q in tests:
+            if q.name == name:
+                raise BlueprintError(
+                    f"transitions.{t.name}.{key}",
+                    f"{name!r} releases the turn and keeps every release: no transition "
+                    "may consume, read, inhibit or reset it",
+                    "mark a place of your own next to it and test that",
+                )
+    if not any(q.name == name for t in spec.transitions if t.output for q in _out_places(t.output)):
+        raise BlueprintError(
+            path, f"no transition puts a token on {name!r}, so no turn would be released"
+        )
+    return name
 
 
 _BLOCKED_KEYS = frozenset({"args"})
@@ -1884,7 +2064,7 @@ def _node_action(plan: ActionPlan, scope: NetScope, prefix: str = "") -> Action:
     if run_as != name:
         node = node.model_copy(update={"name": run_as})
 
-    def fail(failure: WorkflowFailure, turn: int) -> NoReturn:
+    def fail(failure: WorkflowFailure, turn: OpenTurn) -> NoReturn:
         scope.record_failure(turn, TurnResult("failed", failure=failure))
         raise NetRunError(f"transition {plan.transition!r}: {failure.message}")
 
@@ -1892,11 +2072,13 @@ def _node_action(plan: ActionPlan, scope: NetScope, prefix: str = "") -> Action:
         value = _take(ctx, plan, with_reads=True)
         begun = scope.begin_node(plan.transition)
         # No turn open: the tokens stay in flight until the next turn runs the node.
-        turn = begun if isinstance(begun, int) else await on_future(begun)
-        loop = scope.loop
+        turn = begun if isinstance(begun, OpenTurn) else await on_future(begun)
+        loop = turn.loop
         assert loop is not None
         outcome = await on_loop(
-            scope.tracked(_run_node(scope, node, WfToken(value), scope.next_run_id(run_as), False)),
+            scope.tracked(
+                turn, _run_node(turn, node, WfToken(value), turn.next_run_id(run_as), False)
+            ),
             loop=loop,
         )
         err: BaseException | None = outcome.error

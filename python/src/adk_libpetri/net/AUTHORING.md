@@ -91,14 +91,22 @@ transition, port, subnet or route label): `adk web` refuses the file.
   too, or that turn and every later one hang.
 - After the answer, the invocation stays open until every node run started
   this turn has finished. A race's loser still completes.
-- A session's net serves one turn at a time; a second invocation of the
-  session waits. A node transition that fires between turns (a seeded
+- Without `turn:` (below), a session's net serves one turn at a time; a
+  second invocation of the session waits. A node transition that fires between turns (a seeded
   one, a timed one after the answer) keeps its tokens and runs in the next
   turn's invocation.
 - A session's net lives across turns: a token left on a place is still
   there next turn. Reset per-turn places in the transition that starts the
   turn. No transition may consume, read or inhibit `eventOut`: mark a place
   of your own next to it.
+- `turn: {release: turnReleased}` names a unit place that marks where the
+  turn's admission ends (ADR 0010). When a token lands on it during a turn,
+  the turn yields an event with `custom_metadata: {adk_libpetri: released}`,
+  and the next invocation of the session may start while this turn's tail
+  still runs. Answers go to the turns in order; put an id in the token if
+  a turn's tail can answer after the next turn's. No transition may
+  consume, read, inhibit or reset that place. The proofs then let the next
+  input arrive after the release.
 - Prove `place_bound: {place: eventOut, bound: 1}`: a turn answers once.
 - A session's net lives until its registry closes it. A net built by ADK's
   loader keeps its own registry, closed when the node is collected (an

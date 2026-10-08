@@ -10,7 +10,7 @@
   ],
   "additionalProperties": false,
   "patternProperties": {
-    "^(name|description|rerun_on_resume|wait_for_output|retry_config|timeout|input_schema|output_schema|state_schema|nodes|places|transitions|env|ports|subnets|prove)_code$": {
+    "^(name|description|rerun_on_resume|wait_for_output|retry_config|timeout|input_schema|output_schema|state_schema|nodes|places|transitions|env|ports|subnets|turn|prove)_code$": {
       "description": "ADK's `<field>_code` form: the field's value is the Python object at this dotted path (the loader accepts it for every node field)."
     }
   },
@@ -113,6 +113,23 @@
       "additionalProperties": {
         "$ref": "#/$defs/subnet"
       }
+    },
+    "turn": {
+      "description": "How a session's turns follow each other (ADR 0010). With release: a token on that unit place releases the turn: the turn yields an event with custom_metadata {\"adk_libpetri\": \"released\"}. No transition may consume, read, inhibit or reset the place.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "release": {
+              "$ref": "#/$defs/placeRef"
+            }
+          }
+        }
+      ]
     },
     "prove": {
       "$ref": "#/$defs/prove"

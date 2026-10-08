@@ -85,3 +85,9 @@ def decide(node_input: dict[str, Any]) -> Event:
 
 def escalate_msg(node_input: Any = None) -> str:
     return "escalated"
+
+
+async def guard(node_input: str) -> str:
+    """A delivery tail's output guard: slow enough for the next turn to overlap it."""
+    await asyncio.sleep(0.4)
+    return f"guarded[{node_input}]"
