@@ -282,11 +282,9 @@ def test_an_app_file_edited_after_the_draft_survives_save(
     assert client.get("/dev/apps/race/builder?tmp=true").status_code == 200
     draft = app / "tmp" / "race"
     assert (draft / "root_agent.yaml").is_file()
-    # Edited through /petri (the YAML) and in an editor (agent.py) while the builder is open.
-    edited = (app / "root_agent.yaml").read_text() + "# EDITED VIA PETRI\n"
-    r = client.put("/petri/api/apps/race/files/root_agent.yaml", json={"content": edited})
-    assert r.status_code == 200
-    assert (draft / "root_agent.yaml").read_text() == edited  # the open draft follows
+    # Edited in an editor while the builder is open.
+    edited = (app / "root_agent.yaml").read_text() + "# EDITED\n"
+    (app / "root_agent.yaml").write_text(edited)
     code = (app / "agent.py").read_text() + "# EDITOR CHANGE\n"
     (app / "agent.py").write_text(code)
     assert _save(client, "race", _canvas(), tmp=True) == (200, True)

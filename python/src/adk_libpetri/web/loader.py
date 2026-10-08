@@ -1,13 +1,13 @@
-"""ADK's ``AgentLoader`` for ``adk-libpetri web``: the Petri builder, and traced nets.
+"""ADK's ``AgentLoader`` for ``adk-libpetri web``: the Petri builder, and optionally traced nets.
 
 Three changes to what ADK's loader returns, nothing else:
 
 * the dev UI's builder assistant (``__adk_agent_builder_assistant``) is
   :func:`~adk_libpetri.web.builder.create_petri_builder_assistant`;
-* every ``PetriNet`` and ``PetriWorkflow`` in a loaded app (the root, and
-  each one mounted under it) records its sessions' firings and markings in
-  the server's :class:`~adk_libpetri.bridge.marking_trace.MarkingTraces`,
-  wrapping whatever event store it was given;
+* given ``traces``, every ``PetriNet`` and ``PetriWorkflow`` in a loaded app
+  (the root, and each one mounted under it) records its sessions' firings
+  and markings in that :class:`~adk_libpetri.bridge.marking_trace.MarkingTraces`,
+  wrapping whatever event store it was given (off by default);
 * a package folder that defines no agent (a helper package of ``.agent.fn``
   refs, say: an ``__init__.py`` and an ``agent.py`` of functions, no
   ``root_agent.yaml``) is not listed as an app. ADK lists every folder with
@@ -136,14 +136,15 @@ class PetriAgentLoader(NestedAgentLoader):
 
     def __init__(self, agents_dir: str, traces: MarkingTraces | None = None) -> None:
         super().__init__(agents_dir)
-        self.traces = traces if traces is not None else MarkingTraces()
+        self.traces = traces
 
     def _perform_load(self, agent_path: str) -> Any:
         if agent_path == ADK_ASSISTANT:
             self._validate_agent_name(agent_path)
             return create_petri_builder_assistant()
         loaded = super()._perform_load(agent_path)
-        trace(loaded, self.traces)
+        if self.traces is not None:
+            trace(loaded, self.traces)
         return loaded
 
 

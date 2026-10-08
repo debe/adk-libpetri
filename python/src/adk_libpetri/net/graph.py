@@ -1,10 +1,10 @@
-"""A net's structure as plain data: for ADK's graph panel, DOT and ``/petri``.
+"""A net's structure as plain data: for ADK's graph panel, DOT and JSON.
 
 :func:`net_graph` reads a :class:`~adk_libpetri.net.blueprint.Blueprint` (or a
 bare :class:`~adk_libpetri._spec.NetSpec`) into a :class:`NetGraph`: places,
 transitions and every arc with its kind. Three views come out of it:
 
-* :meth:`NetGraph.to_dict`, the JSON the ``/petri`` routes return;
+* :meth:`NetGraph.to_dict`, the structure as JSON;
 * :meth:`NetGraph.to_dot`, a Petri drawing (ellipse places with their token
   counts, box transitions, inhibitor and read arcs drawn as such), optionally
   with a marking and the transition that just fired highlighted;

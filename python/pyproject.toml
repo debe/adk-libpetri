@@ -45,12 +45,10 @@ Homepage = "https://github.com/debe/adk-libpetri"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/adk_libpetri"]
-# Package data the CLI prints (`adk-libpetri schema`, `adk-libpetri guide`) and
-# the optional /petri page `adk-libpetri web` also serves.
+# Package data the CLI prints (`adk-libpetri schema`, `adk-libpetri guide`).
 artifacts = [
     "src/adk_libpetri/net/schema.json",
     "src/adk_libpetri/net/AUTHORING.md",
-    "src/adk_libpetri/web/static/*",
 ]
 
 [tool.pytest.ini_options]

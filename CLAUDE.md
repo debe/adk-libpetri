@@ -312,9 +312,8 @@ structural changes. Python-specific rules:
   (it records the baseline `reconcile` needs so Save never puts back an
   older app file). Every event under a net carries the net's name as its
   author, so the drawing never titles or labels anything with it (ADK's
-  highlighting would light that node on every event). `/petri` is an
-  unlisted power tool;
-  never point users at it as the main path. `net/report.py`, `net/graph.py`
+  highlighting would light that node on every event). ADK's dev UI is the
+  only UI: do not add a page of our own. `net/report.py`, `net/graph.py`
   and `net/counterexample.py` are the data the CLI, the routes and the
   builder tools share; change output there, not in each caller. A UI change
   needs a real-browser check (ADR 0009's re-check list).

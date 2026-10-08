@@ -112,8 +112,8 @@ libpetri-py `>=7.2,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
     overwrite one (a file that does not parse included), and Save ships the
     assistant's latest net, which chat then runs (in ADK alone, a net's Save
     failed with 400); what the canvas dropped is told in the next reply.
-    The draft is kept in step with the app: a file edited in an editor or
-    `/petri` while the builder is open survives Save, and one edited in
+    The draft is kept in step with the app: a file edited in an editor
+    while the builder is open survives Save, and one edited in
     both stops it. After any Save the graph panel and chat show what was
     saved, a net or not.
     Save on a net root with a sub-agent added on the canvas writes nothing
@@ -123,10 +123,9 @@ libpetri-py `>=7.2,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
     writes into one. One app's folder (`adk-libpetri web agents/race`) is
     served as ADK serves it, guard and canvas included.
 
-  `/petri` is an unlisted power tool: a YAML editor beside the net, steppable
-  counterexamples, and a replay of each session's markings
-  (`bridge.MarkingTraces`, an event-store decorator). `check` and `verify`
-  take `--json`.
+  `bridge.MarkingTraces`, an event-store decorator, records each session's
+  firings and markings (pass it to `PetriAgentLoader(traces=...)`). `check`
+  and `verify` take `--json`.
 - **Cross-language fixtures.** `spec/fixtures/nets` holds every stock subnet's
   structure. Java's new `SpecFixturesTest` writes and golden-checks it, and so
   does Python's `tests/conformance`.

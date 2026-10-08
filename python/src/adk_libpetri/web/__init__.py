@@ -4,10 +4,10 @@ ADK's own dev UI is the experience; nothing in it is patched. The server
 answers some of the UI's own requests with Petri-aware data:
 
 * :func:`~adk_libpetri.web.server.build_app` / :func:`~adk_libpetri.web.server.serve`:
-  ADK's dev server with everything below installed, plus ``/petri``, an unlisted power
-  tool (YAML editor, the net, its proofs, session replays);
-* :class:`~adk_libpetri.web.loader.PetriAgentLoader`: ADK's dev-UI loader (nested apps too), tracing
-  every net it loads and serving the Petri builder assistant;
+  ADK's dev server with everything below installed;
+* :class:`~adk_libpetri.web.loader.PetriAgentLoader`: ADK's dev-UI loader (nested apps
+  too), serving the Petri builder assistant, and tracing every net it loads when
+  given a :class:`~adk_libpetri.bridge.marking_trace.MarkingTraces`;
 * :func:`~adk_libpetri.web.builder_guard.install_builder_guard`: ADK's
   builder canvas cannot write its YAML over a net, Save never puts back an
   app file edited since the draft was made (:mod:`~adk_libpetri.web.drafts`),
@@ -32,12 +32,11 @@ Needs ``fastapi`` and ``uvicorn``, which ``google-adk`` installs.
 
 from .builder import create_petri_builder_assistant
 from .loader import PetriAgentLoader
-from .server import build_app, petri_router, serve
+from .server import build_app, serve
 
 __all__ = [
     "PetriAgentLoader",
     "build_app",
     "create_petri_builder_assistant",
-    "petri_router",
     "serve",
 ]

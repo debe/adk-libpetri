@@ -1,8 +1,8 @@
 """``EventStore`` decorator recording each session's firings and markings (``@experimental``).
 
-``adk-libpetri web`` serves its nets with one :class:`MarkingTraces`, so its
-``/petri`` power tool can replay a session: which transition fired, in what order,
-and the marking (token count per place) after each firing. A net node asks
+A :class:`MarkingTraces` records, per session, which transition fired, in what
+order, and the marking (token count per place) after each firing; give one to
+``PetriAgentLoader(traces=...)`` to trace every net ``adk-libpetri web`` loads. A net node asks
 the store for its session's link with :meth:`MarkingTraces.for_session`
 (``NetNodeBase`` does, for any store that has that method), so every session
 gets a trace of its own though the node holds one store.

@@ -321,7 +321,7 @@ drops it: a draft left by a closed tab or an earlier server run is reused,
 and on Save ADK copies every draft file over the app. Before the guard, Save
 on a net always failed (the 400 above), before anything was copied; the
 guard is what made the copy run for nets, and with it a file edited in an
-editor or through `/petri` while the builder was open went back to the
+editor while the builder was open went back to the
 draft's older copy (YAML and `agent.py` alike). So:
 
 - we make every draft ourselves (`make_draft`, from our `GET builder?tmp`
@@ -340,7 +340,7 @@ draft's older copy (YAML and `agent.py` alike). So:
   both at once). Then neither side's work can be told newer, and it is a
   conflict;
 - it runs when the canvas loads the draft, on each tmp and real save of an
-  app whose root (or its draft's) is a net, and after `/petri` writes a file.
+  app whose root (or its draft's) is a net.
   Apps without a net keep ADK's behaviour.
 
 **"Create new app" cannot write into a helper package.** The loader hides a
@@ -355,7 +355,7 @@ in `runners_to_clean`, which its file watcher fills under `reload_agents`
 (off by default). Without the eviction, chat ran the old net after Save
 while the graph panel drew the new one. `get_fast_api_app` does not return
 the `AdkWebServer`; `server.adk_web_server` finds it in the closures of its
-route handlers. `/petri`'s file writes evict the same way.
+route handlers.
 
 Before a tmp save the guard creates the draft as a copy of the app, as ADK's
 `GET builder?tmp=true` does. Otherwise ADK would create a draft holding only
@@ -547,8 +547,9 @@ values.
   follow the transition's `ActionTimedOut`, and the trace records a
   `timed_out` step for them. A removal from an empty place (wrong seeds) is
   logged once per trace. The session recorded longest ago is evicted first.
-- `PetriAgentLoader` puts the server's traces in front of every net node it
-  loads, whatever store the node already had.
+- `PetriAgentLoader(traces=...)` puts those traces in front of every net
+  node it loads, whatever store the node already had. It traces nothing by
+  default: nothing in the dev UI reads a trace.
 
 `PetriAgentLoader` also leaves out of the app list a package folder that
 defines no agent: no `root_agent.yaml`, and an `__init__.py`, `agent.py`
@@ -560,22 +561,16 @@ an `agent.py`, and picking such a helper in the UI failed with a 404. At the
 top level it also lists, as ADK's flat loader does, a package whose `agent`
 is itself a package (`agent/__init__.py`), which the nested listing misses.
 
-### `/petri`: an optional power tool
+### No page of our own
 
-`petri_router` mounts a page and API under `/petri`: a YAML editor beside
-the drawn net, check and verify with a counterexample stepped across the
-drawing, and a replay of any session's firings and markings from the traces.
-Files are confined to the app's folder and to `.yaml`/`.yml`; a save reloads
-the app. A save passes the check ADK's `builder/save` applies to an upload
-(no `args` key; every code reference undotted, an ADK built-in, or under the
-app), with one addition: an `agent_class` under `adk_libpetri.`, the
-blueprint's own class. It is the one place a run's markings show, since ADK's graph panel
-cannot (see Context).
-
-It is not the product. Nothing in the dev UI links to it, `serve()` does
-not print it, its routes are out of the OpenAPI schema, and
-`build_app(petri_page=False)` leaves it out. It serves those who edit YAML
-by hand or debug a run's markings.
+An earlier version also served `/petri`, an unlisted page with a YAML
+editor beside the drawn net, steppable counterexamples and a replay of each
+session's markings. It is removed. It looked unlike ADK's UI, which this ADR
+sets out not to change; the builder assistant covers checking, verifying
+and showing counterexamples; a net's YAML is edited in an editor, as any
+ADK YAML is; and its file writes were the one route that needed ADK's
+upload check re-implemented. What it alone showed, a run's markings, is
+left to `MarkingTraces` as a library store.
 
 ## Consequences
 
@@ -607,14 +602,15 @@ by hand or debug a run's markings.
 - The UI greys every node the walk did not reach with its own colours
   (`#424242`/`#e0e0e0`), not our palette.
 - The graph panel shows structure and what ran, never a marking. Markings
-  are in the counterexample picture and in `/petri`'s replay.
+  are in the counterexample picture, and in a `MarkingTraces` given to the
+  loader.
 - The canvas card lists what a net runs, not its places, transitions or
   claims, and its tool dialogs look editable although nothing in them is
   saved. Verdicts follow the files under the net's folder; a change in
   another package it refers to (`yaml_composed.agent.brief`) is not seen
   until the next verify.
 - A full blueprint cannot be uploaded through `builder/save` (ADK's 400
-  stands). Nets are edited by the assistant, in an editor, or in `/petri`.
+  stands). Nets are edited by the assistant or in an editor.
 - A staged copy rewrites the draft's absolute refs to its own package in
   YAML files only; a draft `agent.py` that imports its app's package by
   name (`from race import x`) still reaches the app's code. Relative
@@ -632,8 +628,6 @@ by hand or debug a run's markings.
 - In a headless browser the builder panel can look stuck on "..." after a
   reply; any mouse event renders it (Angular change detection). Real use
   does not see it.
-- `/petri` loads CodeMirror (cdnjs) and viz.js (jsdelivr), so it needs
-  network access. The dev UI path needs neither.
 - A file edited in both the app and the builder's draft stops Save until
   one side is dropped; the user resolves it with the assistant or by
   deleting the draft. A draft made before this baseline existed resolves by
@@ -663,9 +657,6 @@ Add to ADR 0006's list:
   closures; `build_app` logs a warning when it is not found);
 - `get_fast_api_app(web=True)` still builds a `NestedAgentLoader` when given
   no loader (`PetriAgentLoader` subclasses it to list the same apps);
-- `/petri`'s file writes call `dev_server._check_code_reference` and read
-  `_CODE_REFERENCE_KEYS` (`server.check_upload`), the same check
-  `_check_uploaded_yaml` makes;
 - `graph_serialization.serialize_agent` still draws a `graph` field by duck
   type, and `_collect_toolset` and `create_empty_state` still only iterate
   `graph.nodes`;

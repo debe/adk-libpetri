@@ -355,11 +355,8 @@ ADK node it runs. To get the assistant there, serve it as an app:
 `root_agent = create_petri_builder_assistant()` from
 `adk_libpetri.web.builder`.
 
-For hand-editing and debugging, the server also has `/petri`, an unlisted
-power tool: a YAML editor beside the drawn net, a counterexample you step
-across the drawing, and a replay of any session's markings, which ADK's
-graph panel cannot show. It loads CodeMirror and viz.js from CDNs;
-`build_app(petri_page=False)` leaves it out. See
+ADK's dev UI is the only UI; edit a net's YAML by hand in your editor and
+check it with `adk-libpetri check`/`verify`. See
 [ADR 0009](../docs/adr/0009-web-ui-and-builder-assistant.md).
 
 ## What is different from Java

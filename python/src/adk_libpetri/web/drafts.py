@@ -4,7 +4,7 @@ ADK's dev UI makes the draft once, as a copy of the app, the first time the
 builder opens on it, and never refreshes or drops it: a draft left by a closed
 tab or an earlier server run is reused as it is. On Save, ADK copies every
 draft file over the app. A file edited in the app after the draft was made
-(in an editor, or through ``/petri``) would be put back to the draft's older
+(in an editor, say) would be put back to the draft's older
 copy.
 
 :func:`make_draft` makes the draft as ADK does (a copy of the app, ``tmp``
