@@ -60,7 +60,9 @@ async def test_checking_the_draft_first_leaves_the_app_its_own_code(
     node = loader.load_agent("race")
     assert isinstance(node, PetriNet)
     app_code = Path(sys.modules["race.agent"].__file__ or "")
-    assert "tmp" not in app_code.parts
+    # The app's own file, not the draft's copy (<app>/tmp/<app>); the test's own
+    # folder may sit under /tmp, as it does on Linux.
+    assert app_code.resolve() == (agents / "race" / "agent.py").resolve()
     assert not hasattr(sys.modules["race.agent"], "only")
     assert not [k for k in sys.modules if k.startswith("_petri_stage_")]
 
