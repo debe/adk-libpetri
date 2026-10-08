@@ -42,12 +42,9 @@ from .._spec import (
     VOID,
     And,
     NetSpec,
-    Out,
     OutPlace,
     Place,
-    Timeout,
     TransitionSpec,
-    Xor,
     one,
 )
 from .blueprint import Blueprint, Claim, ClaimKind, EnvMode, ProofOptions
@@ -58,17 +55,9 @@ TURNS_ANSWERED = "turn:answered"
 TURNS_QUIET = "turn:quiet"
 
 
-def _with(o: Out, p: Place[Any]) -> Out:
-    """``o``, marking ``p`` too whichever branch it takes."""
-    match o:
-        case Xor(cs):
-            return Xor(tuple(_with(c, p) for c in cs))
-        case Timeout(ms, c):
-            return Timeout(ms, _with(c, p))
-        case And(cs):
-            return And((*cs, OutPlace(p)))
-        case _:
-            return And((o, OutPlace(p)))
+def quiet_place(transition: str) -> str:
+    """The place holding node transition ``transition``'s ``turn:quiet`` token."""
+    return f"{TURNS_QUIET}:{transition}"
 
 
 @experimental
@@ -172,10 +161,20 @@ def turn_spec(bp: Blueprint) -> NetSpec | None:
     in flight: a turn's invocation lasts until its node runs have put their
     outputs down, and the next turn waits for it. To see the runs, each
     ``node:`` transition ``T`` is split in two: ``T`` consumes its inputs and
-    marks ``T:running``, ``T:deposit`` puts ``T``'s output down. Both take
-    the one ``turn:quiet`` token while they fire and give it back, so
-    ``turn:next`` (which reads it) cannot slip in between a firing's start and
-    its completion.
+    marks ``inflight:T:run``, ``complete:T:run`` puts ``T``'s output down.
+
+    The deposit has the shape of libpetri's own completion step (VER-004: named
+    ``complete:<x>``, its one input ``inflight:<x>``), which the verifier never
+    splits again. It is the run's completion already, and splitting it would
+    add a step per node run and nothing else. ``T`` itself is split, since
+    ``turn:next`` inhibits its output, so ``T`` takes its own
+    ``turn:quiet:T`` token and its completion gives it back: ``turn:next``
+    (which reads them all) cannot slip in between. One token per node keeps
+    the runs of different nodes independent of each other, which the
+    verifier's partial-order reduction (VER-024) needs; a shared token would
+    make every node run depend on every other. Holding ``turn:quiet:T``
+    orders two starts of ``T`` only, and their deposits are tested by
+    ``turn:next`` alone, so no behaviour is lost.
 
     ``None`` when the net has no ``userIn`` environment place or no ``eventOut``.
     """
@@ -185,17 +184,19 @@ def turn_spec(bp: Blueprint) -> NetSpec | None:
     if user_in is None or event_out is None or C.USER_IN.name not in bp.env:
         return None
     left: Place[Any] = Place(TURNS_LEFT, VOID)
-    quiet: Place[Any] = Place(TURNS_QUIET, VOID)
     answered: Place[Any] = Place(TURNS_ANSWERED, event_out.token_type)
     nodes = set(bp.node_transitions)
     ts: list[TransitionSpec] = []
     running: list[Place[Any]] = []
+    quiets: list[Place[Any]] = []
     for t in spec.transitions:
         if t.name not in nodes:
             ts.append(t)
             continue
-        run: Place[Any] = Place(f"{t.name}:running", VOID)
+        run: Place[Any] = Place(f"inflight:{t.name}:run", VOID)
+        quiet: Place[Any] = Place(quiet_place(t.name), VOID)
         running.append(run)
+        quiets.append(quiet)
         ts.append(
             replace(
                 t,
@@ -203,18 +204,17 @@ def turn_spec(bp: Blueprint) -> NetSpec | None:
                 output=And((OutPlace(run), OutPlace(quiet))),
             )
         )
-        out = OutPlace(quiet) if t.output is None else _with(t.output, quiet)
-        ts.append(TransitionSpec(f"{t.name}:deposit", (one(run), one(quiet)), out))
+        ts.append(TransitionSpec(f"complete:{t.name}:run", (one(run),), t.output))
     ts.append(
         TransitionSpec(
             TURN_NEXT,
             (one(left), one(event_out)),
             And((OutPlace(user_in), OutPlace(answered))),
-            reads=(quiet,),
+            reads=tuple(quiets),
             inhibitors=tuple(running),
         )
     )
-    return NetSpec(spec.name, tuple(ts), (*spec.extra_places, quiet), spec.ports, spec.membership)
+    return NetSpec(spec.name, tuple(ts), spec.extra_places, spec.ports, spec.membership)
 
 
 def _run(bp: Blueprint, claim: Claim, k: int | None) -> _Run:
@@ -243,7 +243,7 @@ def _run(bp: Blueprint, claim: Claim, k: int | None) -> _Run:
             m[C.USER_IN.name] = m.get(C.USER_IN.name, 0) + 1
             if n > 1:
                 m[TURNS_LEFT] = n - 1
-                m[TURNS_QUIET] = 1
+                m.update((quiet_place(t), 1) for t in bp.node_transitions)
     abort = C.TURN_ABORT.name
     if not deadlock and bp.spec.has_place(C.TURN_ABORT) and abort not in places + list(seeded):
         places.append(abort)
@@ -263,7 +263,7 @@ def _run(bp: Blueprint, claim: Claim, k: int | None) -> _Run:
         if turns is not None and turns > 1:
             # An answer the next turn's input followed. turn:remaining is no sink:
             # a turn that never answers keeps the next one from coming.
-            sinks += [TURNS_ANSWERED, TURNS_QUIET]
+            sinks += [TURNS_ANSWERED, *(quiet_place(t) for t in bp.node_transitions)]
         kwargs["sink_places"] = sinks
         if o.sinks_when is not None:
             kwargs["sink_places_when"] = {m: list(ps) for m, ps in o.sinks_when.items()}

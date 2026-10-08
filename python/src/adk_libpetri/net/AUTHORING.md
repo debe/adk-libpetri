@@ -607,8 +607,9 @@ VIOLATED place_bound(raceWon, 1)  [place_bound]
 - `turn:next` starts the next turn: it moves the answer to `turn:answered`
   and puts the next input on `userIn`. `turn:remaining` holds the turns to
   come. In a multi-turn proof a node transition T shows as T (it starts the
-  run, marking `T:running`) and `T:deposit` (the output lands); `turn:quiet`
-  keeps `turn:next` out of either step.
+  run, marking `inflight:T:run`) and `complete:T:run` (the output lands);
+  T's own `turn:quiet:T` token keeps `turn:next` out while T's start is in
+  flight.
 - Here both commits started before either deposited `raceWon`, so the
   inhibitor never saw it. The fix is a consumed permit: see the permit
   race.

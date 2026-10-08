@@ -194,7 +194,11 @@ shared ones key by key. Options are `initial_marking`, `environment`
 `environment`, the inputs come as a session's turns do: `userIn` holds one
 input, and the next arrives only after an answer is on `eventOut` and no
 node run is in flight (a verification-only `turn:next`; each node transition
-is split into its start and a `T:deposit`). A safety claim covers one turn,
+is split into its start and a `complete:T:run` deposit, in the shape of
+libpetri's own completion step, which VER-004 never splits again; each start
+holds a `turn:quiet:T` token of its own, so the runs of different nodes stay
+independent for VER-024's partial-order reduction). A safety
+claim covers one turn,
 `deadlock_free` two, and `k` sets the number for both. The `env:` places get
 at most `k` arrivals (exactly `k` for `deadlock_free`), and a safety claim
 also lets `turnAbort` arrive. An `initial_marking` keeps this, except that an

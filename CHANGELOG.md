@@ -17,7 +17,7 @@ existed.
 ### Python
 
 First Python port (0.1.0, not yet released), for google-adk `~=2.11.0` and
-libpetri-py `>=7.2,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-compat.md).
+libpetri-py `>=7.3,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-compat.md).
 
 - **Parity with Java.** Colours, the 9 stock subnets (as `NetSpec`s under
   the Java names), `PetriRunner`, `PetriAgent` (root agent, or a node inside an
@@ -69,6 +69,11 @@ libpetri-py `>=7.2,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
     load with `on_load: true`, or by the new `adk-libpetri check` /
     `adk-libpetri verify [--k N] [--recursive]` CLI. By default the inputs
     come turn by turn: one turn for a safety claim, two for `deadlock_free`.
+    Across turns a node run is its start and a `complete:T:run` deposit,
+    shaped as libpetri's own completion step so VER-004 does not split it
+    a second time. Each node holds a `turn:quiet:T` token of its own while
+    a run starts, so the runs of different nodes stay independent for
+    libpetri's partial-order reduction (VER-024).
   - Load errors name the YAML key path and a fix. A JSON Schema
     (`net/schema.json`) and an authoring guide (`net/AUTHORING.md`) ship with
     the package. Patterns A, B and C have YAML twins with their Python nets'

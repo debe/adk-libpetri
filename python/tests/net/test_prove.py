@@ -115,9 +115,9 @@ def test_without_options_the_user_inputs_come_turn_by_turn() -> None:
             "permit": 1,
             "userIn": 1,
             TURNS_LEFT: 1,
-            "turn:quiet": 1,
         },
-        "sink_places": ["eventOut", "turn:answered", "turn:quiet"],
+        # No node runs, so no turn:quiet:<node> tokens.
+        "sink_places": ["eventOut", "turn:answered"],
     }
     [k3] = options({"claims": ["deadlock_free"]}, k=3)
     assert k3["initial_marking"][TURNS_LEFT] == 2

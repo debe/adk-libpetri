@@ -94,7 +94,9 @@ Agreed with the libpetri maintainers' session and reviewed there:
    virtualised under any clock (TIME-015 scope limit).
 4. `libpetri.action_on_loop(coro)`.
 
-Released as libpetri-py 7.2.0, which is the port's floor. Before that, an
+Released as libpetri-py 7.2.0. The floor is now 7.3.0, whose partial-order
+reduction of the state-space enumeration (VER-024) the multi-turn proofs of
+blueprints need to finish on nets with many nodes. Before 7.2, an
 interim egress shim (an appended `Runner_EgressPublish` transition) stood in
 for item 1; it was removed when the floor moved to 7.2, and with it the
 real-time stand-ins for the stepped-clock tests.

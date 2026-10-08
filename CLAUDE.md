@@ -49,7 +49,7 @@ pytest -k foil                           # ADK-only foils (green-lock ADK behavi
 ruff check . && ruff format --check . && pyright
 ```
 
-Python 3.11+, google-adk `~=2.11.0`, libpetri-py `>=7.2,<8`. `REQUIRE_Z3=1`
+Python 3.11+, google-adk `~=2.11.0`, libpetri-py `>=7.3,<8`. `REQUIRE_Z3=1`
 makes `tests/test_z3_gate.py` fail without the `z3` binary. Never name a test
 directory `docs/` (the TypeDoc rule in `.gitignore` would hide it).
 

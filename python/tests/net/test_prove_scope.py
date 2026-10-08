@@ -10,7 +10,13 @@ from google.adk.agents.config_agent_utils import from_config
 from google.adk.workflow import FunctionNode
 
 from adk_libpetri.net import BlueprintError, PetriNet, parse_blueprint
-from adk_libpetri.net.proofs import TURN_NEXT, claim_options, claim_spec, turn_spec
+from adk_libpetri.net.proofs import (
+    TURN_NEXT,
+    claim_options,
+    claim_spec,
+    quiet_place,
+    turn_spec,
+)
 from support.smt_proofs import requires_z3
 
 from .conftest import BLUEPRINTS
@@ -66,11 +72,44 @@ def test_the_turn_net_waits_for_node_runs_and_reads_delays_as_immediate() -> Non
     spec = turn_spec(bp)
     assert spec is not None
     names = set(spec.transition_names)
-    assert {"After_Later", "After_Later:deposit", TURN_NEXT} <= names
+    assert {"After_Later", "complete:After_Later:run", TURN_NEXT} <= names
     nxt = spec.transition(TURN_NEXT)
-    assert [p.name for p in nxt.inhibitors] == ["After_Later:running"]
+    assert [p.name for p in nxt.inhibitors] == ["inflight:After_Later:run"]
     [deadlock, _] = bp.proof.claims
     assert all(t.timing.kind == "immediate" for t in claim_spec(bp, deadlock).transitions)
+
+
+def test_each_node_run_holds_a_quiet_token_of_its_own() -> None:
+    # One shared token would make every node run depend on every other, and the
+    # verifier's partial-order reduction (VER-024) could prune no interleaving.
+    bp = load(TURNS / "approval.yaml").blueprint
+    spec = turn_spec(bp)
+    assert spec is not None
+    quiets = {t: quiet_place(t) for t in bp.node_transitions}
+    assert len(quiets) > 1
+    for t, q in quiets.items():
+        users = {u.name for u in spec.transitions if q in {p.name for p in u.places()}}
+        assert users == {t, TURN_NEXT}
+    assert {p.name for p in spec.transition(TURN_NEXT).reads} == set(quiets.values())
+    [claim] = bp.proof.claims
+    marking = claim_options(bp, claim, k=2)["initial_marking"]
+    assert all(marking[q] == 1 for q in quiets.values())
+
+
+@requires_z3
+def test_a_node_runs_deposit_is_not_split_again() -> None:
+    # Gate_Start resets what the Gate_Draft node puts down, so VER-004 splits
+    # the transition that deposits it. Over two turns that is the node run's
+    # completion step, already the deposit: only its start may be split.
+    node = load(TURNS / "approval.yaml")
+    [proof] = node.verify(k=2)
+    line = next(
+        line for line in proof.result.report.splitlines() if line.startswith("In-flight actions")
+    )
+    split = line.removeprefix("In-flight actions (VER-004): ").split(" are verified")[0].split(", ")
+    assert "Gate_Draft" in split
+    # Only the net's own transitions are split, never a step the turn model added.
+    assert set(split) <= set(node.blueprint.spec.transition_names)
 
 
 # ----------------------------------------------------------------------------
