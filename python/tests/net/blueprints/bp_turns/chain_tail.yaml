@@ -1,0 +1,18 @@
+# Two node transitions chained after the answer: both run inside the turn's
+# invocation, the second fired by the first's deposit.
+agent_class: adk_libpetri.net.PetriNet
+name: chain_tail
+nodes:
+  - [.agent.later_fn]
+  - [.agent.after]
+places:
+  first: {}
+  second: {type: str}
+  done: {type: str}
+transitions:
+  Chain_Answer: {in: [userIn], out: {and: [eventOut, first]}, action: emit}
+  Chain_First: {in: [first], out: second, node: later_fn}
+  Chain_Second: {in: [second], out: done, node: after}
+prove:
+  options: {sinks: [eventOut, done]}
+  claims: [deadlock_free]

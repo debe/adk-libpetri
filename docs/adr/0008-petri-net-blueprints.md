@@ -258,8 +258,12 @@ with nodes unless `assume_atomic_nodes: true` records that judgement.
   node run the turn started (a race's loser runs inside it). Without that, a
   loser's ADK node run on an ended invocation never returned and hung the
   runner's drain. A node failure after the answer does not fail the turn. A
-  node transition that fires with no turn open (a seeded one, a timed one
-  after the answer) keeps its tokens in flight and runs in the next turn's
+  run is finished once the egress tap has seen its firing end, its deposit
+  made; an untimed node transition that deposit enables starts in the
+  executor's same pass, so the turn takes a snapshot and stays open while
+  the marking enables one (a chained tail runs in the turn). A node
+  transition that fires with no turn open (a seeded one, a timed one after
+  the answer) keeps its tokens in flight and runs in the next turn's
   invocation; if the session's net closes first, it fails. Turns of one
   session are served one at a time.
 - **No interrupts.** A node that requests input (`RequestInput`, tool

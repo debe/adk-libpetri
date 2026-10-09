@@ -247,6 +247,9 @@ def timeout_places(spec: NetSpec) -> dict[str, frozenset[str]]:
     return out
 
 
+_FIRING_ENDS = frozenset({"TransitionCompleted", "TransitionFailed", "ActionTimedOut"})
+
+
 class _EgressTap:
     """Event-store link that hands every ``EVENT_OUT`` token (``Event`` or not) to the turn,
     and records which transition put each one there (``scope.answered_by``).
@@ -307,6 +310,10 @@ class _EgressTap:
                 self._scope.route_release(_RELEASE)
         else:
             self._timed_out = None
+            if t == "TransitionStarted" and self._scope is not None:
+                self._scope.started(str(event.transition_name))
+            if t in _FIRING_ENDS and self._scope is not None:
+                self._scope.finished(str(event.transition_name))
             if t == "TransitionCompleted":
                 self._name(str(event.transition_name))
             else:
@@ -584,7 +591,14 @@ class PetriNet(NetNodeBase):
         return self._blueprint.initial_counts()
 
     def _new_scope(self) -> TurnScope:
-        return NetScope()
+        bp = self._blueprint
+        nodes = frozenset(bp.node_transitions)
+        starts = tuple(
+            t
+            for t in bp.spec.transitions
+            if t.name in nodes and t.timing.earliest_ms == 0 and t.match is None
+        )
+        return NetScope(nodes=nodes, starts=starts)
 
     async def _start_runner(self, key: Any) -> PetriRunner:
         runner = await super()._start_runner(key)
@@ -592,6 +606,7 @@ class PetriNet(NetNodeBase):
         assert isinstance(scope, NetScope)
         # A node run waiting for a turn would hold the drain for ever.
         runner.on_drain(scope.close)
+        scope.settle = runner.snapshot
         return runner
 
     def _runner_builder(self, scope: TurnScope, event_store: Any) -> Builder:

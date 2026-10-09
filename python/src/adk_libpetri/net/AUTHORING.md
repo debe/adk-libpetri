@@ -577,7 +577,8 @@ prove:
 - `sinks` defaults to `eventOut`, `turnPermit`, and each mounted subnet's
   unbound `eventOut`, `turnPermit` and `transfer` (`assistant/turnPermit`).
   Any other place a turn leaves a token on must be a sink, or
-  `deadlock_free` reports it.
+  `deadlock_free` reports it. The `turn.release` place is a sink even when
+  `sinks` is given.
 - `sinks_when` excuses a place only while a marker is marked: for example
   a loser's trigger that the winner's `won` inhibits.
 - Proofs check the structure only and never run an action. A node with an

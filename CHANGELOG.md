@@ -84,7 +84,12 @@ libpetri-py `>=7.3,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
     {"adk_libpetri": "released"}` (`is_released`) and admits the next
     invocation of the session; answers go to turns in order. The proofs'
     turn model then waits for the release only, with no node split or quiet
-    tokens. Nets without `turn:` are unchanged.
+    tokens; the release place is a `deadlock_free` sink even when
+    `prove.options.sinks` is given. Nets without `turn:` are unchanged.
+  - A turn no longer ends between two chained `node:` transitions after its
+    answer: one that a finished run's deposit enables (untimed) runs in the
+    same invocation. Before, the turn could close first, and the second node
+    waited for the session's next turn or failed when the session closed.
   - `PetriWorkflow` and `PetriNet` share their turn and session-runner logic
     (`_net_node.py`). Known gaps: no interrupts, and timeout outputs do not
     run yet (a libpetri-py decode bug).

@@ -34,7 +34,15 @@ import inspect
 import os
 import re
 import threading
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, NoReturn, TypeVar, cast
 
@@ -139,6 +147,21 @@ class NodeError:
 TurnPhase = Literal["closed", "waiting", "draining"]
 
 
+_START_GRACE_S = 1.0
+"""How long a draining turn waits for a node transition the marking enables to
+start (it starts in the executor's same pass; this only bounds a wrong guess)."""
+
+
+def _enabled(t: TransitionSpec, count: Callable[[str], int]) -> bool:
+    """Whether ``t``'s arcs are satisfied by the token counts (timing aside)."""
+    need = {"one": 1, "all": 1}
+    return (
+        all(count(i.place.name) >= need.get(i.kind, i.count) for i in t.inputs)
+        and all(count(p.name) >= 1 for p in t.reads)
+        and all(count(p.name) == 0 for p in t.inhibitors)
+    )
+
+
 @dataclass
 class OpenTurn(TurnScope):
     """One turn of a session's net: its invocation, node runs, answer and release.
@@ -155,6 +178,9 @@ class OpenTurn(TurnScope):
     egress: HotStream[Any] = field(default_factory=HotStream)
     """This turn's ``eventOut`` answer and releases (:meth:`NetScope.route_answer`)."""
     running: int = 0
+    firing: int = 0
+    """Node firings the executor started against this turn and the egress tap has
+    not seen end: their deposits are not in the marking yet."""
     injected: bool = False
     answer_routed: bool = False
     released: bool = False
@@ -198,6 +224,17 @@ class NetScope(TurnScope):
     _abandoned: set[int] = field(default_factory=set, repr=False)
     _admission: asyncio.Event | None = field(default=None, repr=False)
     _admission_loop: asyncio.AbstractEventLoop | None = field(default=None, repr=False)
+    nodes: frozenset[str] = field(default=frozenset(), repr=False)
+    """The net's ``node:`` transitions (flat names), whose firings the tap counts."""
+    starts: tuple[TransitionSpec, ...] = field(default=(), repr=False)
+    """The untimed ``node:`` transitions without a ``match``: a turn whose runs
+    are done stays open while the marking enables one (:meth:`drain`)."""
+    settle: Callable[[], Awaitable[Any]] | None = field(default=None, repr=False)
+    """A snapshot of the session's net (``PetriRunner.snapshot``)."""
+    _charged: dict[str, list[OpenTurn | None]] = field(default_factory=dict, repr=False)
+    """Per node transition, the turn each firing the tap saw start counts against,
+    in start order (None: no turn was open)."""
+    _started: int = field(default=0, repr=False)
 
     # -- admission (on the invocation's loop) ----------------------------------
 
@@ -243,6 +280,11 @@ class NetScope(TurnScope):
         self._turns.append(turn)
         waiting, self._deferred = self._deferred, []
         turn.running += len(waiting)
+        for charged in self._charged.values():
+            for i, t in enumerate(charged):
+                if t is None:
+                    charged[i] = turn
+                    turn.firing += 1
         for _, fut in waiting:
             fut.set_result(turn)
         return turn
@@ -297,8 +339,39 @@ class NetScope(TurnScope):
         with self._lock:
             self._ended = True
             turns = list(self._turns)
+            self._charged.clear()
+            for t in turns:
+                t.firing = 0
         for t in turns:
             t.egress.complete()
+            self._wake(t)
+
+    def started(self, transition: str) -> None:
+        """A transition started (the tap, in the executor's order)."""
+        with self._lock:
+            self._started += 1
+            if transition in self.nodes:
+                turn = next((t for t in reversed(self._turns) if t.phase != "closed"), None)
+                if turn is not None:
+                    turn.firing += 1
+                self._charged.setdefault(transition, []).append(turn)
+            draining = [t for t in self._turns if t.phase == "draining"]
+        for t in draining:
+            self._wake(t)
+
+    def finished(self, transition: str) -> None:
+        """A node transition's firing ended (completed, failed or timed out)."""
+        with self._lock:
+            charged = self._charged.get(transition)
+            if not charged:
+                return
+            turn = charged.pop(0)
+            if turn is None:
+                return
+            turn.firing -= 1
+            done = turn.firing == 0
+        if done:
+            self._wake(turn)
 
     # -- node runs ---------------------------------------------------------------
 
@@ -346,22 +419,64 @@ class NetScope(TurnScope):
             turn.release_reported = True
 
     async def drain(self, turn: OpenTurn) -> AsyncIterator[None]:
-        """Wait for ``turn``'s node runs; yield once for a release not yet reported."""
+        """Wait for ``turn``'s node runs; yield once for a release not yet reported.
+
+        The runs are done once the tap has seen each firing end, its deposit
+        made. A node transition that deposit enables starts in the same pass
+        of the executor, and may follow the tap's event by a moment: while a
+        snapshot of the marking enables one, the turn waits for it to start.
+        """
         wake = turn._wake
         assert wake is not None
+        checked = False
         while True:
             with self._lock:
                 report = turn.released and not turn.release_reported
+                idle = turn.running == 0 and turn.firing == 0
                 if report:
                     turn.release_reported = True
-                elif turn.running == 0:
+                elif idle and (checked or self.settle is None):
                     return
+                if not idle:
+                    checked = False
                 turn.phase = "draining"
                 wake.clear()
+                seen = self._started
             if report:
                 yield
-                continue
-            await wake.wait()
+            elif not idle:
+                await wake.wait()
+            elif await self._enables_a_node():
+                await self._started_since(seen, wake)
+            else:
+                checked = True
+
+    async def _enables_a_node(self) -> bool:
+        assert self.settle is not None
+        try:
+            snap = await self.settle()
+        except Exception:  # the session's net is closed: nothing starts
+            return False
+        count = snap.marking.count
+        return any(_enabled(t, count) for t in self.starts)
+
+    async def _started_since(self, seen: int, wake: asyncio.Event) -> None:
+        """Wait for a transition to start after ``seen``: the enabled one, or one
+        that took its tokens. Bounded, in case neither ever comes."""
+        loop = asyncio.get_running_loop()
+        until = loop.time() + _START_GRACE_S
+        while True:
+            with self._lock:
+                if self._started != seen:
+                    return
+                wake.clear()
+            left = until - loop.time()
+            if left <= 0:
+                return
+            try:
+                await asyncio.wait_for(wake.wait(), left)
+            except TimeoutError:
+                return
 
     async def end(self, turn: OpenTurn, *, admit: bool) -> None:
         """Close ``turn`` once its node runs finish; ``admit`` lets the next turn start."""

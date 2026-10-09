@@ -63,7 +63,8 @@ below applies and a net behaves exactly as before.
   run counts against the newest open turn and runs on its ctx, so its ADK
   events stream through that invocation; the tail of turn N started after
   turn N+1 opened streams through N+1. Each invocation waits only for its own
-  node runs.
+  node runs, and for an untimed node transition their deposits enable (ADR
+  0008's drain).
 - **Answers.** `eventOut` tokens are answers in turn order: each one answers
   the oldest open turn that has none. An invocation returns once it has its
   answer and its node runs have finished. A net whose later turn can answer

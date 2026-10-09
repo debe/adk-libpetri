@@ -29,6 +29,7 @@ never run). Its options are the shared ``prove.options`` with the claim's own
 * **sinks** (deadlock freedom only) -- as written; else where the turn
   protocol leaves its tokens: ``eventOut``, ``turnPermit``, and each mounted
   subnet's unbound ones (a stock ``llm_agent``'s ``inst/turnPermit``, say).
+  The ``turn.release`` place is a sink either way.
 """
 
 from __future__ import annotations
@@ -284,6 +285,9 @@ def _run(bp: Blueprint, claim: Claim, k: int | None) -> _Run:
         kwargs["environment_mode"] = _lp_mode(mode)
     if deadlock:
         sinks = list(o.sinks if o.sinks is not None else bp.rest)
+        if bp.release is not None and bp.release not in sinks:
+            # Nothing consumes the release place: its tokens always rest there.
+            sinks.append(bp.release)
         if turns is not None and turns > 1:
             # An answer the next turn's input followed. turn:remaining is no sink:
             # a turn that never answers keeps the next one from coming.

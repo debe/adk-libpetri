@@ -312,3 +312,15 @@ async def test_a_collected_nets_session_runners_are_torn_down(
     assert alive() is None
     await asyncio.wait_for(runner.wait_closed(), 5)
     assert runner.closed
+
+
+@pytest.mark.parametrize("name", ["chain_tail.yaml", "chain_tail_release.yaml"])
+async def test_a_node_chained_after_another_runs_in_the_same_turn(serve: Serve, name: str) -> None:
+    # Chain_First's deposit enables Chain_Second: the turn must not close
+    # between them and leave Chain_Second waiting for the next turn.
+    node = load(serve, name)
+    s = await session(node)
+    for _ in range(20):
+        t = await asyncio.wait_for(s.say("one"), 5)
+        assert t.error is None, t.error
+        assert "after['later']" in [e.output for e in t.events], [e.output for e in t.events]

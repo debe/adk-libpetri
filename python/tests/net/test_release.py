@@ -137,6 +137,14 @@ def test_a_turn_that_may_never_release_keeps_the_next_from_coming() -> None:
     assert proof.violated, proof.result.verdict
 
 
+def test_the_release_place_is_a_sink_when_sinks_are_given() -> None:
+    data = yaml.safe_load(RELEASE.read_text())
+    data["prove"] = {"options": {"sinks": ["eventOut", "permit"]}, "claims": ["deadlock_free"]}
+    bp = parse_blueprint("given", body(data), nodes=nodes_of(data))
+    [proof] = verify_blueprint(bp, k=2)
+    assert proof.proven, proof.result.verdict
+
+
 def test_overlap_is_what_a_claim_over_two_turns_sees() -> None:
     # Serially a turn's draft is guarded before the next turn starts; with a
     # release the next turn may fork its own draft first.
