@@ -111,11 +111,15 @@ WORK="$(mktemp -d)"
 python3 -m venv "$WORK/venv"
 "$WORK/venv/bin/pip" install -q "$(ls dist/*.whl)[dev]"
 # Outside python/, so the source tree cannot shadow the installed copy; the
-# conformance suite finds spec/ relative to the tests' parent's parent.
+# conformance suite finds spec/ (and readme_diagrams docs/) relative to the
+# tests' parent's parent.
 mkdir -p "$WORK/python"
 cp -R "$PY_DIR/tests" "$WORK/python/tests"
 cp "$PY_DIR/pyproject.toml" "$WORK/python/pyproject.toml"
 cp -R "$PROJECT_ROOT/spec" "$WORK/spec"
+# The README diagram goldens (tests/readme_diagrams) live in docs/diagrams.
+mkdir -p "$WORK/docs/diagrams"
+cp -R "$PROJECT_ROOT/docs/diagrams/dot" "$PROJECT_ROOT/docs/diagrams/hero" "$WORK/docs/diagrams/"
 if ! (cd "$WORK/python" && REQUIRE_Z3=1 "$WORK/venv/bin/pytest" -q tests -p no:cacheprovider); then
     info "Tests failed against the built wheel; version commit remains"
     exit 1
@@ -137,7 +141,9 @@ git push origin HEAD
 git push origin "python/v${VERSION}"
 
 info "Creating GitHub release"
-gh release create "python/v${VERSION}" --title "Python v${VERSION}" \
+PRERELEASE=()
+[[ "$VERSION" =~ (a|b|rc)[0-9]+$ ]] && PRERELEASE=(--prerelease)
+gh release create "python/v${VERSION}" --title "Python v${VERSION}" "${PRERELEASE[@]}" \
     --notes "$(changelog_section "$VERSION")"
 
 info "Released Python v${VERSION} to PyPI and GitHub."

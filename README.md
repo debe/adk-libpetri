@@ -55,7 +55,7 @@ same `PetriAgent`. Neither port forks ADK or genai.
 ## Quick start (Python)
 
 ```bash
-pip install adk-libpetri   # not on PyPI yet: pip install -e python/ from a clone
+pip install --pre adk-libpetri   # 0.1.0a1, a preliminary release
 ```
 
 Python 3.11+, `google-adk~=2.11.0`, `libpetri>=7.3,<8`. Proofs need a `z3`
@@ -821,7 +821,7 @@ blueprints.
 
 | Port | ADK | libpetri | Release |
 |---|---|---|---|
-| **Python** ([`python/`](python/)) | ADK Python 2.11 (`google-adk~=2.11.0`) | `libpetri>=7.3,<8` (PyPI, over the Rust runtime) | 0.1.0, unreleased |
+| **Python** ([`python/`](python/)) | ADK Python 2.11 (`google-adk~=2.11.0`) | `libpetri>=7.3,<8` (PyPI, over the Rust runtime) | 0.1.0a1, preliminary |
 | **Java** ([`java/`](java/)) | ADK Java 1.10.1 | `org.libpetri:libpetri:8.0.0` | 0.4.0, unreleased |
 | TypeScript, Rust | reserved | | |
 

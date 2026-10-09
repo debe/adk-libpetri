@@ -8,7 +8,7 @@ A Coloured Time Petri Net orchestration core for
 stock ADK `Runner`.
 
 The design, the commitments and the Java port live in the
-[repository README](../README.md). This page covers what is Python-specific.
+[repository README](https://github.com/debe/adk-libpetri/blob/main/README.md). This page covers what is Python-specific.
 
 > **0.x and experimental.** The turn-based path mirrors the Java port; SSE,
 > BIDI/live, `from_workflow` and `PetriNet` blueprints are `@experimental` and
@@ -17,11 +17,10 @@ The design, the commitments and the Java port live in the
 ## Install
 
 ```bash
-pip install adk-libpetri
+pip install --pre adk-libpetri
 ```
 
-Not published to PyPI yet: until the first tagged release (`python/v0.1.0`),
-install from a clone with `pip install -e python`.
+0.1.0a1 is a preliminary release (`--pre`): the API may change before 0.1.0.
 
 Python 3.11+. Pulls `google-adk~=2.11.0` and `libpetri`. Proofs need a `z3`
 binary (4.8+) on `PATH` or named by `LIBPETRI_Z3`; the runtime does not.
@@ -131,7 +130,7 @@ Translation, in short:
   freedom and safety, but not termination, and the report lists it as
   approximated. `back_edge_budget={("a", "b"): K}` bounds one, which makes
   termination provable
-  ([ADR 0007](../docs/adr/0007-compiled-workflow-back-edge-budgets.md)).
+  ([ADR 0007](https://github.com/debe/adk-libpetri/blob/main/docs/adr/0007-compiled-workflow-back-edge-budgets.md)).
 
 `deadlock_free` means no reachable marking is stuck short of the turn's end;
 it is not a termination proof for unbudgeted cycles. With `interruptible`
@@ -209,8 +208,8 @@ agent config, for what a `Workflow` cannot say (races, quorums, permits,
 inhibitors, timed transitions). ADK's loader builds it, so `adk web` and
 `adk run` serve it; `PetriNet.from_config(path, orchestrator=loop)` loads one
 in Python. The design is
-[ADR 0008](../docs/adr/0008-petri-net-blueprints.md) and the requirements are
-[spec/08-blueprints.md](../spec/08-blueprints.md).
+[ADR 0008](https://github.com/debe/adk-libpetri/blob/main/docs/adr/0008-petri-net-blueprints.md) and the requirements are
+[spec/08-blueprints.md](https://github.com/debe/adk-libpetri/blob/main/spec/08-blueprints.md).
 
 ```yaml
 # root_agent.yaml
@@ -357,7 +356,7 @@ ADK node it runs. To get the assistant there, serve it as an app:
 
 ADK's dev UI is the only UI; edit a net's YAML by hand in your editor and
 check it with `adk-libpetri check`/`verify`. See
-[ADR 0009](../docs/adr/0009-web-ui-and-builder-assistant.md).
+[ADR 0009](https://github.com/debe/adk-libpetri/blob/main/docs/adr/0009-web-ui-and-builder-assistant.md).
 
 ## What is different from Java
 
@@ -375,7 +374,7 @@ check it with `adk-libpetri check`/`verify`. See
   in flight. Java's executor never does. Ordering-sensitive actions are
   therefore sync (`EmitChunk`), and `PersistState` serialises its appends.
 
-See [ADR 0006](../docs/adr/0006-python-port-and-adk-python-compat.md) for
+See [ADR 0006](https://github.com/debe/adk-libpetri/blob/main/docs/adr/0006-python-port-and-adk-python-compat.md) for
 the spikes behind these points, and for the procedure for bumping ADK.
 
 ## ADK Python 2.11 behaviour the foils lock in

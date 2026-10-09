@@ -14,141 +14,6 @@ existed.
 
 ## Unreleased
 
-### Python
-
-First Python port (0.1.0, not yet released), for google-adk `~=2.11.0` and
-libpetri-py `>=7.3,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-compat.md).
-
-- **Parity with Java.** Colours, the 9 stock subnets (as `NetSpec`s under
-  the Java names), `PetriRunner`, `PetriAgent` (root agent, or a node inside an
-  ADK `Workflow`), `SessionExecutorRegistry` (`strong_owned`, and
-  `finalizer_owned` on `weakref.finalize`), checkpoints, the SSE pair, the BIDI
-  bridge, `AdkNetInvariants` and the stock-subnet Z3 proofs.
-- **`from_workflow` (experimental).** Compiles an ADK 2 graph `Workflow` into a
-  net served by `PetriWorkflow`, a drop-in for `Runner(node=workflow)`.
-  - Translated: routes, `DEFAULT_ROUTE`, `JoinNode`, `max_concurrency`,
-    `RequestInput` interrupts (and `auth_config` / tool-confirmation
-    interrupts, detected) and opt-in back-edge budgets
-    ([ADR 0007](docs/adr/0007-compiled-workflow-back-edge-budgets.md)).
-    `retry_config` becomes a retry loop in the net (timed backoff
-    transitions, attempts of one ADK run); the proofs fold it into the run.
-    `timeout` stays on the node, for ADK's node runner.
-  - The compiled node behaves like `Workflow` towards ADK: the terminal
-    node's event is the output event, run ids are per workflow run, a
-    resumed node keeps its run id, a failing node fails the run, and
-    `input_schema`/`output_schema` carry over (so it works as an agent tool).
-  - Rejected: nodes reading session state (parameters, `ctx.state` in the
-    body, instruction templates) unless `state="legacy_read"`, and
-    `mode='task'`/`'chat'` agents, whose across-turn wait is not modelled.
-  - `verify_workflow` proves: one turn at a time, the permit never doubles,
-    one output per terminal node and at most one terminal node with output,
-    every node runs serially, and deadlock freedom for workflows without
-    interrupts. Route coverage is reported as a lint.
-  - Loads from ADK's YAML agent config: `agent_class:
-    adk_libpetri.workflow.PetriWorkflow` takes a `Workflow`'s edges plus the
-    compile options, so `adk web` and `adk run` serve the compiled net.
-    `PetriWorkflow.from_config` also compiles an `agent_class: Workflow` file.
-  - Tests run ADK's own workflow samples (google/adk-python v2.11.0,
-    vendored under `tests/workflow/adk_samples`) natively and compiled.
-- **Net blueprints in ADK's YAML (experimental).** `agent_class:
-  adk_libpetri.net.PetriNet` writes a net in ADK's YAML agent config, so
-  `adk web` and `adk run` serve it ([ADR 0008](docs/adr/0008-petri-net-blueprints.md)).
-  - `nodes:` (a `list[EdgeItem]` field, resolved by ADK's loader), `places:`
-    with types and seeds, and `transitions:` with every arc, output and timing
-    form; actions are `move`, `emit` or `node:` (an ADK node run inside the
-    invocation, its route picking a labelled xor branch, a failure taking the
-    `error` branch).
-  - The turn is `PetriAgent`'s (`userIn` in, the first `eventOut` token out).
-    A session's net serves one turn at a time; a node transition that fires
-    between turns runs in the next turn. `PetriNet.inject` fills `env:` places.
-  - `subnets:` mounts another blueprint by YAML ref, with port binding and an
-    `inst/` prefix, or a stock subnet (`llm_agent`, `llm_step`,
-    `tool_dispatch`, `router`) configured from an ADK `LlmAgent`.
-  - `prove:` states Z3 claims (`deadlock_free`, `place_bound`, `unreachable`,
-    `mutual_exclusion`) on the composed net, run by `PetriNet.verify()`, at
-    load with `on_load: true`, or by the new `adk-libpetri check` /
-    `adk-libpetri verify [--k N] [--recursive]` CLI. By default the inputs
-    come turn by turn: one turn for a safety claim, two for `deadlock_free`.
-    Across turns a node run is its start and a `complete:T:run` deposit,
-    shaped as libpetri's own completion step so VER-004 does not split it
-    a second time. Each node holds a `turn:quiet:T` token of its own while
-    a run starts, so the runs of different nodes stay independent for
-    libpetri's partial-order reduction (VER-024).
-  - Load errors name the YAML key path and a fix. A JSON Schema
-    (`net/schema.json`) and an authoring guide (`net/AUTHORING.md`) ship with
-    the package. Patterns A, B and C have YAML twins with their Python nets'
-    fingerprints and proofs.
-  - `turn: {release: place}` lets the next turn start while the last one's
-    delivery tail still runs ([ADR 0010](docs/adr/0010-turn-release.md)): a
-    token on the release place yields an event with `custom_metadata
-    {"adk_libpetri": "released"}` (`is_released`) and admits the next
-    invocation of the session; answers go to turns in order. The proofs'
-    turn model then waits for the release only, with no node split or quiet
-    tokens; the release place is a `deadlock_free` sink even when
-    `prove.options.sinks` is given. Nets without `turn:` are unchanged.
-  - A turn no longer ends between two chained `node:` transitions after its
-    answer: one that a finished run's deposit enables (untimed) runs in the
-    same invocation. Before, the turn could close first, and the second node
-    waited for the session's next turn or failed when the session closed.
-  - `PetriWorkflow` and `PetriNet` share their turn and session-runner logic
-    (`_net_node.py`). Known gaps: no interrupts, and timeout outputs do not
-    run yet (a libpetri-py decode bug).
-- **Nets in ADK's web UI (experimental).** `PetriNet` and `PetriWorkflow`
-  carry a derived `graph` that stock `adk web`'s graph view draws. A
-  `PetriNet`'s answer is emitted as a `Workflow`'s terminal node's is: under
-  a child named after the transition that answered
-  (`race@1/Race_Commit@1`, `output_for` naming the net), at once whatever
-  its type, and with a text part when it is a value.
-  `adk-libpetri web AGENTS_DIR` serves ADK's own dev UI, unpatched, and
-  answers three of its requests for net apps (and serves counterexample
-  pictures)
-  ([ADR 0009](docs/adr/0009-web-ui-and-builder-assistant.md)):
-  - the graph panel draws the net as a Petri net in the UI's theme, mounted
-    blueprints as clusters (one node each in a net of more than 15 places,
-    opened in "Agent Structure" with ADK's breadcrumbs), each stock subnet
-    as one node (opened as a compact drawing, its model call marked), and a
-    key of its shapes. ADK's highlighting lights each `node:` transition as
-    its node runs, the transition that answered with the branch that won,
-    and the path back to `userIn` through joins on a permit; a failed turn
-    lights where it broke, never the out port. A function node mounted in a subnet runs
-    as `<mount>·<node>` (`second·fast`), so each mount lights for its own
-    runs and the Events tab says which mount ran;
-  - the builder assistant (the pencil button) gains tools to write, check
-    and verify blueprints (each on a copy of the draft under a package name
-    of its own); it writes nothing that fails to load, ends its replies with
-    each claim's verdict, and shows a violated claim's counterexample as a
-    picture in the UI's theme (`/dev/petri/counterexamples/{id}.svg`; the
-    full-size view draws the net, which needs Graphviz `dot`). Without a
-    model call it greets a net app with the net's size and each claim's
-    verdict, answers `verify` (each claim, the steps that break a violated
-    one, its picture) and `check`, and says how to set a Gemini key where
-    ADK showed a bare "Error Code: ValueError" (the main chat's model error
-    leads with the fix too). Verdicts are remembered per net, its mounted
-    files and code included;
-  - the builder canvas lists what a net or `PetriWorkflow` runs, cannot
-    overwrite one (a file that does not parse included), and Save ships the
-    assistant's latest net, which chat then runs (in ADK alone, a net's Save
-    failed with 400); what the canvas dropped is told in the next reply.
-    The draft is kept in step with the app: a file edited in an editor
-    while the builder is open survives Save, and one edited in
-    both stops it. After any Save the graph panel and chat show what was
-    saved, a net or not.
-    Save on a net root with a sub-agent added on the canvas writes nothing
-    and keeps the builder open, saying why;
-  - helper packages without an agent are left out of the app list (an app
-    whose `agent` module is a package is listed), and "Create new app" never
-    writes into one. One app's folder (`adk-libpetri web agents/race`) is
-    served as ADK serves it, guard and canvas included.
-
-  `bridge.MarkingTraces`, an event-store decorator, records each session's
-  firings and markings (pass it to `PetriAgentLoader(traces=...)`). `check`
-  and `verify` take `--json`.
-- **Cross-language fixtures.** `spec/fixtures/nets` holds every stock subnet's
-  structure. Java's new `SpecFixturesTest` writes and golden-checks it, and so
-  does Python's `tests/conformance`.
-- **Release.** `scripts/release-python.sh` publishes to PyPI from a developer
-  machine, tagging `python/v<version>`.
-
 ### Java
 
 - **`SpecFixturesTest`** writes and golden-checks `spec/fixtures/nets/*.json`,
@@ -383,6 +248,142 @@ libpetri-py `>=7.3,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-
   behaviour the foils lock in moves to `python/README.md`. Diagrams are
   white cards, and the compiled-workflow diagrams are generated by
   `python/tests/readme_diagrams`.
+
+
+## Python 0.1.0a1 - 2026-10-09
+
+First Python port, a preliminary release: `pip install --pre adk-libpetri`.
+For google-adk `~=2.11.0` and libpetri `>=7.3,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-compat.md).
+
+- **Parity with Java.** Colours, the 9 stock subnets (as `NetSpec`s under
+  the Java names), `PetriRunner`, `PetriAgent` (root agent, or a node inside an
+  ADK `Workflow`), `SessionExecutorRegistry` (`strong_owned`, and
+  `finalizer_owned` on `weakref.finalize`), checkpoints, the SSE pair, the BIDI
+  bridge, `AdkNetInvariants` and the stock-subnet Z3 proofs.
+- **`from_workflow` (experimental).** Compiles an ADK 2 graph `Workflow` into a
+  net served by `PetriWorkflow`, a drop-in for `Runner(node=workflow)`.
+  - Translated: routes, `DEFAULT_ROUTE`, `JoinNode`, `max_concurrency`,
+    `RequestInput` interrupts (and `auth_config` / tool-confirmation
+    interrupts, detected) and opt-in back-edge budgets
+    ([ADR 0007](docs/adr/0007-compiled-workflow-back-edge-budgets.md)).
+    `retry_config` becomes a retry loop in the net (timed backoff
+    transitions, attempts of one ADK run); the proofs fold it into the run.
+    `timeout` stays on the node, for ADK's node runner.
+  - The compiled node behaves like `Workflow` towards ADK: the terminal
+    node's event is the output event, run ids are per workflow run, a
+    resumed node keeps its run id, a failing node fails the run, and
+    `input_schema`/`output_schema` carry over (so it works as an agent tool).
+  - Rejected: nodes reading session state (parameters, `ctx.state` in the
+    body, instruction templates) unless `state="legacy_read"`, and
+    `mode='task'`/`'chat'` agents, whose across-turn wait is not modelled.
+  - `verify_workflow` proves: one turn at a time, the permit never doubles,
+    one output per terminal node and at most one terminal node with output,
+    every node runs serially, and deadlock freedom for workflows without
+    interrupts. Route coverage is reported as a lint.
+  - Loads from ADK's YAML agent config: `agent_class:
+    adk_libpetri.workflow.PetriWorkflow` takes a `Workflow`'s edges plus the
+    compile options, so `adk web` and `adk run` serve the compiled net.
+    `PetriWorkflow.from_config` also compiles an `agent_class: Workflow` file.
+  - Tests run ADK's own workflow samples (google/adk-python v2.11.0,
+    vendored under `tests/workflow/adk_samples`) natively and compiled.
+- **Net blueprints in ADK's YAML (experimental).** `agent_class:
+  adk_libpetri.net.PetriNet` writes a net in ADK's YAML agent config, so
+  `adk web` and `adk run` serve it ([ADR 0008](docs/adr/0008-petri-net-blueprints.md)).
+  - `nodes:` (a `list[EdgeItem]` field, resolved by ADK's loader), `places:`
+    with types and seeds, and `transitions:` with every arc, output and timing
+    form; actions are `move`, `emit` or `node:` (an ADK node run inside the
+    invocation, its route picking a labelled xor branch, a failure taking the
+    `error` branch).
+  - The turn is `PetriAgent`'s (`userIn` in, the first `eventOut` token out).
+    A session's net serves one turn at a time; a node transition that fires
+    between turns runs in the next turn. `PetriNet.inject` fills `env:` places.
+  - `subnets:` mounts another blueprint by YAML ref, with port binding and an
+    `inst/` prefix, or a stock subnet (`llm_agent`, `llm_step`,
+    `tool_dispatch`, `router`) configured from an ADK `LlmAgent`.
+  - `prove:` states Z3 claims (`deadlock_free`, `place_bound`, `unreachable`,
+    `mutual_exclusion`) on the composed net, run by `PetriNet.verify()`, at
+    load with `on_load: true`, or by the new `adk-libpetri check` /
+    `adk-libpetri verify [--k N] [--recursive]` CLI. By default the inputs
+    come turn by turn: one turn for a safety claim, two for `deadlock_free`.
+    Across turns a node run is its start and a `complete:T:run` deposit,
+    shaped as libpetri's own completion step so VER-004 does not split it
+    a second time. Each node holds a `turn:quiet:T` token of its own while
+    a run starts, so the runs of different nodes stay independent for
+    libpetri's partial-order reduction (VER-024).
+  - Load errors name the YAML key path and a fix. A JSON Schema
+    (`net/schema.json`) and an authoring guide (`net/AUTHORING.md`) ship with
+    the package. Patterns A, B and C have YAML twins with their Python nets'
+    fingerprints and proofs.
+  - `turn: {release: place}` lets the next turn start while the last one's
+    delivery tail still runs ([ADR 0010](docs/adr/0010-turn-release.md)): a
+    token on the release place yields an event with `custom_metadata
+    {"adk_libpetri": "released"}` (`is_released`) and admits the next
+    invocation of the session; answers go to turns in order. The proofs'
+    turn model then waits for the release only, with no node split or quiet
+    tokens; the release place is a `deadlock_free` sink even when
+    `prove.options.sinks` is given. Nets without `turn:` are unchanged.
+  - A turn no longer ends between two chained `node:` transitions after its
+    answer: one that a finished run's deposit enables (untimed) runs in the
+    same invocation. Before, the turn could close first, and the second node
+    waited for the session's next turn or failed when the session closed.
+  - `PetriWorkflow` and `PetriNet` share their turn and session-runner logic
+    (`_net_node.py`). Known gaps: no interrupts, and timeout outputs do not
+    run yet (a libpetri-py decode bug).
+- **Nets in ADK's web UI (experimental).** `PetriNet` and `PetriWorkflow`
+  carry a derived `graph` that stock `adk web`'s graph view draws. A
+  `PetriNet`'s answer is emitted as a `Workflow`'s terminal node's is: under
+  a child named after the transition that answered
+  (`race@1/Race_Commit@1`, `output_for` naming the net), at once whatever
+  its type, and with a text part when it is a value.
+  `adk-libpetri web AGENTS_DIR` serves ADK's own dev UI, unpatched, and
+  answers three of its requests for net apps (and serves counterexample
+  pictures)
+  ([ADR 0009](docs/adr/0009-web-ui-and-builder-assistant.md)):
+  - the graph panel draws the net as a Petri net in the UI's theme, mounted
+    blueprints as clusters (one node each in a net of more than 15 places,
+    opened in "Agent Structure" with ADK's breadcrumbs), each stock subnet
+    as one node (opened as a compact drawing, its model call marked), and a
+    key of its shapes. ADK's highlighting lights each `node:` transition as
+    its node runs, the transition that answered with the branch that won,
+    and the path back to `userIn` through joins on a permit; a failed turn
+    lights where it broke, never the out port. A function node mounted in a subnet runs
+    as `<mount>·<node>` (`second·fast`), so each mount lights for its own
+    runs and the Events tab says which mount ran;
+  - the builder assistant (the pencil button) gains tools to write, check
+    and verify blueprints (each on a copy of the draft under a package name
+    of its own); it writes nothing that fails to load, ends its replies with
+    each claim's verdict, and shows a violated claim's counterexample as a
+    picture in the UI's theme (`/dev/petri/counterexamples/{id}.svg`; the
+    full-size view draws the net, which needs Graphviz `dot`). Without a
+    model call it greets a net app with the net's size and each claim's
+    verdict, answers `verify` (each claim, the steps that break a violated
+    one, its picture) and `check`, and says how to set a Gemini key where
+    ADK showed a bare "Error Code: ValueError" (the main chat's model error
+    leads with the fix too). Verdicts are remembered per net, its mounted
+    files and code included;
+  - the builder canvas lists what a net or `PetriWorkflow` runs, cannot
+    overwrite one (a file that does not parse included), and Save ships the
+    assistant's latest net, which chat then runs (in ADK alone, a net's Save
+    failed with 400); what the canvas dropped is told in the next reply.
+    The draft is kept in step with the app: a file edited in an editor
+    while the builder is open survives Save, and one edited in
+    both stops it. After any Save the graph panel and chat show what was
+    saved, a net or not.
+    Save on a net root with a sub-agent added on the canvas writes nothing
+    and keeps the builder open, saying why;
+  - helper packages without an agent are left out of the app list (an app
+    whose `agent` module is a package is listed), and "Create new app" never
+    writes into one. One app's folder (`adk-libpetri web agents/race`) is
+    served as ADK serves it, guard and canvas included.
+
+  `bridge.MarkingTraces`, an event-store decorator, records each session's
+  firings and markings (pass it to `PetriAgentLoader(traces=...)`). `check`
+  and `verify` take `--json`.
+- **Cross-language fixtures.** `spec/fixtures/nets` holds every stock subnet's
+  structure. Java's new `SpecFixturesTest` writes and golden-checks it, and so
+  does Python's `tests/conformance`.
+- **Release.** `scripts/release-python.sh` publishes to PyPI from a developer
+  machine, tagging `python/v<version>`.
 
 
 ## Java 0.4.0 - 2026-08-21
