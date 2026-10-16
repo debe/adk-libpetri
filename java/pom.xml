@@ -38,7 +38,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>25</maven.compiler.release>
 
-        <libpetri.version>8.0.0</libpetri.version>
+        <libpetri.version>10.0.0</libpetri.version>
         <google-adk.version>1.10.1</google-adk.version>
         <rxjava.version>3.1.12</rxjava.version>
         <!--

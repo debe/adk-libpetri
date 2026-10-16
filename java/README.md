@@ -20,7 +20,7 @@ Java 25, Maven 3.9.x via wrapper.
 
 | | Version |
 |---|---|
-| `org.libpetri:libpetri`              | 8.0.0  (Maven Central) |
+| `org.libpetri:libpetri`              | 10.0.0 (Maven Central) |
 | `com.google.adk:google-adk`          | 1.10.1 (Maven Central) |
 | `com.google.genai:google-genai`      | 1.58.0 (transitive via google-adk) |
 | `io.reactivex.rxjava3:rxjava`        | 3.1.12 |

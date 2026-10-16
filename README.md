@@ -205,7 +205,7 @@ CI proves [G1](#g1-one-turn-at-a-time-and-no-stranded-turn) and
 ```
 
 Not on Maven Central yet: build it with `cd java && ./mvnw install`. Java 25,
-ADK Java 1.10.1, libpetri 8.0.0. Read the
+ADK Java 1.10.1, libpetri 10.0.0. Read the
 [protobuf version floor](java/README.md#protobuf-version-floor) before you pin
 protobuf yourself. The same agent as above:
 
@@ -822,7 +822,7 @@ blueprints.
 | Port | ADK | libpetri | Release |
 |---|---|---|---|
 | **Python** ([`python/`](python/)) | ADK Python 2.11 (`google-adk~=2.11.0`) | `libpetri>=7.3,<8` (PyPI, over the Rust runtime) | 0.1.0a1, preliminary |
-| **Java** ([`java/`](java/)) | ADK Java 1.10.1 | `org.libpetri:libpetri:8.0.0` | 0.4.0, unreleased |
+| **Java** ([`java/`](java/)) | ADK Java 1.10.1 | `org.libpetri:libpetri:10.0.0` | 0.4.0, unreleased |
 | TypeScript, Rust | reserved | | |
 
 Each port has its own version and tags (`python/v…`, `java/v…`).
