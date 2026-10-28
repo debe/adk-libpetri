@@ -596,7 +596,7 @@ def _confirmation_state_reads(node: Any) -> list[str]:
     except (TypeError, ValueError):
         return []  # ADK passes such a predicate the node's arguments only
     ctx_name = find_context_parameter(pred) or ("ctx" if "ctx" in params else "tool_context")
-    own = set(node._sig.parameters) if getattr(node, "_sig", None) is not None else set()
+    own = set(node._sig.parameters)
     return [
         f"require_confirmation parameter {name}"
         for name, p in params.items()
@@ -637,12 +637,12 @@ def _check_node(
         return
     if isinstance(node, FunctionNode):
         ctx_name = node._context_param_name
-        sig = getattr(node, "_sig", None)
-        if node.parameter_binding == "state" and sig is not None:
+        sig = node._sig
+        if node.parameter_binding == "state":
             reads += [f"parameter {p}" for p in sig.parameters if p not in (ctx_name, "node_input")]
         if callable(node.require_confirmation):
             reads += _confirmation_state_reads(node)
-        if sig is not None and ctx_name in sig.parameters:
+        if ctx_name in sig.parameters:
             found = _ctx_state_reads(node, ctx_name)
             if found is None:
                 report.add(
@@ -714,7 +714,7 @@ def _ctx_state_reads(node: Any, ctx_name: str) -> list[str] | None:
     write bridge and stay allowed; any other use of ``ctx.state`` counts as
     a read.
     """
-    func = getattr(node, "_unwrapped_func", None) or getattr(node, "_func", None)
+    func = node._unwrapped_func or node._func
     if func is None:
         return None
     try:

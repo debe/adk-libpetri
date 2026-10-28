@@ -44,6 +44,8 @@ def _check(path: str, out: TextIO, *, as_json: bool = False) -> int:
     elif report.ok:
         assert report.net is not None
         print(f"OK {path}: {report.net.line()}", file=out)
+        for warning in report.warnings:
+            print(f"WARNING {warning}", file=out)
     else:
         print(f"ERROR {report.error}", file=out)
     return _EXIT_OK if report.ok else _EXIT_FAIL

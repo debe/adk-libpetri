@@ -234,9 +234,31 @@ def test_a_delegate_is_required() -> None:
         EventStoreToStreamBridge(EVENT_OUT, None)
 
 
-def test_bridge_requests_token_capture() -> None:
-    assert EventStoreToStreamBridge.captures_tokens is True
-    assert _bridge().is_enabled()
+def test_bridge_requests_the_tokens_of_its_place_only() -> None:
+    class Plain:
+        def append(self, event: object) -> None:
+            pass
+
+    bridge = _bridge(Plain())
+    assert bridge.captures_tokens == [EVENT_OUT.name]
+    assert bridge.is_enabled()
+
+
+def test_bridge_adds_the_places_its_delegate_asks_for() -> None:
+    class Asks:
+        captures_tokens = ("other",)
+
+        def append(self, event: object) -> None:
+            pass
+
+    class AsksAll(Asks):
+        captures_tokens = True  # type: ignore[assignment]
+
+    assert EventStoreToStreamBridge(EVENT_OUT, Asks()).captures_tokens == [
+        EVENT_OUT.name,
+        "other",
+    ]
+    assert EventStoreToStreamBridge(EVENT_OUT, AsksAll()).captures_tokens is True
 
 
 async def test_stream_supports_multiple_subscribers() -> None:

@@ -44,6 +44,19 @@ existed.
     repeat arrival replaces its earlier one (ADK keeps the latest output),
     and a join still missing a predecessor when the run ends no longer
     holds the turn open. Before, such a turn never ended.
+  - `tests/test_adk_seams.py` checks every private ADK name the port
+    uses. The port no longer reads `InvocationContext._abort_signal` or
+    `FunctionNode._sig` through `getattr` with a default, which would have
+    silently stopped aborting turns, or checking state reads, after a rename.
+- **Hardening.**
+  - `build_app` refuses to serve when ADK's builder save route moved and
+    the guard cannot install: the canvas could then overwrite a net. A
+    moved canvas or graph route is logged.
+  - Event stores ask libpetri for the tokens of the places they read
+    (`EVENT_OUT`) plus their delegate's, instead of every token of every
+    place.
+  - `adk-libpetri check` warns about a `timeout:` output while libpetri-py
+    is 7.3.0 or older, which cannot run one yet.
 
 ### Java
 

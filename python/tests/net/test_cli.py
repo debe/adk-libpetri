@@ -53,6 +53,22 @@ def test_check_prints_the_blueprint_error_with_its_key_path_and_hint() -> None:
     assert "Fix: did you mean 'won'?" in out
 
 
+def test_check_warns_about_a_timeout_output_libpetri_cannot_run_yet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adk_libpetri.net import report
+
+    monkeypatch.setattr(report, "_libpetri_version", lambda: (7, 3, 0))
+    code, out = run("check", str(BLUEPRINTS / "bp_timeout" / "root.yaml"))
+    assert code == 0
+    assert "WARNING transitions ['To_Slow'] have a timeout output" in out
+
+    monkeypatch.setattr(report, "_libpetri_version", lambda: (7, 3, 1))
+    code, out = run("check", str(BLUEPRINTS / "bp_timeout" / "root.yaml"))
+    assert code == 0
+    assert "WARNING" not in out
+
+
 def test_check_reports_a_ref_cycle() -> None:
     code, out = run("check", str(BLUEPRINTS / "bp_cycle" / "a.yaml"))
     assert code == 1

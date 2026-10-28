@@ -7,7 +7,10 @@ funnels through the single ``Persist`` transition, so concurrent producers
 cannot race on ``Session.state``. The Rust executor libpetri-py runs on may
 start a transition again while an earlier firing of it is still in flight
 (CONC-002), so the bound actions also hold a lock around ``append_event``:
-appends run one at a time. The action fails with ``TimeoutError`` once
+appends run one at a time, in the order they reach the lock, which need not
+be the order the writes were fired in. (A seeded idle place would order them
+in the net, but a failed append would strand its token and stop every later
+write: that waits on a libpetri failure branch.) The action fails with ``TimeoutError`` once
 ``persist_timeout`` passes, so a hung session service surfaces as a
 ``TransitionFailed`` instead of holding the transition forever. The timeout
 runs in real time, also under an injected clock.

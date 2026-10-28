@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from .._experimental import experimental
-from .builder_guard import install_builder_guard
+from .builder_guard import SAVE_PATH, install_builder_guard
 from .canvas_view import install_canvas_view
 from .graph_view import install_graph_view
 from .loader import PetriAgentLoader
@@ -67,9 +67,17 @@ def build_app(
     adk_options.setdefault("logo_image_url", "/dev-ui/adk_favicon.svg")
     app = get_fast_api_app(agents_dir=agents_dir, agent_loader=loader, **adk_options)
     forget = _forgetter(app, loader)
-    install_builder_guard(app, agents_dir, on_saved=forget)
-    install_canvas_view(app, agents_dir)
-    install_graph_view(app, loader)
+    if not install_builder_guard(app, agents_dir, on_saved=forget) and adk_options["web"]:
+        # web=True always serves the builder canvas. Without the guard its
+        # Save would overwrite a net with an agent YAML.
+        raise RuntimeError(
+            f"ADK's dev server has no {SAVE_PATH} route to guard: this google-adk moved "
+            "it. Re-check ADR 0009's seams for it before serving nets."
+        )
+    if not install_canvas_view(app, agents_dir) and adk_options["web"]:
+        _LOG.warning("ADK's builder route moved: the canvas shows a net's root without its nodes")
+    if not install_graph_view(app, loader):
+        _LOG.warning("ADK's graph route moved: the graph panel draws nets as ADK does")
     install_proof_view(app)
     return app
 

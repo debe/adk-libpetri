@@ -189,7 +189,7 @@ class PetriAgent(BaseAgent):
             runner,
             lambda: runner.inject(C.USER_IN, content),
             sse=sse,
-            abort_signal=getattr(ctx, "_abort_signal", None),
+            abort_signal=ctx._abort_signal,  # private; pinned by tests/test_adk_seams.py
             finish=self._as_node_output,
         ):
             yield event

@@ -24,6 +24,7 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode, Tracer
 
+from .event_store_bridge import tokens_for
 from .transition_failure import split_error
 
 TRANSITION_ATTRIBUTE = "libpetri.transition"
@@ -50,8 +51,8 @@ class OtelEventStore:
         self._lock = threading.Lock()
 
     @property
-    def captures_tokens(self) -> bool:
-        return bool(getattr(self._delegate, "captures_tokens", False))
+    def captures_tokens(self) -> bool | list[str]:
+        return tokens_for((), self._delegate)
 
     def is_enabled(self) -> bool:
         return True

@@ -78,6 +78,7 @@ from .._experimental import experimental
 from .._net_node import SCOPE_ATTACHMENT, NetNodeBase
 from .._spec import And, NetSpec, Out, Timeout, Xor, _out_places
 from ..bridge import TransitionFailure
+from ..bridge.event_store_bridge import tokens_for
 from ..runner.petri_runner import Builder, PetriRunner
 from ..runner.session_registry import SessionExecutorRegistry
 from ..workflow.compiler import TurnScope
@@ -261,8 +262,6 @@ class _EgressTap:
     places the branch puts to (``timeouts``). Tokens no event names stay unnamed.
     """
 
-    captures_tokens = True
-
     def __init__(
         self,
         delegate: Any,
@@ -277,6 +276,10 @@ class _EgressTap:
         self._pending: list[Any] = []
         self._timed_out: tuple[str, frozenset[str]] | None = None
         self.stream: HotStream[Any] = HotStream()
+
+    @property
+    def captures_tokens(self) -> bool | list[str]:
+        return tokens_for((C.EVENT_OUT.name,), self._delegate)
 
     def is_enabled(self) -> bool:
         return True

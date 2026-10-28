@@ -220,7 +220,7 @@ class NetNodeBase(BaseNode):
             ic.invocation_id,
             runner,
             inject,
-            abort_signal=getattr(ic, "_abort_signal", None),
+            abort_signal=ic._abort_signal,  # private; pinned by tests/test_adk_seams.py
             egress=egress,
             relay=relay,
         )

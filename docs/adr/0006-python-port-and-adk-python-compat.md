@@ -114,7 +114,10 @@ real-time stand-ins for the stepped-clock tests.
 - `google.adk.workflow`: `Workflow`, `BaseNode`, `FunctionNode`, `JoinNode`,
   `DEFAULT_ROUTE`, `RetryConfig`, `NodeTimeoutError`, `START`
   (`_base_node`), `Workflow.graph` (`nodes`, `edges`, `Edge.route`)
-- **Private, pinned by the `~=2.13.0` range**: `Context._run_node_internal`,
+- **Private, pinned by the `~=2.13.0` range**, each listed and checked by
+  `python/tests/test_adk_seams.py` (the authoritative list; the port reads
+  them directly, never through `getattr` with a default, so a rename fails
+  loudly): `Context._run_node_internal`,
   `Context.resume_inputs`, `Context.event_author`, `Context._interrupt_ids`
   (through events' `long_running_tool_ids`), `InvocationContext._abort_signal`,
   `BaseNode._requires_all_predecessors`, `FunctionNode._sig`, (2.12)

@@ -18,6 +18,7 @@ other decorators (OTel spans, logging) without interference.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from google.adk.events.event import Event
@@ -27,9 +28,23 @@ from .._spec import Place
 from .transition_failure import TransitionFailure
 
 
-class EventStoreToStreamBridge:
-    captures_tokens = True
+def tokens_for(places: Iterable[str], delegate: Any) -> bool | list[str]:
+    """``captures_tokens`` for a store that reads the tokens of ``places`` and
+    forwards every event to ``delegate``: those places, plus what ``delegate``
+    asks for (libpetri reads the outermost store's answer only).
 
+    Capturing a token copies it out of the runtime on every firing, so a store
+    names the places it reads rather than asking for all of them.
+    """
+    theirs: Any = getattr(delegate, "captures_tokens", False)
+    if callable(theirs):
+        theirs = theirs()
+    if theirs is True:
+        return True
+    return sorted(set(places).union(theirs or ())) or False
+
+
+class EventStoreToStreamBridge:
     def __init__(self, event_out_place: Place[Event], delegate: Any) -> None:
         if delegate is None:
             raise TypeError("delegate is required; pass libpetri.InMemoryEventStore() for none")
@@ -37,6 +52,10 @@ class EventStoreToStreamBridge:
         self._delegate = delegate
         self._events: HotStream[Event] = HotStream()
         self._failures: HotStream[TransitionFailure] = HotStream()
+
+    @property
+    def captures_tokens(self) -> bool | list[str]:
+        return tokens_for((self._place,), self._delegate)
 
     def is_enabled(self) -> bool:
         return True

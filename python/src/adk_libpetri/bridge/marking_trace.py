@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .._experimental import experimental
+from .event_store_bridge import tokens_for
 
 if TYPE_CHECKING:
     from ..runner.session_key import SessionKey
@@ -59,8 +60,8 @@ class _SessionLink:
         self._delegate = delegate
 
     @property
-    def captures_tokens(self) -> bool:
-        return bool(getattr(self._delegate, "captures_tokens", False))
+    def captures_tokens(self) -> bool | list[str]:
+        return tokens_for((), self._delegate)
 
     def is_enabled(self) -> bool:
         return True

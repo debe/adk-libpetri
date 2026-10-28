@@ -184,6 +184,17 @@ def test_a_missing_runner_cache_is_logged(
     assert "AdkWebServer was not found" in caplog.text
 
 
+def test_serving_without_the_builder_guard_is_refused(
+    agents: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ADK that moved its save route would let the canvas overwrite a net."""
+    from adk_libpetri.web import builder_guard
+
+    monkeypatch.setattr(builder_guard, "SAVE_PATH", "/dev/apps/{app_name}/moved")
+    with pytest.raises(RuntimeError, match="no /dev/apps/"):
+        build_app(str(agents))
+
+
 def test_the_public_surface_is_experimental() -> None:
     from adk_libpetri._experimental import is_experimental
     from adk_libpetri.web import create_petri_builder_assistant, serve

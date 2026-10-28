@@ -181,7 +181,7 @@ def _state(tool_context: Any) -> dict[str, Any] | None:
         return dict(tool_context.state.to_dict())
     except Exception:
         try:
-            return dict(tool_context._invocation_context.session.state)
+            return dict(tool_context.session.state)
         except Exception:
             return None
 

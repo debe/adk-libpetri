@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import sys
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass, field, replace
@@ -198,7 +199,8 @@ def summary(node: Any) -> NetSummary:
 @experimental
 @dataclass(frozen=True)
 class CheckReport:
-    """``ok``, with the net's size; or the error, with its YAML key path and fix."""
+    """``ok``, with the net's size and any warnings; or the error, with its YAML key
+    path and fix."""
 
     path: str
     ok: bool
@@ -206,6 +208,7 @@ class CheckReport:
     error: str | None = None
     key_path: str | None = None
     hint: str | None = None
+    warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -218,7 +221,26 @@ def check_file(path: str) -> CheckReport:
         node = load_net(path)
     except LoadError as err:
         return CheckReport(path, False, error=str(err), key_path=err.key_path, hint=err.hint)
-    return CheckReport(path, True, net=summary(node))
+    return CheckReport(path, True, net=summary(node), warnings=tuple(_warnings(node)))
+
+
+def _libpetri_version() -> tuple[int, ...]:
+    from importlib.metadata import version
+
+    return tuple(int(p) for p in re.findall(r"\d+", version("libpetri"))[:3])
+
+
+def _warnings(node: Any) -> list[str]:
+    from .node import timeout_places
+
+    timed = sorted(timeout_places(node.blueprint.spec))
+    if timed and _libpetri_version() <= (7, 3, 0):
+        return [
+            f"transitions {timed} have a timeout output: it builds and proves, but libpetri-py "
+            "<= 7.3.0 cannot decode the unit token a timeout branch deposits, so the run "
+            "fails when the timeout fires (ADR 0008)"
+        ]
+    return []
 
 
 Verdict = Literal["proven", "violated", "unknown"]

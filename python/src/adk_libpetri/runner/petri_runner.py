@@ -43,6 +43,7 @@ from .._aio import HotStream, OrchestratorLoop, await_on
 from .._experimental import experimental
 from .._spec import NetSpec, Place
 from ..bridge import EventStoreToStreamBridge, TransitionFailure
+from ..bridge.event_store_bridge import tokens_for
 from .checkpoint_store import Checkpoint, SessionCheckpointStore
 from .session_key import SessionKey
 
@@ -73,8 +74,8 @@ class _LoudFailures:
         self._delegate = delegate
 
     @property
-    def captures_tokens(self) -> Any:
-        return getattr(self._delegate, "captures_tokens", False)
+    def captures_tokens(self) -> bool | list[str]:
+        return tokens_for((), self._delegate)
 
     def is_enabled(self) -> bool:
         return True
