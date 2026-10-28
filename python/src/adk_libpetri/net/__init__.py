@@ -4,6 +4,7 @@
 """
 
 from .blueprint import (
+    BLUEPRINT_VERSION,
     ActionPlan,
     Blueprint,
     BlueprintError,
@@ -15,6 +16,7 @@ from .node import RELEASED, PetriNet, is_released
 from .proofs import NetProof, verify_blueprint
 
 __all__ = [
+    "BLUEPRINT_VERSION",
     "RELEASED",
     "ActionPlan",
     "Blueprint",

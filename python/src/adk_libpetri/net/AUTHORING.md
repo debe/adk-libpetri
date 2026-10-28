@@ -3,7 +3,12 @@
 A guide for an agent (or a person) writing a Petri net as an ADK YAML file,
 `agent_class: adk_libpetri.net.PetriNet`. `adk web` and `adk run` load it like
 any `root_agent.yaml`. The JSON Schema next to this file
-(`adk-libpetri schema`) gives the exact shape.
+(`adk-libpetri schema`) gives the exact shape. For completion in an editor
+with the YAML language server, start the file with
+`# yaml-language-server: $schema=<url or path>`: the schema's `$id` (the
+`main` branch's copy on raw.githubusercontent.com), or a local copy from
+`adk-libpetri schema > petri-net.schema.json` that matches the installed
+release.
 
 ## The loop
 
@@ -73,6 +78,8 @@ state-space enumeration cannot close.
   task. `adk web` and `adk run` cannot fill an env place. `userIn` is always
   an environment place.
 - **`ports:`**, **`subnets:`** and **`prove:`** are covered below.
+- **`blueprint_version: 1`** is optional. 1 is the only format version;
+  another value is a load error naming the version this release reads.
 
 Unknown keys, unknown places and unknown nodes are load errors with a
 did-you-mean hint. No key may be named `args` at any depth (no place,

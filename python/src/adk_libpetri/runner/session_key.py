@@ -11,9 +11,11 @@ from google.adk.sessions.session import Session
 class SessionKey:
     """``(app_name, user_id, session_id)``, plus an optional ``scope``.
 
-    ``scope`` tells apart several PetriAgents serving one session, as happens
-    when two of them are nodes of one ADK ``Workflow``. Java has no such
-    case, so it has no scope.
+    ``scope`` tells apart several nets serving one session from one registry,
+    as happens when two of them are nodes of one ADK ``Workflow``: a
+    ``PetriAgent`` takes it from ``PetriAgentBuilder.session_scope``, a
+    ``PetriNet`` or ``PetriWorkflow`` from its name and net digest. Java has no
+    such case, so it has no scope.
     """
 
     app_name: str

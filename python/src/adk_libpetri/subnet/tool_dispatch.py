@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, cast
 
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
@@ -67,7 +67,10 @@ async def dispatch_one(
         result = await tool.run_async(args=dict(call.args or {}), tool_context=tool_context)  # type: ignore[arg-type]
     except Exception as err:  # per-call failure -> structured error response
         return _response(call, {"error": str(err), "exceptionType": exception_type(err)})
-    return _response(call, result if isinstance(result, dict) else {"result": result})
+    payload: dict[str, Any] = (
+        cast(dict[str, Any], result) if isinstance(result, dict) else {"result": result}
+    )
+    return _response(call, payload)
 
 
 def action_bindings(
@@ -99,3 +102,13 @@ def action_bindings(
         ctx.output(C.TOOL_RESULTS, C.ToolResults(tuple(responses), model_turn))
 
     return bind(DEF, {Transitions.DISPATCH: dispatch})
+
+
+__all__ = [
+    "DEF",
+    "NAME",
+    "ToolContextSupplier",
+    "Transitions",
+    "action_bindings",
+    "model_turn_of",
+]

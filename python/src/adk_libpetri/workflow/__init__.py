@@ -1,7 +1,7 @@
 """``from_workflow``: run and prove ADK 2 graph workflows as libpetri nets (``@experimental``)."""
 
 from .agent import PetriWorkflow
-from .compiler import CompiledWorkflow, TurnResult, TurnScope, compile_workflow
+from .compiler import CompiledWorkflow, compile_workflow
 from .proofs import WorkflowProof, route_coverage, verify_workflow, workflow_properties
 from .report import (
     AmbiguousRouteError,
@@ -25,8 +25,6 @@ __all__ = [
     "PetriWorkflow",
     "Resumed",
     "TranslationReport",
-    "TurnResult",
-    "TurnScope",
     "WfToken",
     "WorkflowFailure",
     "WorkflowProof",

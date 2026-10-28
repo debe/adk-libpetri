@@ -71,8 +71,9 @@ edges:                                   # exactly a Workflow's edges
 ```
 
 ADK's loader resolves the edges (code references, nested YAML files, route
-maps) as for `agent_class: Workflow`, and the node compiles itself on
-`OrchestratorLoop.shared()`. `PetriWorkflow.from_config(path, ...)` loads
+maps) as for `agent_class: Workflow`; the node compiles itself and serves
+on `OrchestratorLoop.shared()` (closed at exit) unless `serve_on(loop)` gives
+it another. `PetriWorkflow.from_config(path, ...)` loads
 either kind of YAML: an `agent_class: Workflow` file is compiled with the
 options you pass.
 
@@ -98,7 +99,12 @@ moves into the net is the scheduling, and with it the claims Z3 can prove:
 
 Each proof has a `kind`: `"safety"`, `"deadlock"` or `"route coverage"`.
 Route coverage is a lint, not a safety claim: ADK's own loop samples exit
-through a route with no edge, so a violation there is expected.
+through a route with no edge, so a violation there is expected. A
+`WorkflowProof` reads as a blueprint's `NetProof` does (`proven`,
+`violated`, `scope`, `notes`), and `PetriWorkflow.verify(k=...)` runs
+`verify_workflow` on a loaded node. `k=None`, the default in both, is each
+one's own default: one user input for a workflow, the claims' turns for a
+blueprint.
 
 Translation, in short:
 
@@ -292,7 +298,10 @@ adk-libpetri verify root_agent.yaml --k 2 --recursive  # run prove:, children's 
 `verify` prints each claim's verdict and exits nonzero on a violated or
 unknown claim;
 `--json` prints the verdicts as data, a violated claim's counterexample
-included.
+included, tagged `"format": 1`. Both commands take a `PetriWorkflow` YAML
+too: `check` compiles it, `verify` runs `verify_workflow`.
+`adk-libpetri --version` prints the adk-libpetri, google-adk and libpetri
+versions.
 `PetriNet.verify(k=2)` returns the same verdicts in Python. The proofs are on the net's
 structure, untimed, with every xor a free choice, so a claim holds whatever
 the nodes return. By default the user's inputs come turn by turn, the next

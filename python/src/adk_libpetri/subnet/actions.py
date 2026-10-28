@@ -39,3 +39,11 @@ def merge(*maps: ActionMap) -> dict[str, Action]:
 def bind_composed(spec: NetSpec, *maps: ActionMap) -> lp.BuiltNet:
     """Merge ``maps``, check them against ``spec`` and build the runnable net."""
     return spec.build(merge(*maps))
+
+
+__all__ = [
+    "ActionMap",
+    "bind",
+    "bind_composed",
+    "merge",
+]

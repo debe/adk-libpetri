@@ -1,7 +1,7 @@
 """``from_workflow``: compile an ADK 2 graph ``Workflow`` into a libpetri net (``@experimental``).
 
 The compiler reads ``workflow.graph`` (after ADK's own validation) and emits a
-:class:`~adk_libpetri._spec.NetSpec`, per-session action bindings and a
+:class:`~adk_libpetri.NetSpec`, per-session action bindings and a
 :class:`~adk_libpetri.workflow.report.TranslationReport`. Each ADK node stays
 an ADK node: its transition runs it through ADK's own node runner on the
 invocation's loop, so session appends, plugins, tracing and event paths are
@@ -225,6 +225,8 @@ class _NodePlan:
 @experimental
 @dataclass
 class CompiledWorkflow:
+    """What :func:`compile_workflow` returns: the net, its report and its proof net."""
+
     workflow: Workflow
     spec: NetSpec
     report: TranslationReport
@@ -241,8 +243,8 @@ class CompiledWorkflow:
     executed net. It keeps the proofs as cheap as for a node without retries."""
     max_concurrency: int | None
     budgets: dict[tuple[str, str], int]
-    _plans: dict[str, _NodePlan]
-    _multi_route: MultiRoute
+    _plans: dict[str, _NodePlan] = field(init=False, repr=False)
+    _multi_route: MultiRoute = field(init=False, repr=False)
 
     @property
     def name(self) -> str:
@@ -394,16 +396,17 @@ def compile_workflow(
     )
     for (a, b), k in budgets.items():
         report.add("exact", f"{a}->{b}", f"back edge bounded by a budget of {k} per workflow run")
-    return CompiledWorkflow(
+    compiled = CompiledWorkflow(
         workflow=workflow,
         spec=spec,
         report=report,
         verification_spec=verification_spec,
         max_concurrency=workflow.max_concurrency if workflow.max_concurrency else None,
         budgets=budgets,
-        _plans=plans,
-        _multi_route=multi_route,
     )
+    compiled._plans = plans
+    compiled._multi_route = multi_route
+    return compiled
 
 
 def _retry_plan(node: BaseNode, report: TranslationReport) -> tuple[int, list[int]]:

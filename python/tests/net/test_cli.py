@@ -273,3 +273,61 @@ def test_verify_json_matches_the_text_verdicts() -> None:
         assert f"{claim['verdict'].upper():<9}{claim['label']}" in text
         if claim["verdict"] == "violated":
             assert "  fires: " + " -> ".join(claim["fires"]) in text
+
+
+def test_every_json_payload_carries_its_format() -> None:
+    for argv in (
+        ("check", "--json", str(RACE / "race.yaml")),
+        ("check", "--json", str(CLI / "typo.yaml")),
+        ("verify", "--json", str(CLI / "typo.yaml")),
+    ):
+        _, out = run(*argv)
+        assert json.loads(out)["format"] == 1, argv
+
+
+# -- --version and PetriWorkflow files ----------------------------------------------
+
+
+def test_version_names_adk_libpetri_google_adk_and_libpetri() -> None:
+    from importlib.metadata import version
+
+    import adk_libpetri
+
+    code, out = run("--version")
+    assert code == 0
+    assert out.splitlines() == [
+        f"adk-libpetri {adk_libpetri.__version__}",
+        f"google-adk {version('google-adk')}",
+        f"libpetri {version('libpetri')}",
+    ]
+
+
+WORKFLOW = Path(__file__).parents[1] / "workflow" / "adk_samples" / "loop_config"
+
+
+def test_check_compiles_a_petri_workflow_yaml() -> None:
+    path = WORKFLOW / "petri_root_agent.yaml"
+    code, out = run("check", str(path))
+    assert code == 0, out
+    assert out.startswith(f"OK {path}: PetriWorkflow 'root_agent': ")
+    report = json.loads(run("check", "--json", str(path))[1])
+    assert report["net"]["kind"] == "PetriWorkflow"
+    assert report["net"]["claims"] == 8
+
+
+@requires_z3
+def test_verify_runs_a_petri_workflows_claims() -> None:
+    from adk_libpetri.net.report import load_net_node
+
+    path = str(WORKFLOW / "petri_root_agent.yaml")
+    code, text = run("verify", path)
+    # The loop sample exits through a route with no edge: the route-coverage lint.
+    assert code == 1
+    assert "7 proven, 1 violated, 0 unknown" in text
+    assert "VIOLATED route coverage: " in text
+    report = json.loads(run("verify", "--json", "--k", "2", path)[1])
+    assert report["nets"] == ["root_agent"]
+    assert [c["label"] for c in report["claims"]] == [
+        p.label for p in load_net_node(path).verify(2)
+    ]
+    assert {c["scope"] for c in report["claims"]} >= {"userIn: at most 2 arrival(s)"}

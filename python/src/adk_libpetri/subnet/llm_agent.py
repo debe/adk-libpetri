@@ -46,7 +46,7 @@ answers with ``fallback_content``. The decision lives in marking and
 priority, never in action-level branching.
 
 A convenience template, not the framework: compose your own nets from the
-stock building blocks with :meth:`~adk_libpetri._spec.NetSpec.compose`.
+stock building blocks with :meth:`~adk_libpetri.NetSpec.compose`.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ class Config:
     name: str
     model: str
     system_instruction: str | None = None
-    tools: Mapping[str, BaseTool] = field(default_factory=dict)
+    tools: Mapping[str, BaseTool] = field(default_factory=dict[str, BaseTool])
     reask_budget: int = 3
     fallback_content: types.Content = field(
         default_factory=lambda: DEFAULT_FALLBACK.model_copy(deep=True)
@@ -346,3 +346,22 @@ def action_bindings(llm: BaseLlm, config: Config) -> dict[str, Action]:
             own_actions(config),
         ),
     )
+
+
+__all__ = [
+    "ANSWER",
+    "CONVERSATION",
+    "DEF",
+    "DEFAULT_FALLBACK",
+    "HANDOFF",
+    "NAME",
+    "REASK_BUDGET",
+    "TURN_ACTIVE",
+    "TURN_INPUT",
+    "Config",
+    "Conversation",
+    "Transitions",
+    "action_bindings",
+    "build_composed_def",
+    "own_actions",
+]

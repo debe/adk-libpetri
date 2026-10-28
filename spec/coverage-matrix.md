@@ -39,6 +39,7 @@ Requirement -> the tests that cover it in each port. Paths are relative to
 | NET-012 | (Python only) | `net/test_cli.py` |
 | NET-013 | (Python only) | `net/test_schema.py`, `net/test_authoring.py` |
 | NET-014 | (Python only) | `demos/patterns/yaml/*` |
+| NET-015 | (Python only) | `net/test_blueprint_parse.py`, `net/test_schema.py` |
 
 ## Demos and foils
 

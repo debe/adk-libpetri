@@ -31,7 +31,7 @@ class Transitions:
 class Config:
     model: str
     system_instruction: str | None = None
-    tools: Mapping[str, BaseTool] = field(default_factory=dict)
+    tools: Mapping[str, BaseTool] = field(default_factory=dict[str, BaseTool])
 
 
 DEF = NetSpec(
@@ -50,3 +50,12 @@ def action_bindings(config: Config) -> dict[str, Action]:
         )
 
     return bind(DEF, {Transitions.BUILD_PROMPT: build_prompt})
+
+
+__all__ = [
+    "DEF",
+    "NAME",
+    "Config",
+    "Transitions",
+    "action_bindings",
+]

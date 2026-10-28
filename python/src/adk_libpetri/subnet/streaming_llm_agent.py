@@ -40,7 +40,7 @@ class Config:
     name: str
     model: str
     system_instruction: str | None = None
-    tools: Mapping[str, BaseTool] = field(default_factory=dict)
+    tools: Mapping[str, BaseTool] = field(default_factory=dict[str, BaseTool])
     reask_budget: int = 3
     fallback_content: types.Content = field(
         default_factory=lambda: llm_agent.DEFAULT_FALLBACK.model_copy(deep=True)

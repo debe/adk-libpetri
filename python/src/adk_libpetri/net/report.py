@@ -4,7 +4,10 @@ What ``adk-libpetri check``/``verify`` print, the ``adk-libpetri web`` routes
 return and the Petri builder assistant's tools hand the model all come from
 here: :func:`load_net` builds the node the way ``adk web`` does,
 :func:`check_file` and :func:`verify_file` turn the outcome into plain
-dataclasses (``to_dict()`` for JSON).
+dataclasses (``to_dict()`` for JSON, tagged ``"format":`` :data:`JSON_FORMAT`).
+Both also take a compiled workflow's YAML
+(``agent_class: adk_libpetri.workflow.PetriWorkflow``): ``check`` compiles it,
+``verify`` runs :func:`~adk_libpetri.workflow.verify_workflow`.
 """
 
 from __future__ import annotations
@@ -18,6 +21,9 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
 from .._experimental import experimental
+
+JSON_FORMAT = 1
+"""The ``"format"`` of every ``to_dict()`` payload; bumped when a key changes meaning."""
 
 
 class LoadError(Exception):
@@ -135,6 +141,28 @@ def load_net(path: str) -> Any:
     return node
 
 
+def load_net_node(path: str) -> Any:
+    """Build the ``PetriNet`` or ``PetriWorkflow`` in ``path``, or raise :class:`LoadError`."""
+    from ..workflow.agent import PetriWorkflow
+    from .node import PetriNet
+
+    node = load_node(path)
+    if not isinstance(node, PetriNet | PetriWorkflow):
+        raise LoadError(
+            f"{path}: defines a {type(node).__name__}, not a PetriNet or a PetriWorkflow. "
+            "Fix: write agent_class: adk_libpetri.net.PetriNet",
+            key_path="agent_class",
+            hint="write agent_class: adk_libpetri.net.PetriNet",
+        )
+    return node
+
+
+def _is_net(node: Any) -> bool:
+    from .node import PetriNet
+
+    return isinstance(node, PetriNet)
+
+
 def children(node: Any) -> list[Any]:
     """The child ``PetriNet``s ``node`` mounts with ``subnets: {x: {net: name}}``, once each."""
     from .node import PetriNet
@@ -156,7 +184,7 @@ def children(node: Any) -> list[Any]:
 def nets_of(node: Any, *, recursive: bool) -> list[Any]:
     """``node``, then (``recursive``) every child it mounts, breadth first, once each."""
     nets = [node]
-    if recursive:
+    if recursive and _is_net(node):
         i = 0
         while i < len(nets):
             nets.extend(c for c in children(nets[i]) if all(c is not n for n in nets))
@@ -177,15 +205,24 @@ class NetSummary:
     transitions: int
     subnets: int
     claims: int
+    kind: Literal["PetriNet", "PetriWorkflow"] = "PetriNet"
 
     def line(self) -> str:
         return (
-            f"PetriNet {self.name!r}: {self.places} places, {self.transitions} "
+            f"{self.kind} {self.name!r}: {self.places} places, {self.transitions} "
             f"transitions, {self.subnets} subnets, {self.claims} claims"
         )
 
 
 def summary(node: Any) -> NetSummary:
+    """The size of a ``PetriNet`` (its ``prove:`` claims) or a ``PetriWorkflow``
+    (the claims :func:`~adk_libpetri.workflow.verify_workflow` checks)."""
+    if not _is_net(node):
+        from ..workflow.proofs import claim_count
+
+        spec = node.compiled.spec
+        n = claim_count(node.compiled)
+        return NetSummary(node.name, len(spec.places), len(spec.transitions), 0, n, "PetriWorkflow")
     bp = node.blueprint
     return NetSummary(
         node.name,
@@ -211,14 +248,14 @@ class CheckReport:
     warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {"format": JSON_FORMAT, **asdict(self)}
 
 
 @experimental
 def check_file(path: str) -> CheckReport:
-    """Load ``path`` and build its net (no Z3)."""
+    """Load ``path`` and build its net, or compile its workflow (no Z3)."""
     try:
-        node = load_net(path)
+        node = load_net_node(path)
     except LoadError as err:
         return CheckReport(path, False, error=str(err), key_path=err.key_path, hint=err.hint)
     return CheckReport(path, True, net=summary(node), warnings=tuple(_warnings(node)))
@@ -233,6 +270,8 @@ def _libpetri_version() -> tuple[int, ...]:
 def _warnings(node: Any) -> list[str]:
     from .node import timeout_places
 
+    if not _is_net(node):
+        return []
     timed = sorted(timeout_places(node.blueprint.spec))
     if timed and _libpetri_version() <= (7, 3, 0):
         return [
@@ -306,7 +345,7 @@ class VerifyReport:
         d = asdict(replace(self, graphs={}))
         del d["graphs"]
         d.update(ok=self.ok, proven=self.proven, violated=self.violated, unknown=self.unknown)
-        return d
+        return {"format": JSON_FORMAT, **d}
 
 
 def _claim(net: str, proof: Any, claim: Any = None) -> ClaimResult:
@@ -336,25 +375,28 @@ def _claim(net: str, proof: Any, claim: Any = None) -> ClaimResult:
 
 
 def verify_net(node: Any, k: int | None = None) -> list[ClaimResult]:
-    """Every ``prove:`` claim of one loaded net."""
+    """Every ``prove:`` claim of one loaded net, or every claim of a ``PetriWorkflow``."""
+    if not _is_net(node):
+        return [_claim(node.name, p) for p in node.verify(k)]
     claims = node.blueprint.proof.claims
     return [_claim(node.name, p, c) for p, c in zip(node.verify(k), claims, strict=True)]
 
 
 @experimental
 def verify_file(path: str, k: int | None = None, *, recursive: bool = False) -> VerifyReport:
-    """Run the ``prove:`` claims of ``path`` (and, ``recursive``, of each mounted child)."""
+    """Run the ``prove:`` claims of ``path`` (and, ``recursive``, of each mounted child),
+    or a ``PetriWorkflow``'s claims."""
     import libpetri as lp
 
     try:
-        node = load_net(path)
+        node = load_net_node(path)
     except LoadError as err:
         return VerifyReport(path, error=str(err), key_path=err.key_path, hint=err.hint)
     nets = nets_of(node, recursive=recursive)
     claims: list[ClaimResult] = []
     empty: list[str] = []
     for net in nets:
-        if not net.blueprint.proof.claims:
+        if not summary(net).claims:
             empty.append(net.name)
         claims.extend(verify_net(net, k))
     return VerifyReport(
@@ -368,6 +410,7 @@ def verify_file(path: str, k: int | None = None, *, recursive: bool = False) -> 
 
 
 __all__ = [
+    "JSON_FORMAT",
     "CheckReport",
     "ClaimResult",
     "LoadError",
@@ -377,6 +420,7 @@ __all__ = [
     "check_file",
     "children",
     "load_net",
+    "load_net_node",
     "load_node",
     "nets_of",
     "summary",

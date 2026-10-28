@@ -471,3 +471,25 @@ def test_a_hint_says_how_to_fix_it() -> None:
         bp(_t({"in": ["a"], "out": {"xor": ["x", "y"]}}))
     assert info.value.hint is not None
     assert "name a node" in info.value.hint
+
+
+def test_blueprint_version_1_is_the_default_and_the_only_version() -> None:
+    from adk_libpetri.net import BLUEPRINT_VERSION
+
+    assert BLUEPRINT_VERSION == 1
+    data = _t({"in": ["a"], "out": "x"})
+    assert bp(data).spec == bp({**data, "blueprint_version": 1}).spec
+    for wrong in (2, 0, "1", True):
+        with pytest.raises(BlueprintError) as info:
+            bp({**data, "blueprint_version": wrong})
+        assert info.value.path == "blueprint_version"
+        assert "reads blueprint_version 1" in str(info.value)
+
+
+def test_a_petri_net_node_reads_its_blueprint_version() -> None:
+    from adk_libpetri.net import PetriNet
+
+    data = _t({"in": ["a"], "out": "x"})
+    assert PetriNet(name="n", **data).blueprint_version == 1
+    with pytest.raises(BlueprintError, match=r"blueprint_version: unsupported"):
+        PetriNet(name="n", blueprint_version=2, **data)

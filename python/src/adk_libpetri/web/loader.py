@@ -55,10 +55,10 @@ def net_nodes(root: Any) -> list[NetNodeBase]:
 def trace(root: Any, traces: MarkingTraces) -> None:
     """Have every net node under ``root`` record into ``traces`` (once, whatever its store)."""
     for node in net_nodes(root):
-        current = node._event_store
+        current = node.event_store
         if current is traces or isinstance(current, _Chained):
             continue
-        node._event_store = traces if current is None else _Chained(traces, current)
+        node.set_event_store(traces if current is None else _Chained(traces, current))
 
 
 class _Chained:

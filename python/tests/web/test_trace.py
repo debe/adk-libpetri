@@ -77,7 +77,7 @@ def test_a_trace_starts_from_the_seeds(monkeypatch: Any) -> None:
     node = load_net(str(SEEDED))
     assert node._initial_counts() == {"warm": 1}
     traces = MarkingTraces()
-    node._event_store = traces
+    node.set_event_store(traces)
     link = node._session_event_store(SessionKey("seeded", "u", "s"))
     link.append(_Ev("TokenAdded", place="userIn"))
     link.append(_Ev("TokenRemoved", place="warm"))

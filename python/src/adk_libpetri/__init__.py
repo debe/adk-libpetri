@@ -7,17 +7,27 @@ agents) with a libpetri net that Z3 can prove properties of. Stock ADK
 
 from __future__ import annotations
 
-from ._aio import HotStream, OrchestratorLoop, on_loop
+from ._aio import HotStream, OrchestratorLoop, await_on, on_loop
 from ._experimental import experimental, is_experimental
 from ._spec import (
+    IMMEDIATE,
     VOID,
+    Action,
+    And,
+    AsyncAction,
     Ctx,
     In,
+    Match,
     NetSpec,
+    OutPlace,
     Place,
     Port,
+    PortDirection,
+    SyncAction,
+    Timeout,
     Timing,
     TransitionSpec,
+    Xor,
     all_tokens,
     and_,
     at_least,
@@ -38,20 +48,31 @@ from ._spec import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "IMMEDIATE",
     "VOID",
+    "Action",
+    "And",
+    "AsyncAction",
     "Ctx",
     "HotStream",
     "In",
+    "Match",
     "NetSpec",
     "OrchestratorLoop",
+    "OutPlace",
     "Place",
     "Port",
+    "PortDirection",
+    "SyncAction",
+    "Timeout",
     "Timing",
     "TransitionSpec",
+    "Xor",
     "__version__",
     "all_tokens",
     "and_",
     "at_least",
+    "await_on",
     "deadline",
     "delayed",
     "exact",

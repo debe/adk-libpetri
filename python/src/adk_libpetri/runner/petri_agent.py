@@ -1,8 +1,12 @@
+# pyright: reportPrivateUsage=false
+# The builder sets the agent's private attributes, and ADK's private
+# InvocationContext._abort_signal is a seam tests/test_adk_seams.py pins.
 """``PetriAgent``: a thin ``BaseAgent`` that runs a libpetri net under stock ADK.
 
 No ADK source changes (commitment 4). On each invocation it:
 
-1. derives a :class:`SessionKey` from ``ctx.session``;
+1. derives a :class:`SessionKey` from ``ctx.session`` (:meth:`PetriAgent.session_key`,
+   under the builder's :meth:`~PetriAgentBuilder.session_scope`);
 2. gets the session's :class:`PetriRunner` from the registry, creating it on
    first call (one net per user, alive across invocations);
 3. subscribes to the runner's egress, stamping every event with the ADK
@@ -46,6 +50,7 @@ from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.run_config import StreamingMode  # pyright: ignore[reportPrivateImportUsage]
 from google.adk.events.event import Event
+from google.adk.sessions.session import Session
 from google.genai import types
 from opentelemetry.trace import Span, Tracer
 from pydantic import PrivateAttr
@@ -102,10 +107,14 @@ class PetriAgent(BaseAgent):
     _tracer: Tracer | None = PrivateAttr(default=None)
     _otel: OtelEventStore | None = PrivateAttr(default=None)
     _live: LiveConfig | None = PrivateAttr(default=None)
-    _input_mapper: Callable[[Any], types.Content | None] = PrivateAttr(default=content_of)
+    # Not default=content_of: pydantic treats a private attribute whose default is
+    # a function as a descriptor, binds it, and never reads the value set on the
+    # instance.
+    _input_mapper: Callable[[Any], types.Content | None] | None = PrivateAttr(default=None)
     _output_mapper: Callable[[Event], Any] | None = PrivateAttr(default=None)
     _route_mapper: Callable[[Event], Any] | None = PrivateAttr(default=None)
-    _spans: dict[SessionKey, Span] = PrivateAttr(default_factory=dict)
+    _spans: dict[SessionKey, Span] = PrivateAttr(default_factory=dict[SessionKey, Span])
+    _scope: str = PrivateAttr(default="")
 
     @staticmethod
     def builder(
@@ -131,8 +140,17 @@ class PetriAgent(BaseAgent):
 
     # -- runner resolution -------------------------------------------------
 
+    def session_scope(self) -> str:
+        """The ``SessionKey.scope`` this agent's runners are kept under (``""`` unless set)."""
+        return self._scope
+
+    def session_key(self, session: Session) -> SessionKey:
+        """The registry key of ``session``'s runner for this agent; close it with
+        ``registry.close(agent.session_key(session))``."""
+        return SessionKey.of(session, scope=self._scope)
+
     def _key(self, ctx: InvocationContext) -> SessionKey:
-        return SessionKey.of(ctx.session)
+        return self.session_key(ctx.session)
 
     async def _runner_for(self, ctx: InvocationContext, key: SessionKey) -> PetriRunner:
         owner = NO_OWNER
@@ -210,7 +228,8 @@ class PetriAgent(BaseAgent):
     async def _run_impl(self, *, ctx: Any, node_input: Any) -> AsyncGenerator[Any, None]:
         """As a ``Workflow`` node: the node's input is this turn's user content."""
         ic = ctx.get_invocation_context()
-        mapped = None if node_input is ic.user_content else self._input_mapper(node_input)
+        mapper = self._input_mapper or content_of
+        mapped = None if node_input is ic.user_content else mapper(node_input)
         token = _node_content.set(mapped)
         try:
             async for event in super()._run_impl(ctx=ctx, node_input=node_input):
@@ -252,9 +271,17 @@ class PetriAgentBuilder:
         self._input_mapper: Callable[[Any], types.Content | None] = content_of
         self._output_mapper: Callable[[Event], Any] | None = None
         self._route_mapper: Callable[[Event], Any] | None = None
+        self._scope = ""
 
     def description(self, description: str) -> PetriAgentBuilder:
         self._description = description
+        return self
+
+    def session_scope(self, scope: str) -> PetriAgentBuilder:
+        """The ``SessionKey.scope`` of this agent's runners. Give each PetriAgent that
+        shares a registry and serves one session (two nodes of one ``Workflow``) a
+        scope of its own, so they do not share a runner. Default ``""``."""
+        self._scope = scope
         return self
 
     def owner_extractor(self, extractor: OwnerExtractor) -> PetriAgentBuilder:
@@ -308,6 +335,7 @@ class PetriAgentBuilder:
         agent._input_mapper = self._input_mapper
         agent._output_mapper = self._output_mapper
         agent._route_mapper = self._route_mapper
+        agent._scope = self._scope
         return agent
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from google.adk.workflow import FunctionNode, Workflow
 
+from adk_libpetri._aio import OrchestratorLoop
 from adk_libpetri.workflow import WorkflowTranslationError, compile_workflow, verify_workflow
 from support.smt_proofs import requires_z3
 
@@ -229,3 +230,40 @@ def test_a_confirmation_predicates_state_parameters_are_state_reads() -> None:
     gate = node(samples.upper, name="gate", require_confirmation=big, rerun_on_resume=True)
     with pytest.raises(WorkflowTranslationError, match="require_confirmation parameter limit"):
         compile_workflow(Workflow(name="pred", edges=[("START", gate)]))
+
+
+def test_a_workflow_proof_has_the_net_proofs_surface() -> None:
+    """``WorkflowProof`` reads as ``NetProof`` does: proven, violated, scope, notes."""
+    from adk_libpetri.net import NetProof
+
+    proofs = verify_workflow(compile_workflow(samples.linear()))
+    for name in ("label", "result", "kind", "scope", "notes", "proven", "violated"):
+        assert hasattr(proofs[0], name), name
+        assert name in NetProof.__dataclass_fields__ or hasattr(NetProof, name), name
+    by_kind = {p.kind: p for p in proofs}
+    assert by_kind["safety"].scope == "userIn: at most 1 arrival(s)"
+    assert by_kind["deadlock"].scope == "userIn: exactly 1 arrival(s)"
+    assert by_kind["safety"].notes == ()
+
+
+def test_the_match_free_over_approximation_is_a_note() -> None:
+    proofs = verify_workflow(compile_workflow(samples.hitl(), interruptible=["ask"]), k=2)
+    assert proofs
+    assert all(p.notes for p in proofs)
+    assert {p.scope for p in proofs} == {"userIn: at most 2 arrival(s)"}
+
+
+def test_k_none_is_one_user_input_and_k_must_be_positive() -> None:
+    cw = compile_workflow(samples.linear())
+    assert [p.scope for p in verify_workflow(cw)] == [p.scope for p in verify_workflow(cw, k=1)]
+    with pytest.raises(ValueError, match="at least 1"):
+        verify_workflow(cw, k=0)
+
+
+def test_petri_workflow_verify_runs_verify_workflow(orchestrator: OrchestratorLoop) -> None:
+    from adk_libpetri.workflow import PetriWorkflow
+
+    node = PetriWorkflow.from_workflow(samples.linear(), orchestrator=orchestrator)
+    assert [(p.label, p.result.verdict) for p in node.verify()] == [
+        (p.label, p.result.verdict) for p in verify_workflow(node.compiled)
+    ]

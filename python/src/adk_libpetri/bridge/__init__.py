@@ -3,6 +3,7 @@
 from .event_store_bridge import EventStoreToStreamBridge
 from .marking_trace import MarkingTraces, TraceStep
 from .otel_event_store import SUBNET_ATTRIBUTE, TRANSITION_ATTRIBUTE, OtelEventStore
+from .per_session import NodeEventStore, PerSessionEventStore
 from .transition_failure import Kind, TransitionFailure
 
 __all__ = [
@@ -11,7 +12,9 @@ __all__ = [
     "EventStoreToStreamBridge",
     "Kind",
     "MarkingTraces",
+    "NodeEventStore",
     "OtelEventStore",
+    "PerSessionEventStore",
     "TraceStep",
     "TransitionFailure",
 ]

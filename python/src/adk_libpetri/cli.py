@@ -9,6 +9,12 @@
     adk-libpetri web agents/                                # ADK's dev UI, Petri-aware
     adk-libpetri guide                                      # print AUTHORING.md
     adk-libpetri schema                                     # print the JSON Schema
+    adk-libpetri --version                                  # this, google-adk, libpetri
+
+``check`` and ``verify`` also take a compiled workflow's YAML
+(``agent_class: adk_libpetri.workflow.PetriWorkflow``): ``check`` compiles it,
+``verify`` runs :func:`~adk_libpetri.workflow.verify_workflow` (``--k`` user
+inputs, one by default). Every ``--json`` payload carries ``"format": 1``.
 
 A file is loaded the way ``adk web`` and ``adk run`` load it: the directory
 above the file's own directory goes on ``sys.path`` (``adk web`` runs from the
@@ -70,13 +76,14 @@ def _counterexample(claim: ClaimResult) -> str:
     return "\n".join(lines)
 
 
-def _verify_one(node: Any, k: int | None, out: TextIO) -> tuple[int, int, int]:
+def _verify_one(node: Any, k: int | None, out: TextIO, path: str) -> tuple[int, int, int]:
     """Print every claim's verdict; ``(proven, violated, unknown)``."""
-    from .net.report import verify_net
+    from .net.report import summary, verify_net
 
-    source = node.blueprint.source or "<python>"
+    blueprint = getattr(node, "blueprint", None)
+    source = (blueprint.source if blueprint is not None else path) or "<python>"
     print(f"verify {node.name} ({source})", file=out)
-    if not node.blueprint.proof.claims:
+    if not summary(node).claims:
         print("  no claims under prove:", file=out)
         return 0, 0, 0
     proven = violated = unknown = 0
@@ -101,20 +108,20 @@ def _verify_one(node: Any, k: int | None, out: TextIO) -> tuple[int, int, int]:
 def _verify(
     path: str, k: int | None, recursive: bool, out: TextIO, *, as_json: bool = False
 ) -> int:
-    from .net.report import LoadError, load_net, nets_of, verify_file
+    from .net.report import LoadError, load_net_node, nets_of, verify_file
 
     if as_json:
         report = verify_file(path, k, recursive=recursive)
         _dump(report.to_dict(), out)
         return _EXIT_OK if report.ok else _EXIT_FAIL
     try:
-        node = load_net(path)
+        node = load_net_node(path)
     except LoadError as err:
         print(f"ERROR {err}", file=out)
         return _EXIT_FAIL
     totals = [0, 0, 0]
     for net in nets_of(node, recursive=recursive):
-        for j, n in enumerate(_verify_one(net, k, out)):
+        for j, n in enumerate(_verify_one(net, k, out, path)):
             totals[j] += n
     proven, violated, unknown = totals
     print(f"{proven} proven, {violated} violated, {unknown} unknown", file=out)
@@ -142,6 +149,21 @@ def _web(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def versions() -> dict[str, str]:
+    """adk-libpetri's version and the google-adk and libpetri it runs with."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    from . import __version__
+
+    found = {"adk-libpetri": __version__}
+    for dist in ("google-adk", "libpetri"):
+        try:
+            found[dist] = version(dist)
+        except PackageNotFoundError:
+            found[dist] = "not installed"
+    return found
+
+
 def _packaged(name: str) -> str:
     return resources.files("adk_libpetri.net").joinpath(name).read_text(encoding="utf-8")
 
@@ -157,13 +179,22 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="adk-libpetri",
         description="Check and verify Petri-net blueprints "
-        "(agent_class: adk_libpetri.net.PetriNet).",
+        "(agent_class: adk_libpetri.net.PetriNet) and compiled workflows "
+        "(agent_class: adk_libpetri.workflow.PetriWorkflow).",
     )
-    sub = p.add_subparsers(dest="command", required=True)
+    p.add_argument(
+        "--version",
+        action="store_true",
+        help="print the versions of adk-libpetri, google-adk and libpetri",
+    )
+    sub = p.add_subparsers(dest="command")
     c = sub.add_parser("check", help="load the YAML through ADK's loader and build the net (no Z3)")
     c.add_argument("file")
     c.add_argument("--json", action="store_true", help="print the result as JSON")
-    v = sub.add_parser("verify", help="run the prove: claims; exit 1 on violated or unknown")
+    v = sub.add_parser(
+        "verify",
+        help="run the prove: claims (a PetriWorkflow's own claims); exit 1 on violated or unknown",
+    )
     v.add_argument("file")
     v.add_argument("--json", action="store_true", help="print the verdicts as JSON")
     v.add_argument(
@@ -193,8 +224,15 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int:
     """Run the CLI; returns the exit code (the console script exits with it)."""
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
     stream = out if out is not None else sys.stdout
+    if args.version:
+        for dist, v in versions().items():
+            print(f"{dist} {v}", file=stream)
+        return _EXIT_OK
+    if args.command is None:
+        parser.error("a command is required")
     match args.command:
         case "check":
             return _check(args.file, stream, as_json=args.json)

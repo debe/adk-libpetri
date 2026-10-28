@@ -1,7 +1,7 @@
 """Per-session handle around a long-lived libpetri executor.
 
 One ``PetriRunner`` = one session's net = one executor on the caller's
-:class:`~adk_libpetri._aio.OrchestratorLoop`. Built once at session start,
+:class:`~adk_libpetri.OrchestratorLoop`. Built once at session start,
 kept alive across many user messages, closed when the session ends.
 
 **Interaction model** (commitment 1). Two surfaces, deliberately asymmetric:
@@ -336,7 +336,7 @@ class Builder:
         self._actions = actions
         self._places = {p.name for p in net.places}
         self._env: dict[str, None] = {}
-        self._event_store: Any = None
+        self._event_store: lp.EventStoreProtocol | None = None
         self._loop: OrchestratorLoop | None = None
         self._initial: dict[str, list[Any]] = {}
         self._restore: Checkpoint | None = None
@@ -360,7 +360,7 @@ class Builder:
             self.environment_place(p)
         return self
 
-    def event_store(self, store: Any) -> Builder:
+    def event_store(self, store: lp.EventStoreProtocol | None) -> Builder:
         """The observability chain inside the runner (OTel, logging, in-memory).
 
         The runner always wraps it with the ``EVENT_OUT`` egress bridge.
@@ -532,3 +532,7 @@ class Builder:
         assert self._loop is not None
         handle, done = await self._loop.run(self._start_on_loop(seed, options, bridge))
         return self._finish(handle, done, bridge, env)
+
+
+PetriRunnerBuilder = Builder
+"""``PetriRunner.builder(...)``'s type, under a name that says whose builder it is."""

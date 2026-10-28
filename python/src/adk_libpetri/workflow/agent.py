@@ -48,11 +48,13 @@ from typing import Any
 
 from google.adk.workflow import START, BaseNode, Workflow
 from google.adk.workflow._graph import EdgeItem
+from libpetri import EventStoreProtocol
 from pydantic import Field, PrivateAttr
 
 from .._aio import OrchestratorLoop
 from .._experimental import experimental
 from .._net_node import NetNodeBase
+from ..bridge import NodeEventStore
 from ..runner.petri_runner import Builder, PetriRunner
 from ..runner.session_registry import SessionExecutorRegistry
 from .compiler import (
@@ -64,6 +66,7 @@ from .compiler import (
     TurnScope,
     compile_workflow,
 )
+from .proofs import WorkflowProof, verify_workflow
 from .report import NotInterruptibleError
 from .tokens import Resumed
 
@@ -94,7 +97,7 @@ class PetriWorkflow(NetNodeBase):
         *,
         orchestrator: OrchestratorLoop,
         registry: SessionExecutorRegistry | None = None,
-        event_store: Any = None,
+        event_store: NodeEventStore | None = None,
         interruptible: Iterable[str] = (),
         back_edge_budget: Mapping[tuple[str, str], int] | None = None,
         multi_route: MultiRoute = "reject",
@@ -119,8 +122,9 @@ class PetriWorkflow(NetNodeBase):
         *,
         orchestrator: OrchestratorLoop,
         registry: SessionExecutorRegistry | None = None,
-        event_store: Any = None,
+        event_store: NodeEventStore | None = None,
     ) -> PetriWorkflow:
+        """Wrap a compiled workflow and serve it (see :meth:`serve_on`)."""
         wf = compiled.workflow
         # The schemas let it serve where the Workflow would: as an agent's
         # tool (NodeTool needs input_schema), or under a parent's validation.
@@ -132,8 +136,7 @@ class PetriWorkflow(NetNodeBase):
         )
         node._compiled = compiled
         node.graph = _graph(compiled)
-        node._serve_on(orchestrator, registry, event_store)
-        return node
+        return node.serve_on(orchestrator, registry, event_store)
 
     def _net_spec(self) -> Any:
         compiled = getattr(self, "_compiled", None)
@@ -167,8 +170,8 @@ class PetriWorkflow(NetNodeBase):
             multi_route=self.multi_route,
             state=self.state,
         )
+        # Served on the shared loop, taken on first use (``orchestrator``).
         self.graph = _graph(self._compiled)
-        self._serve_on(OrchestratorLoop.shared())
 
     @classmethod
     def from_config(
@@ -177,7 +180,7 @@ class PetriWorkflow(NetNodeBase):
         *,
         orchestrator: OrchestratorLoop | None = None,
         registry: SessionExecutorRegistry | None = None,
-        event_store: Any = None,
+        event_store: NodeEventStore | None = None,
         **compile_options: Any,
     ) -> PetriWorkflow:
         """Load an ADK YAML agent config and serve it compiled.
@@ -189,12 +192,10 @@ class PetriWorkflow(NetNodeBase):
         from google.adk.agents.config_agent_utils import from_config
 
         node = from_config(config_path)
-        loop = orchestrator or OrchestratorLoop.shared()
         if isinstance(node, PetriWorkflow):
             if compile_options:
                 raise TypeError("a PetriWorkflow YAML sets its compile options itself")
-            node._serve_on(loop, registry if registry is not None else node.registry, event_store)
-            return node
+            return node.serve_on(orchestrator, registry, event_store)
         if not isinstance(node, Workflow):
             raise TypeError(
                 f"{config_path} defines a {type(node).__name__}, not a Workflow; "
@@ -202,7 +203,7 @@ class PetriWorkflow(NetNodeBase):
             )
         return cls.from_workflow(
             node,
-            orchestrator=loop,
+            orchestrator=orchestrator or OrchestratorLoop.shared(),
             registry=registry,
             event_store=event_store,
             **compile_options,
@@ -212,7 +213,14 @@ class PetriWorkflow(NetNodeBase):
     def compiled(self) -> CompiledWorkflow:
         return self._compiled
 
-    def _runner_builder(self, scope: TurnScope, event_store: Any) -> Builder:
+    def verify(self, k: int | None = None, **verify_options: Any) -> list[WorkflowProof]:
+        """:func:`~adk_libpetri.workflow.verify_workflow` on the compiled net.
+
+        ``k`` is the number of user inputs the proofs assume; ``None`` is one.
+        """
+        return verify_workflow(self._compiled, k, **verify_options)
+
+    def _runner_builder(self, scope: TurnScope, event_store: EventStoreProtocol | None) -> Builder:
         compiled = self._compiled
         builder = (
             PetriRunner.builder(compiled.spec, compiled.actions(scope))

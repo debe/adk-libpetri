@@ -320,7 +320,7 @@ def test_close_from_its_own_thread_stops_the_loop() -> None:
     assert o.loop.is_closed()
 
 
-def test_shared_is_opt_in_and_recreated_after_close() -> None:
+def test_shared_is_created_on_first_use_and_recreated_after_close() -> None:
     OrchestratorLoop.close_shared()
     try:
         a = OrchestratorLoop.shared()
@@ -332,3 +332,28 @@ def test_shared_is_opt_in_and_recreated_after_close() -> None:
     finally:
         OrchestratorLoop.close_shared()
     OrchestratorLoop.close_shared()  # no-op when none exists
+
+
+def test_an_orchestrator_loop_is_a_context_manager_that_closes() -> None:
+    with OrchestratorLoop("test-with") as o:
+        assert not o.closed
+        assert o.call(asyncio.sleep(0, "ran")) == "ran"
+    assert o.closed and o.loop.is_closed()
+
+
+def test_the_shared_loop_is_closed_at_exit_registered_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import atexit
+
+    registered: list[Any] = []
+    monkeypatch.setattr(atexit, "register", registered.append)
+    monkeypatch.setattr(OrchestratorLoop, "_close_at_exit", False)
+    OrchestratorLoop.close_shared()
+    try:
+        OrchestratorLoop.shared()
+        OrchestratorLoop.close_shared()
+        OrchestratorLoop.shared()
+    finally:
+        OrchestratorLoop.close_shared()
+    assert registered == [OrchestratorLoop.close_shared]

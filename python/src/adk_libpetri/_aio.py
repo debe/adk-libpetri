@@ -17,11 +17,13 @@ Three facts drive this module (spikes S1/S2, ADR 0006):
 from __future__ import annotations
 
 import asyncio
+import atexit
 import concurrent.futures as cf
 import contextlib
 import threading
 from collections.abc import AsyncIterator, Awaitable, Coroutine
-from typing import Any, Generic, TypeVar
+from types import TracebackType
+from typing import Any, Generic, Self, TypeVar
 
 import libpetri as lp
 from libpetri import _libpetri
@@ -67,12 +69,18 @@ class OrchestratorLoop:
 
     Every :class:`~adk_libpetri.runner.PetriRunner` starts its executor here.
     The caller owns it: create one per process (libpetri allows one captured
-    loop at a time) and :meth:`close` it at shutdown. There is no library
-    singleton; :meth:`shared` is a convenience the caller opts into.
+    loop at a time) and :meth:`close` it at shutdown, or use it as a context
+    manager (``with OrchestratorLoop() as loop:``).
+
+    :meth:`shared` is a process-wide loop for what has no caller to own one: a
+    ``PetriNet`` or ``PetriWorkflow`` that ADK's YAML loader builds serves on
+    it unless given another (``serve_on``). It is closed at interpreter exit,
+    or earlier with :meth:`close_shared`.
     """
 
     _shared: OrchestratorLoop | None = None
     _shared_lock = threading.Lock()
+    _close_at_exit = False
 
     def __init__(self, name: str = "adk-libpetri-orchestrator") -> None:
         self.loop = asyncio.new_event_loop()
@@ -83,12 +91,27 @@ class OrchestratorLoop:
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
     @classmethod
     def shared(cls) -> OrchestratorLoop:
-        """A process-wide loop, created on first use. Opt-in; close with :meth:`close_shared`."""
+        """A process-wide loop, created on first use and closed at interpreter exit
+        (or by :meth:`close_shared`)."""
         with cls._shared_lock:
             if cls._shared is None or cls._shared.closed:
                 cls._shared = cls()
+                if not OrchestratorLoop._close_at_exit:
+                    OrchestratorLoop._close_at_exit = True
+                    atexit.register(OrchestratorLoop.close_shared)
             return cls._shared
 
     @classmethod

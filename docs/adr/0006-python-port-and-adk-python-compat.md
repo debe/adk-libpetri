@@ -187,8 +187,13 @@ compiled) and must be re-read in `workflow/_workflow.py` and `_graph.py`:
 
 ## Consequences
 
-- One process-wide orchestrator loop is the caller's to create and close; the
-  library ships no singleton (`OrchestratorLoop.shared()` is opt-in).
+- One process-wide orchestrator loop is the caller's to create and close
+  (`close()`, or `with OrchestratorLoop() as loop:`). `OrchestratorLoop.shared()`
+  is the exception, for nodes that have no caller to own a loop: a
+  `PetriNet` or `PetriWorkflow` built by ADK's YAML loader (`adk web`,
+  `adk run`) serves on it, taken on its first turn, unless `serve_on` gives
+  it another. It is created on first use and closed at interpreter exit
+  (`atexit`), or earlier by `close_shared()`.
 - Typed places are checked by name *and* type when composing `NetSpec`s,
   which libpetri-py does not do; token types at runtime are checked only with
   `ADK_LIBPETRI_CHECK_TOKENS=1`.

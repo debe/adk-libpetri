@@ -70,6 +70,7 @@ from google.adk.events.event import Event
 from google.adk.workflow import BaseNode
 from google.adk.workflow._graph import EdgeItem
 from google.genai import types
+from libpetri import EventStoreProtocol
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from .. import colours as C
@@ -77,7 +78,7 @@ from .._aio import HotStream, OrchestratorLoop
 from .._experimental import experimental
 from .._net_node import SCOPE_ATTACHMENT, NetNodeBase
 from .._spec import And, NetSpec, Out, Timeout, Xor, _out_places
-from ..bridge import TransitionFailure
+from ..bridge import NodeEventStore, TransitionFailure
 from ..bridge.event_store_bridge import tokens_for
 from ..runner.petri_runner import Builder, PetriRunner
 from ..runner.session_registry import SessionExecutorRegistry
@@ -264,7 +265,7 @@ class _EgressTap:
 
     def __init__(
         self,
-        delegate: Any,
+        delegate: EventStoreProtocol | None,
         scope: NetScope | None = None,
         timeouts: Mapping[str, frozenset[str]] | None = None,
         release: str | None = None,
@@ -332,7 +333,9 @@ class _EgressTap:
             self._delegate.append(event)
 
     def events(self, **filters: Any) -> list[Any]:
-        return self._delegate.events(**filters) if self._delegate is not None else []
+        events: Any = getattr(self._delegate, "events", None)
+        found: list[Any] = events(**filters) if events is not None else []
+        return found
 
 
 _NOTHING: Any = object()
@@ -458,6 +461,8 @@ class PetriNet(NetNodeBase):
     rerun_on_resume: bool = True
     """ADK runs a node's children dynamically only under a node that reruns on resume."""
 
+    blueprint_version: int = 1
+    """The format version (:data:`~adk_libpetri.net.BLUEPRINT_VERSION`); another is a load error."""
     nodes: list[EdgeItem] = Field(default_factory=list, exclude=True)
     """ADK nodes the transitions (``node:``) and subnets (``net:``, ``from:``)
     name. Typed as a ``Workflow``'s edges so ADK's loader resolves each entry
@@ -485,6 +490,7 @@ class PetriNet(NetNodeBase):
         nodes = _named_nodes(self.nodes, source)
         self._resolved = tuple(nodes.values())
         data: dict[str, Any] = {
+            "blueprint_version": self.blueprint_version,
             "places": self.places,
             "transitions": self.transitions,
             "env": self.env,
@@ -517,9 +523,9 @@ class PetriNet(NetNodeBase):
         *,
         orchestrator: OrchestratorLoop | None = None,
         registry: SessionExecutorRegistry | None = None,
-        event_store: Any = None,
+        event_store: NodeEventStore | None = None,
     ) -> PetriNet:
-        """Load a blueprint YAML through ADK's loader and serve it on ``orchestrator``."""
+        """Load a blueprint YAML through ADK's loader and serve it (see :meth:`serve_on`)."""
         from google.adk.agents.config_agent_utils import from_config
 
         node = from_config(config_path)
@@ -528,34 +534,23 @@ class PetriNet(NetNodeBase):
                 f"{config_path} defines a {type(node).__name__}, not a PetriNet "
                 "(agent_class: adk_libpetri.net.PetriNet)"
             )
-        if orchestrator is not None:
-            node._orchestrator = orchestrator
-        if registry is not None:
-            node._registry = registry
-        node._event_store = event_store
-        return node
-
-    def serve_on(
-        self,
-        orchestrator: OrchestratorLoop,
-        *,
-        registry: SessionExecutorRegistry | None = None,
-        event_store: Any = None,
-    ) -> PetriNet:
-        """Serve sessions on ``orchestrator`` (ADK's loader leaves the shared loop)."""
-        self._serve_on(orchestrator, registry, event_store)
-        return self
+        return node.serve_on(orchestrator, registry, event_store)
 
     @property
     def blueprint(self) -> Blueprint:
         return self._blueprint
 
     @property
-    def spec(self) -> Any:
+    def spec(self) -> NetSpec:
         return self._blueprint.spec
 
     def verify(self, k: int | None = None, **verify_options: Any) -> list[NetProof]:
-        """Check the ``prove:`` claims, one ``libpetri.verify`` each."""
+        """Check the ``prove:`` claims, one ``libpetri.verify`` each.
+
+        ``k`` replaces the number of turns and every ``arrivals`` bound; ``None``
+        keeps the claims' own (one turn for a safety claim, two for
+        ``deadlock_free``).
+        """
         return verify_blueprint(self._blueprint, k, **verify_options)
 
     # -- serving -------------------------------------------------------------
@@ -589,7 +584,7 @@ class PetriNet(NetNodeBase):
             return runner.signal(place)
         return runner.inject(place, value)
 
-    def _net_spec(self) -> Any:
+    def _net_spec(self) -> NetSpec:
         return self._blueprint.spec
 
     def _static_nodes(self) -> tuple[BaseNode, ...]:
@@ -617,7 +612,7 @@ class PetriNet(NetNodeBase):
         scope.settle = runner.snapshot
         return runner
 
-    def _runner_builder(self, scope: TurnScope, event_store: Any) -> Builder:
+    def _runner_builder(self, scope: TurnScope, event_store: EventStoreProtocol | None) -> Builder:
         assert isinstance(scope, NetScope)
         bp = self._blueprint
         tap = _EgressTap(event_store, scope, timeout_places(bp.spec), bp.release)

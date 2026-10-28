@@ -68,12 +68,19 @@ prove:
 ```
 
 The top-level keys are `nodes`, `places`, `transitions`, `env`, `ports`,
-`subnets` and `prove`, plus any `BaseNode` field (`name`, `description`,
+`subnets`, `turn`, `prove` and `blueprint_version`, plus any `BaseNode` field (`name`, `description`,
 `input_schema`, ...). Any other key is a load error with a did-you-mean
 hint. No key is named `args`, at any depth (ADK's web UI blocks the
 file): a place, transition, port, subnet or route label named `args` is a
 load error.
 
+- **Version.** `blueprint_version: 1` is optional and 1 is the only
+  version. A later release that changes what a key means bumps it and
+  reads both; this one rejects any other value with a `BlueprintError`
+  naming the version it reads, so a file written for a newer format fails
+  at load, not at run time. The JSON Schema's `$id` is the `main` branch's
+  raw copy; `adk-libpetri schema` prints the one that matches the installed
+  release.
 - **Places.** `name: {type: T, seed: S}`. `T` is an alias (`str`, `int`,
   `Content`, `Event`, `NodeError`, ...), a dotted name resolved by ADK's
   `resolve_fully_qualified_name`, or `.module.Name` relative to the YAML's

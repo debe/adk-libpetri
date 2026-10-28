@@ -79,5 +79,6 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 include = ["src"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
+strict = ["src/adk_libpetri/runner", "src/adk_libpetri/subnet", "src/adk_libpetri/_spec.py"]
 venvPath = "."
 venv = ".venv"

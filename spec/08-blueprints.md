@@ -70,10 +70,16 @@ config; ADK's loader builds it and the node serves it under the stock
 - **NET-012** The CLI: `adk-libpetri check FILE` validates and builds a
   blueprint without Z3; `adk-libpetri verify FILE [--k N] [--recursive]`
   prints each claim's verdict, exits nonzero on a violated claim, and with
-  `--recursive` also checks each mounted child's own `prove:`.
+  `--recursive` also checks each mounted child's own `prove:`. Both take a
+  `PetriWorkflow` YAML too (`check` compiles it, `verify` runs
+  `verify_workflow`). Every `--json` payload carries `"format": 1`;
+  `--version` prints the adk-libpetri, google-adk and libpetri versions.
 - **NET-013** `adk_libpetri/net/schema.json` is a JSON Schema for the format,
   and every sample blueprint validates against it. `AUTHORING.md` is
   packaged with the library.
 - **NET-014** The YAML twins of Patterns A, B and C have their Python nets'
   fingerprints, the same runtime behaviour (winner, latency bound, discards)
   and the same proofs, stated in `prove:`.
+- **NET-015** `blueprint_version` is optional and defaults to 1, the only
+  format version; any other value is a `BlueprintError` at load naming the
+  supported version.

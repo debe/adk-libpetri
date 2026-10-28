@@ -331,3 +331,37 @@ async def test_petri_agent_as_a_workflow_node_hands_its_final_text_to_the_next_n
     assert llm.requests
     last = llm.requests[-1].contents[-1]
     assert last.parts is not None and last.parts[0].text == "hi"
+
+
+async def test_two_petri_agents_on_one_registry_keep_their_runners_apart_by_scope(
+    orch, registries
+) -> None:
+    registry = registries(SessionExecutorRegistry.strong_owned())
+    first = (
+        PetriAgent.builder(
+            "first", registry, petri_runner_factory(orch, ScriptedLlm.of(text("one")), "first")
+        )
+        .session_scope("first")
+        .build()
+    )
+    second = (
+        PetriAgent.builder(
+            "second", registry, petri_runner_factory(orch, ScriptedLlm.of(text("two")), "second")
+        )
+        .session_scope("second")
+        .build()
+    )
+    workflow = Workflow(name="wf", edges=[("START", first, second)])
+    adk = InMemoryRunner(node=workflow, app_name="wf_app")
+    session = await new_session(adk, "u", "scoped")
+
+    events = await run_turn(adk, session.user_id, session.id, "hi")
+
+    assert last_agent_text(events, "first") == "one"
+    assert last_agent_text(events, "second") == "two"
+    assert registry.size() == 2
+    assert first.session_scope() == "first"
+    key = first.session_key(session)
+    assert key == SessionKey("wf_app", "u", "scoped", "first")
+    assert registry.get(key) is not None
+    assert registry.get(second.session_key(session)) is not registry.get(key)

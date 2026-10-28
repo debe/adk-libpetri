@@ -1,6 +1,6 @@
 """Structural and SMT invariants for adk-libpetri nets (Java ``AdkNetInvariants``).
 
-Structural checks (no Z3) walk a :class:`~adk_libpetri._spec.NetSpec` and
+Structural checks (no Z3) walk a :class:`~adk_libpetri.NetSpec` and
 return a list of :class:`Violation` (empty: the invariant holds). They catch
 the three bug classes the design names as structurally absent:
 

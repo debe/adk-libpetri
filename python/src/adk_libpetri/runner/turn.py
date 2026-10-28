@@ -70,7 +70,9 @@ async def run_turn(
         while True:
             if e_task is None:
                 e_task = loop.create_task(events.__anext__())
-            waiting = {e_task, f_task} | ({a_task} if a_task else set())
+            waiting: set[asyncio.Task[Any]] = {e_task, f_task}
+            if a_task is not None:
+                waiting.add(a_task)
             done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
             if e_task in done:
                 try:

@@ -30,18 +30,21 @@ import hashlib
 import threading
 import weakref
 from collections.abc import AsyncGenerator, Callable, Iterable, Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 from google.adk.workflow import BaseNode
 from pydantic import PrivateAttr
 
 from ._aio import HotStream, OrchestratorLoop
+from .bridge.per_session import NodeEventStore, for_session
 from .runner.petri_runner import Builder, PetriRunner
 from .runner.session_key import SessionKey
 from .runner.session_registry import SessionExecutorRegistry
 from .runner.turn import abort_turns_on_failure, run_turn
 
 if TYPE_CHECKING:
+    from libpetri import EventStoreProtocol
+
     from ._spec import NetSpec
 
     # Not at import time: the workflow package imports this module.
@@ -72,7 +75,7 @@ class NetNodeBase(BaseNode):
         default_factory=SessionExecutorRegistry.strong_owned
     )
     _orchestrator: OrchestratorLoop | None = PrivateAttr(default=None)
-    _event_store: Any = PrivateAttr(default=None)
+    _event_store: NodeEventStore | None = PrivateAttr(default=None)
     _finalizer: weakref.finalize[Any, Any] | None = PrivateAttr(default=None)
 
     def model_post_init(self, context: Any, /) -> None:
@@ -90,22 +93,50 @@ class NetNodeBase(BaseNode):
         self._finalizer = weakref.finalize(self, _close_all_quietly, registry)
         self._finalizer.atexit = False  # at exit, the process takes the runners down
 
+    def serve_on(
+        self,
+        orchestrator: OrchestratorLoop | None,
+        registry: SessionExecutorRegistry | None = None,
+        event_store: NodeEventStore | None = None,
+    ) -> Self:
+        """Serve sessions on ``orchestrator``, keep them in ``registry``, record into
+        ``event_store``; returns this node.
+
+        ``orchestrator`` ``None`` is :meth:`OrchestratorLoop.shared`, taken on
+        first use. ``registry`` ``None`` is a private one, closed with the node;
+        a caller's registry is the caller's to close. Applies to session nets
+        started afterwards.
+        """
+        self._serve_on(orchestrator, registry, event_store)
+        return self
+
     def _serve_on(
         self,
-        orchestrator: OrchestratorLoop,
+        orchestrator: OrchestratorLoop | None,
         registry: SessionExecutorRegistry | None = None,
-        event_store: Any = None,
+        event_store: NodeEventStore | None = None,
     ) -> None:
         """Where the session runners start, which registry keeps them, what they record."""
         self._orchestrator = orchestrator
         self._use_registry(registry)
         self._event_store = event_store
 
+    @property
+    def event_store(self) -> NodeEventStore | None:
+        """What new session nets record into (``None``: nothing beyond the turn's own taps)."""
+        return self._event_store
+
+    def set_event_store(self, store: NodeEventStore | None) -> None:
+        """Record new session nets into ``store``; to chain, wrap :attr:`event_store`."""
+        self._event_store = store
+
     def _use_registry(self, registry: SessionExecutorRegistry | None) -> None:
         """A caller's registry (the caller closes it), or a private one (closed with us)."""
         if registry is self._registry:
             return
         if registry is None:
+            if self._finalizer is not None:
+                return  # the node's own registry already
             registry = SessionExecutorRegistry.strong_owned()
             self._own_registry(registry)
         else:
@@ -163,7 +194,7 @@ class NetNodeBase(BaseNode):
 
         return TurnScope()
 
-    def _runner_builder(self, scope: TurnScope, event_store: Any) -> Builder:
+    def _runner_builder(self, scope: TurnScope, event_store: EventStoreProtocol | None) -> Builder:
         """The session's runner, bound to ``scope``; the base sets the orchestrator.
 
         ``event_store`` is the session's observability chain (or ``None``).
@@ -174,12 +205,10 @@ class NetNodeBase(BaseNode):
         """Seed tokens per place of a new session's net."""
         return {}
 
-    def _session_event_store(self, key: SessionKey) -> Any:
+    def _session_event_store(self, key: SessionKey) -> EventStoreProtocol | None:
         """The node's event store, or its link for ``key`` if it keeps one per session
-        (``for_session(key, initial_counts)``, as ``MarkingTraces`` does)."""
-        store = self._event_store
-        per_session = getattr(store, "for_session", None)
-        return per_session(key, self._initial_counts()) if callable(per_session) else store
+        (:class:`~adk_libpetri.bridge.PerSessionEventStore`, as ``MarkingTraces`` is)."""
+        return for_session(self._event_store, key, self._initial_counts())
 
     async def _start_runner(self, key: SessionKey) -> PetriRunner:
         scope = self._new_scope()

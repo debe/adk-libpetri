@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/debe/adk-libpetri/python/src/adk_libpetri/net/schema.json",
+  "$id": "https://raw.githubusercontent.com/debe/adk-libpetri/main/python/src/adk_libpetri/net/schema.json",
   "title": "adk-libpetri net blueprint",
   "description": "A Coloured Time Petri Net written as an ADK YAML agent config (agent_class: adk_libpetri.net.PetriNet). ADK's loader (adk web, adk run, config_agent_utils.from_config) builds it into an ADK node. The schema checks shape only; `adk-libpetri check FILE` also resolves names, types and node refs and reports every error with its YAML key path, and `adk-libpetri verify FILE` runs the prove: claims. No key may be named `args`, at any depth: not a place, transition, port, subnet or route label (ADK's web UI refuses the file). The AUTHORING.md guide next to this file has copy-ready motifs.",
   "type": "object",
@@ -10,7 +10,7 @@
   ],
   "additionalProperties": false,
   "patternProperties": {
-    "^(name|description|rerun_on_resume|wait_for_output|retry_config|timeout|input_schema|output_schema|state_schema|nodes|places|transitions|env|ports|subnets|turn|prove)_code$": {
+    "^(blueprint_version|name|description|rerun_on_resume|wait_for_output|retry_config|timeout|input_schema|output_schema|state_schema|nodes|places|transitions|env|ports|subnets|turn|prove)_code$": {
       "description": "ADK's `<field>_code` form: the field's value is the Python object at this dotted path (the loader accepts it for every node field)."
     }
   },
@@ -18,6 +18,12 @@
     "agent_class": {
       "const": "adk_libpetri.net.PetriNet",
       "description": "Selects the PetriNet node class. Must be exactly adk_libpetri.net.PetriNet."
+    },
+    "blueprint_version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1,
+      "description": "The blueprint format version. Optional; 1 is the only version, and any other value is a load error. A later format that changes the meaning of a key gets a new version."
     },
     "name": {
       "type": "string",

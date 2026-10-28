@@ -85,6 +85,7 @@ BROKEN = [
     pytest.param(broken(nodes=["x.yaml"]), id="bare string node ref"),
     pytest.param(broken(nodes=[{"agent_class": "LlmAgent", "name": "x"}]), id="bare inline node"),
     pytest.param(broken(transitions__N_Emit__inn=["userIn"]), id="unknown transition key"),
+    pytest.param(broken(blueprint_version=2), id="unknown blueprint version"),
     pytest.param(broken(transitions__N_Emit__node="x"), id="node and action"),
     pytest.param(broken(transitions__N_Emit__action="shout"), id="unknown action"),
     pytest.param(

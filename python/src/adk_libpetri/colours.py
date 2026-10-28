@@ -1,7 +1,7 @@
 """Standard typed boundary places (colours) for adk-libpetri.
 
 Every stock subnet declares its interface ports with these places, and
-:meth:`~adk_libpetri._spec.NetSpec.compose` fuses them by ``(name, type)``.
+:meth:`~adk_libpetri.NetSpec.compose` fuses them by ``(name, type)``.
 Users compose by reusing the same constants.
 
 The wrapper records (:class:`ToolCalls`, :class:`ToolResults`,

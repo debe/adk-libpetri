@@ -57,6 +57,50 @@ existed.
     place.
   - `adk-libpetri check` warns about a `timeout:` output while libpetri-py
     is 7.3.0 or older, which cannot run one yet.
+- **Breaking:** `TurnScope` and `TurnResult` are no longer exported from
+  `adk_libpetri.workflow` (they are compiler internals), and
+  `CompiledWorkflow` no longer takes `_plans`/`_multi_route` as
+  constructor arguments.
+- **Breaking:** `verify_workflow(cw, k=None)`: `k` defaults to `None` (one
+  user input), matching `verify_blueprint`/`PetriNet.verify`, where `None`
+  keeps the claims' own turns; `k < 1` raises `ValueError`.
+- **Breaking:** `PetriWorkflow` YAML nodes no longer start
+  `OrchestratorLoop.shared()` at load; they take it on their first turn
+  unless `serve_on(...)` gives them a loop.
+- **Blueprint format versioning:** optional `blueprint_version: 1`
+  (`adk_libpetri.net.BLUEPRINT_VERSION`); any other value is a
+  `BlueprintError` naming the supported version. The schema's `$id` is a
+  URL that resolves (the `main` branch's raw copy); `AUTHORING.md` shows
+  how to point `yaml-language-server` at it or at `adk-libpetri schema`.
+- **CLI:** `adk-libpetri --version` prints the adk-libpetri, google-adk and
+  libpetri versions; every `--json` payload carries `"format": 1`; `check`
+  and `verify` accept a `PetriWorkflow` YAML (`check` compiles it, `verify`
+  runs `verify_workflow`).
+- `WorkflowProof` has `NetProof`'s surface (`proven`, `violated`, `scope`,
+  `notes`), and `PetriWorkflow.verify(k=...)` runs `verify_workflow` on a
+  node.
+- `serve_on(orchestrator, registry=None, event_store=None)` is public on
+  `PetriNet` and `PetriWorkflow`, and `from_config` uses it (it no longer
+  skips registry ownership); `event_store` / `set_event_store()` replace
+  writing `node._event_store`.
+- Event stores are typed with `libpetri.EventStoreProtocol`; new
+  `bridge.PerSessionEventStore` protocol and `bridge.NodeEventStore` union.
+- `PetriAgentBuilder.session_scope(...)`, `PetriAgent.session_key(session)`
+  and `PetriAgent.session_scope()`: two `PetriAgent`s on one registry
+  serving one session no longer share a runner.
+- Fixed: a `PetriAgent` after another node in a `Workflow` crashed, and
+  `PetriAgentBuilder.input_mapper(...)` was ignored (pydantic bound the
+  default mapper as a descriptor).
+- The root package exports `Action`, `SyncAction`, `AsyncAction`, `Match`,
+  `IMMEDIATE`, `And`, `Xor`, `Timeout`, `OutPlace`, `PortDirection` and
+  `await_on`; every stock subnet module has an `__all__`; `runner` exports
+  `PetriRunnerBuilder`, `LiveConnection` and the BIDI `bridge`;
+  `transfer_router.spec_for` aliases `def_`.
+- `OrchestratorLoop` is a context manager (`with OrchestratorLoop() as
+  loop:`), and the shared loop is closed at interpreter exit.
+- The public API is golden-checked in `spec/api/python.txt`
+  (`PUBLICAPI_WRITE=1 pytest tests/test_public_api.py` regenerates it).
+- pyright strict mode for `runner/`, `subnet/` and `_spec.py`.
 
 ### Java
 

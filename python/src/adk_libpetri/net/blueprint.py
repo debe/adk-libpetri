@@ -3,7 +3,7 @@
 :func:`parse_blueprint` is a pure function from the YAML mapping of an
 ``agent_class: adk_libpetri.net.PetriNet`` file (``places``, ``transitions``,
 ``env``, ``ports``, ``subnets``, ``turn``, ``prove``) and the ADK nodes it names to a
-:class:`Blueprint`: one flat :class:`~adk_libpetri._spec.NetSpec`, one
+:class:`Blueprint`: one flat :class:`~adk_libpetri.NetSpec`, one
 :class:`ActionPlan` per transition, the seeds, the environment places, the
 mounted subnets and the proof claims. It does not need ADK's loader; the
 :class:`~adk_libpetri.net.PetriNet` node calls it from ``model_post_init``.
@@ -23,6 +23,7 @@ The format, in short (the full rules are in the docstrings below):
 * ``env: [place, ...]``, ``ports: {name: {place, direction}}``,
   ``subnets: {inst: {net | stock, from, bind}}``, ``prove: {options, claims}``.
 * ``turn: {release: place}`` -- where a turn's admission ends (ADR 0010).
+* ``blueprint_version: 1`` -- the format version (optional; 1 is the only one).
 """
 
 from __future__ import annotations
@@ -725,7 +726,18 @@ TYPE_ALIASES: dict[str, Any] = {
 }
 """Short type names a place may use instead of a dotted reference."""
 
-TOP_KEYS = ("places", "transitions", "env", "ports", "subnets", "turn", "prove")
+TOP_KEYS = (
+    "blueprint_version",
+    "places",
+    "transitions",
+    "env",
+    "ports",
+    "subnets",
+    "turn",
+    "prove",
+)
+BLUEPRINT_VERSION = 1
+"""The blueprint format version this release reads (``blueprint_version:``, default 1)."""
 _TRANSITION_KEYS = ("in", "out", "read", "inhibit", "reset", "priority", "timing", "node", "action")
 _STOCK = ("llm_agent", "llm_step", "tool_dispatch", "router")
 
@@ -877,6 +889,7 @@ def _parse(
     source: str | None,
 ) -> Blueprint:
     data = _keys("", data, TOP_KEYS, "a blueprint")
+    _version(data.get("blueprint_version", BLUEPRINT_VERSION))
     _no_blocked_keys("", data)
     places = _Places(name)
     seeds: dict[str, tuple[Any, ...]] = {}
@@ -988,6 +1001,16 @@ def _parse(
         node_transitions=node_transitions,
         release=release,
     )
+
+
+def _version(v: Any) -> None:
+    if isinstance(v, bool) or not isinstance(v, int) or v != BLUEPRINT_VERSION:
+        raise BlueprintError(
+            "blueprint_version",
+            f"unsupported blueprint_version {v!r}",
+            f"this adk-libpetri reads blueprint_version {BLUEPRINT_VERSION}; write "
+            f"{BLUEPRINT_VERSION}, or upgrade adk-libpetri for a newer format",
+        )
 
 
 def _release(raw: Any, spec: NetSpec, env: Sequence[str], seeds: Mapping[str, Any]) -> str | None:

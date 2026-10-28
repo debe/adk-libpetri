@@ -62,6 +62,10 @@ def def_(known_agent_names: Iterable[str]) -> NetSpec:
     return NetSpec(NAME, (demux, emit_unknown), ports=tuple(ports))
 
 
+spec_for = def_
+"""Alias of :func:`def_` under a name that reads as what it returns (the subnet's spec)."""
+
+
 def action_bindings(known_agent_names: Iterable[str], config: Config) -> dict[str, Action]:
     names = _ordered(known_agent_names)
     lookup = {n: target_place(n) for n in names}
@@ -89,3 +93,16 @@ def action_bindings(known_agent_names: Iterable[str], config: Config) -> dict[st
     return bind(
         def_(names), {Transitions.DEMUX: demux, Transitions.EMIT_UNKNOWN_ERROR: emit_unknown}
     )
+
+
+__all__ = [
+    "NAME",
+    "TARGET_PLACE_PREFIX",
+    "UNKNOWN_TARGET",
+    "Config",
+    "Transitions",
+    "action_bindings",
+    "def_",
+    "spec_for",
+    "target_place",
+]
