@@ -631,8 +631,11 @@ class LlmAgentSubnetTest {
                         .bindPort("eventOut", AdkColours.EVENT_OUT)
                         .bindPort("transfer", AdkColours.TRANSFER))
                 .build();
-        var permit = Place.of("billing/" + AdkColours.TURN_PERMIT.name(), Void.class);
+        var permit = LlmAgentSubnet.turnPermitOf(agent);
+        assertThat(permit).isEqualTo(Place.of("billing/" + AdkColours.TURN_PERMIT.name(), Void.class));
         assertThat(net.places()).contains(permit);
+        Assertions.assertThrows(IllegalArgumentException.class,
+                () -> LlmAgentSubnet.turnPermitOf(LlmStepSubnet.DEF.instantiate("step")));
 
         var unseeded = PetriRunner.builder(net)
                 .environmentPlace(AdkColours.USER_IN)

@@ -70,6 +70,23 @@ existed.
   its own `functionCallId`. `ToolDispatchSubnet.actionBindings` takes the
   function too. The builders' `toolContextSupplier(...)` and the
   `Supplier` overload of `actionBindings` remain as adapters.
+- **Restores check place names.** `PetriRunner.Builder.restore(...)`
+  rejects a marking that names a place the net does not have; libpetri
+  would restore its tokens onto an orphan place and lose them silently. A
+  checkpoint found by `resumeFrom` that does so (taken from an earlier
+  version of the net) is skipped with a warning, and the session starts
+  from its initial marking.
+- **Per-session tracing.** `PetriAgent.Builder.tracingPerSession(tracer,
+  key -> store)` gives each session's runner its own `OtelEventStore`. One
+  store holds one invocation binding, so with `tracing(tracer, store)`
+  concurrent sessions parented their transition spans on whichever turn
+  bound last.
+- **`LlmAgentSubnet.turnPermitOf(instance)`** names the turn permit of an
+  agent composed through `DEF.instantiate(prefix)`, the place a host must
+  seed.
+- **One compiled net per net.** The default executor factory compiles a
+  net once and shares the immutable `CompiledNet` across the sessions that
+  run it, instead of recompiling on every session start.
 - **ADK 1.8.0 -> 1.10.1**, the earlier step: genai stays `1.58.0`,
   protobuf stays `4.33.5` and rxjava stays `3.1.12`, so the protobuf floor
   guidance is unchanged. ADK 1.10.x moves

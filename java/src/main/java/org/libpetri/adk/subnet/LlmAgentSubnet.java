@@ -19,6 +19,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
 import java.util.function.Function;
 import org.libpetri.core.Arc;
+import org.libpetri.core.Instance;
 import org.libpetri.core.Interface;
 import org.libpetri.core.PetriNet;
 import org.libpetri.core.Place;
@@ -46,7 +47,8 @@ import org.libpetri.adk.colours.AdkColours;
  * token when the net starts. {@code PetriRunner} seeds it; a bare libpetri
  * executor needs it in its initial marking. {@code DEF.instantiate(prefix)}
  * renames it to {@code prefix/turnPermit}, which {@code PetriRunner} does not
- * seed: name it in {@code initialMarking}, or the start fails. The instance's
+ * seed: name it in {@code initialMarking} ({@link #turnPermitOf(Instance)}
+ * finds it), or the start fails. The instance's
  * {@code turnAbort} port must be bound to {@link AdkColours#TURN_ABORT} for
  * {@code PetriAgent}'s abort to reach it.
  *
@@ -300,6 +302,27 @@ public final class LlmAgentSubnet {
 
     /** Stateless subnet definition (composed body + N-port interface). */
     public static final SubnetDef<Void> DEF = buildComposedDef(NAME, LlmStepSubnet.DEF);
+
+    /**
+     * The turn permit of an agent composed through {@code DEF.instantiate(prefix)}
+     * (or {@link StreamingLlmAgentSubnet#DEF}'s), as renamed in the instance:
+     * the place to seed with one {@code Token.unit()} in the host runner's
+     * {@code initialMarking}.
+     *
+     * @throws IllegalArgumentException if {@code instance} holds no turn permit
+     */
+    public static Place<Void> turnPermitOf(Instance<?> instance) {
+        var name = instance.prefix() + "/" + AdkColours.TURN_PERMIT.name();
+        for (var place : instance.renamedBody().places()) {
+            if (place.name().equals(name) && place.tokenType() == Void.class) {
+                @SuppressWarnings("unchecked")
+                var permit = (Place<Void>) place;
+                return permit;
+            }
+        }
+        throw new IllegalArgumentException("instance '" + instance.prefix() + "' of subnet '"
+                + instance.def().name() + "' has no turn permit; it is not an LLM agent");
+    }
 
     static SubnetDef<Void> buildComposedDef(String netName, SubnetDef<Void> stepDef) {
         var body = PetriNet.builder(netName)

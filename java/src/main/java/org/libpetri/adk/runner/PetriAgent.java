@@ -127,7 +127,7 @@ public final class PetriAgent extends BaseAgent {
     private final Function<SessionKey, PetriRunner> runnerFactory;
     private final Function<InvocationContext, Object> ownerExtractor;   // nullable: strongOwned() only
     private final Tracer tracer;                       // nullable
-    private final OtelEventStore otelEventStore;       // nullable
+    private final Function<SessionKey, OtelEventStore> otelStoreFor;   // nullable
     private final LiveConfig liveConfig;               // nullable
     // Per-session: the open invocation span from the most recent runAsyncImpl
     // call. End it when superseded by the next invocation on the same session,
@@ -193,7 +193,7 @@ public final class PetriAgent extends BaseAgent {
                        Function<SessionKey, PetriRunner> runnerFactory,
                        Function<InvocationContext, Object> ownerExtractor,
                        Tracer tracer,
-                       OtelEventStore otelEventStore,
+                       Function<SessionKey, OtelEventStore> otelStoreFor,
                        LiveConfig liveConfig) {
         super(name, description, ImmutableList.of(), /*beforeAgentCallback*/ null, /*afterAgentCallback*/ null);
         this.registry = Objects.requireNonNull(registry, "registry");
@@ -209,12 +209,12 @@ public final class PetriAgent extends BaseAgent {
         // or both are null (no-op observability). Mixing them would leak orphan spans
         // (tracer without store) or orphan child spans (store without parent set), so
         // disallow at construction.
-        if ((tracer == null) != (otelEventStore == null)) {
+        if ((tracer == null) != (otelStoreFor == null)) {
             throw new IllegalArgumentException(
                     "tracer and otelEventStore must be either both provided or both null");
         }
         this.tracer = tracer;
-        this.otelEventStore = otelEventStore;
+        this.otelStoreFor = otelStoreFor;
         this.liveConfig = liveConfig;
     }
 
@@ -285,7 +285,7 @@ public final class PetriAgent extends BaseAgent {
         private String description = "";
         private Function<InvocationContext, Object> ownerExtractor;
         private Tracer tracer;
-        private OtelEventStore otelEventStore;
+        private Function<SessionKey, OtelEventStore> otelStoreFor;
         private LiveConfig liveConfig;
 
         private Builder(String name,
@@ -319,10 +319,27 @@ public final class PetriAgent extends BaseAgent {
          * SessionExecutorRegistry, Function, Function, Tracer, OtelEventStore)}.
          * Both or neither: passing both {@code null} switches tracing off,
          * and {@link #build()} rejects exactly one.
+         *
+         * <p>One store holds one invocation binding at a time, so every
+         * session sharing it parents its transition spans on the latest
+         * turn's span. When sessions run turns concurrently, give each its
+         * own store with {@link #tracingPerSession}.
          */
         public Builder tracing(Tracer tracer, OtelEventStore otelEventStore) {
             this.tracer = tracer;
-            this.otelEventStore = otelEventStore;
+            this.otelStoreFor = otelEventStore == null ? null : key -> otelEventStore;
+            return this;
+        }
+
+        /**
+         * {@link #tracing(Tracer, OtelEventStore)} with one store per session:
+         * {@code storeFor} returns the {@code OtelEventStore} chained into the
+         * runner the runner factory builds for that key, so each session's
+         * transition spans attach to its own turn's span. Both or neither.
+         */
+        public Builder tracingPerSession(Tracer tracer, Function<SessionKey, OtelEventStore> storeFor) {
+            this.tracer = tracer;
+            this.otelStoreFor = storeFor;
             return this;
         }
 
@@ -339,7 +356,7 @@ public final class PetriAgent extends BaseAgent {
          */
         public PetriAgent build() {
             return new PetriAgent(name, description, registry, runnerFactory, ownerExtractor,
-                    tracer, otelEventStore, liveConfig);
+                    tracer, otelStoreFor, liveConfig);
         }
     }
 
@@ -500,14 +517,6 @@ public final class PetriAgent extends BaseAgent {
     }
 
     /**
-     * Opens the per-invocation root span and binds its {@link Context} to
-     * the configured {@link OtelEventStore} so transition spans attach as
-     * children. Closes the previously-open span for the same session (if
-     * any) — only one invocation per session is live at a time under ADK's
-     * turn-based model, and supersession is the trigger for the previous
-     * span's end. No-op when OTel isn't wired.
-     */
-    /**
      * The turn's invocation id, and an event id where the net left none. ADK's
      * {@code Event.build()} assigns no id, and ADK reads ids back from the
      * session (an {@code LlmAgent} resuming in the same invocation compares
@@ -521,6 +530,14 @@ public final class PetriAgent extends BaseAgent {
         return b.build();
     }
 
+    /**
+     * Opens the per-invocation root span and binds its {@link Context} to
+     * the configured {@link OtelEventStore} so transition spans attach as
+     * children. Closes the previously-open span for the same session (if
+     * any) — only one invocation per session is live at a time under ADK's
+     * turn-based model, and supersession is the trigger for the previous
+     * span's end. No-op when OTel isn't wired.
+     */
     private void openInvocationSpan(InvocationContext ctx, SessionKey key) {
         if (tracer == null) {
             return;
@@ -530,7 +547,8 @@ public final class PetriAgent extends BaseAgent {
                 .setAttribute("adk.invocation.id", ctx.invocationId())
                 .setAttribute("adk.session.id", ctx.session().id())
                 .startSpan();
-        otelEventStore.bindInvocationContext(Context.current().with(span));
+        Objects.requireNonNull(otelStoreFor.apply(key), "OtelEventStore for session " + key)
+                .bindInvocationContext(Context.current().with(span));
         Span previous = openInvocationSpans.put(key, span);
         if (previous != null) {
             previous.end();

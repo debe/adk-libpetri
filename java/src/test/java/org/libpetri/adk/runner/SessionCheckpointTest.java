@@ -199,6 +199,32 @@ class SessionCheckpointTest {
         }
     }
 
+    /** A restore naming a place the net lacks would lose its tokens silently. */
+    @Test
+    void an_explicit_restore_naming_an_unknown_place_is_rejected() {
+        var builder = PetriRunner.builder(counterNet(new CountDownLatch(0)))
+                .restore(Map.of(COUNTER.name(), List.of(Token.of(5)), "renamedAway", List.of(Token.of(1))))
+                .orchestratorExecutor(EXECUTOR);
+        var err = assertThrows(IllegalStateException.class, builder::start);
+        assertThat(err).hasMessageThat().contains("[renamedAway]");
+    }
+
+    /**
+     * A checkpoint from another version of the net (a place renamed since) is
+     * not restored: the session starts from its initial marking instead of
+     * failing on every attempt or resuming half a state.
+     */
+    @Test
+    void a_checkpoint_naming_an_unknown_place_starts_the_session_fresh() throws Exception {
+        var checkpoints = SessionCheckpointStore.inMemory();
+        checkpoints.save(KEY, Map.of(COUNTER.name(), List.of(Token.of(7)), "renamedAway", List.of(Token.of(1))));
+        var net = counterNet(new CountDownLatch(0));
+        try (var registry = SessionExecutorRegistry.strongOwned(checkpoints)) {
+            var runner = registry.getOrCreate(KEY, key -> counterRunner(net, checkpoints, key).start());
+            assertThat(counterOf(runner.snapshot().marking())).isEqualTo(0);
+        }
+    }
+
     /** An explicit restore next to an explicit seed is still a contradiction. */
     @Test
     void an_explicit_restore_with_an_initial_marking_is_rejected() {

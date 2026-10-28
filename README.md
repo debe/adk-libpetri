@@ -701,7 +701,9 @@ use and reuses it for every later turn.
 A registry built with a `SessionCheckpointStore` *(experimental)* drains each
 session at teardown, saves its final marking without `EVENT_OUT`, and a runner
 factory that calls `resumeFrom(store, key)` starts from it. The store is never
-read during execution, so the marking stays the state.
+read during execution, so the marking stays the state. In Java, a checkpoint
+that names a place the net no longer has (taken before a rename) is not
+restored: the session starts fresh, with a warning.
 
 Both ports use the same place and transition names; the API names follow each
 language's conventions (`strongOwned` / `strong_owned`). Java's

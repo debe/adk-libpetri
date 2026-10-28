@@ -2,6 +2,7 @@ package org.libpetri.adk.runner;
 
 import com.google.adk.events.Event;
 import io.reactivex.rxjava3.core.Flowable;
+import java.lang.ref.SoftReference;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -12,6 +13,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.WeakHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -28,6 +30,7 @@ import org.libpetri.adk.Experimental;
 import org.libpetri.adk.bridge.EventStoreToFlowableBridge;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.runtime.BitmapNetExecutor;
+import org.libpetri.runtime.CompiledNet;
 import org.libpetri.runtime.ActionFailureHandler;
 import org.libpetri.runtime.ExecutionContextProvider;
 import org.libpetri.runtime.ExecutionEnvironment;
@@ -360,6 +363,27 @@ public final class PetriRunner implements AutoCloseable {
      * {@link ExecutorFactory#loudActionFailure()} rather than omit a handler,
      * since omitting one restores the silent hole described above.
      */
+    /**
+     * Compiled forms of the nets runners start, shared across sessions: a
+     * {@link CompiledNet} is immutable, and a per-session runner otherwise
+     * recompiles the same net on every start. Keyed by the net's identity
+     * ({@code PetriNet} keeps {@code Object}'s equality), weakly; the values
+     * are soft because a compiled net refers back to its net.
+     */
+    private static final Map<PetriNet, SoftReference<CompiledNet>> COMPILED = new WeakHashMap<>();
+
+    static CompiledNet compiled(PetriNet net) {
+        synchronized (COMPILED) {
+            var ref = COMPILED.get(net);
+            var compiled = ref == null ? null : ref.get();
+            if (compiled == null) {
+                compiled = CompiledNet.compile(net);
+                COMPILED.put(net, new SoftReference<>(compiled));
+            }
+            return compiled;
+        }
+    }
+
     private static final ActionFailureHandler LOUD_ACTION_FAILURE = (transition, cause) ->
             System.getLogger("org.libpetri.adk.runner").log(
                     System.Logger.Level.WARNING,
@@ -420,10 +444,11 @@ public final class PetriRunner implements AutoCloseable {
             return LOUD_ACTION_FAILURE;
         }
 
-        /** Default: {@link BitmapNetExecutor}. */
+        /** Default: {@link BitmapNetExecutor}, on a compiled net shared by every session of the net. */
         static ExecutorFactory bitmap() {
             return spec -> {
                 var b = BitmapNetExecutor.builder(spec.net(), spec.initialMarking())
+                        .compiledNet(compiled(spec.net()))
                         .environmentPlaces(spec.envPlaces().toArray(EnvironmentPlace[]::new))
                         .eventStore(spec.eventStore())
                         .orchestratorExecutor(spec.orchestratorExecutor())
@@ -704,7 +729,10 @@ public final class PetriRunner implements AutoCloseable {
          * its full delay again. Pair it with a fresh
          * {@link #executionScope(String)}. Combined with a non-empty
          * {@link #initialMarking(Map)}, {@link #start()} throws: an explicit
-         * restore and an explicit seed are two answers to one question.
+         * restore and an explicit seed are two answers to one question. So
+         * does a marking that names a place this net does not have: libpetri
+         * would restore its tokens onto a place no transition reads, and they
+         * would be lost without a trace.
          */
         @Experimental
         public Builder restore(Map<String, List<Token<?>>> marking) {
@@ -721,17 +749,38 @@ public final class PetriRunner implements AutoCloseable {
          * nothing and the run starts from the initial marking, so one factory
          * serves a session's first start and every resume. The store is read
          * once, here, before the executor exists.
+         *
+         * <p>A checkpoint that names a place this net does not have was taken
+         * from another version of the net (a place renamed or removed since).
+         * It is not restored: the run starts from the initial marking and a
+         * warning names the places. Restoring the rest would resume a state
+         * the net never reached; refusing to start would fail the session on
+         * every attempt.
          */
         @Experimental
         public Builder resumeFrom(SessionCheckpointStore store, SessionKey key) {
             Objects.requireNonNull(store, "store");
             Objects.requireNonNull(key, "key");
             store.load(key).ifPresent(marking -> {
+                var unknown = unknownPlaces(marking);
+                if (!unknown.isEmpty()) {
+                    System.getLogger("org.libpetri.adk.runner").log(System.Logger.Level.WARNING,
+                            "Checkpoint of session " + key + " names places net '" + net.name()
+                                    + "' does not have " + unknown + "; it was taken from another "
+                                    + "version of the net. Starting from the initial marking.");
+                    return;
+                }
                 restore(marking);
                 this.restoreIsCheckpoint = true;
                 executionScope("resume-" + UUID.randomUUID());
             });
             return this;
+        }
+
+        private List<String> unknownPlaces(Map<String, List<Token<?>>> marking) {
+            var names = new java.util.HashSet<String>();
+            for (var p : net.places()) names.add(p.name());
+            return marking.keySet().stream().filter(n -> !names.contains(n)).sorted().toList();
         }
 
         /**
@@ -810,7 +859,7 @@ public final class PetriRunner implements AutoCloseable {
                     throw new IllegalStateException(
                             "Place " + place.name() + " is the turn permit of an instantiated agent "
                             + "and needs one token to run its first turn. Add it to "
-                            + "initialMarking(...): Place.of(\"" + place.name() + "\", Void.class) "
+                            + "initialMarking(...): LlmAgentSubnet.turnPermitOf(instance) "
                             + "-> List.of(Token.unit()).");
                 }
             }
@@ -841,6 +890,14 @@ public final class PetriRunner implements AutoCloseable {
                 throw new IllegalStateException(
                         "restore(...) and initialMarking(...) are exclusive: a restored run "
                         + "resumes from the snapshot's marking");
+            }
+            if (restore != null) {
+                var unknown = unknownPlaces(restore);
+                if (!unknown.isEmpty()) {
+                    throw new IllegalStateException("restore(...) names places net '" + net.name()
+                            + "' does not have: " + unknown + ". A snapshot of another version "
+                            + "of the net cannot be restored onto this one.");
+                }
             }
             // A checkpoint found by resumeFrom supersedes the seed: the
             // initial marking is for a session's first start only. A restore

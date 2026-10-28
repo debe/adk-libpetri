@@ -188,6 +188,14 @@ class PetriRunnerTest {
                 .bindActions(Map.of("T_Ack", ack));
     }
 
+    /** Every session of one net runs on one compiled net; another net gets its own. */
+    @Test
+    void sessions_of_one_net_share_its_compiled_form() {
+        var net = buildSignalNet();
+        assertThat(PetriRunner.compiled(net)).isSameInstanceAs(PetriRunner.compiled(net));
+        assertThat(PetriRunner.compiled(buildSignalNet())).isNotSameInstanceAs(PetriRunner.compiled(net));
+    }
+
     /**
      * libpetri 2.13 contains an action failure to the failing transition: the
      * orchestrator survives and the consumed tokens are lost (EXEC-031).
