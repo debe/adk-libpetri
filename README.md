@@ -729,7 +729,7 @@ Each one rules out a class of bug by construction.
    over genai, thin user code wraps or bypasses it.
 5. **Observability is an `EventStore` decorator chain.** `OtelEventStore`,
    `EventStore.logging()` and your own stores wrap each other.
-   `failureSignal()` is control flow: it ends a turn and never carries net
+   `failures()` is control flow: it ends a turn and never carries net
    state.
 6. **Autonomous loops are bounded structurally**, by the
    [reask-budget pattern](#g2-bounded-autonomous-loops-reask-budget): the

@@ -35,7 +35,6 @@ import org.libpetri.core.Place;
 import org.libpetri.core.Token;
 import org.libpetri.event.EventStore;
 import org.libpetri.event.NetEvent;
-import org.libpetri.adk.bridge.TransitionFailure;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.adk.runner.PetriRunner;
 import org.libpetri.runtime.BitmapNetExecutor;
@@ -52,6 +51,35 @@ class LlmAgentSubnetTest {
     @AfterAll
     static void shutdownExecutor() {
         EXECUTOR.shutdown();
+    }
+
+    // ============================================================
+    //  API shape: places holder, config builder
+    // ============================================================
+
+    @Test
+    @SuppressWarnings("deprecation")
+    void deprecated_place_aliases_are_the_places_holder_instances() {
+        assertThat(LlmAgentSubnet.REASK_BUDGET).isSameInstanceAs(LlmAgentSubnet.Places.REASK_BUDGET);
+        assertThat(LlmAgentSubnet.CONVERSATION).isSameInstanceAs(LlmAgentSubnet.Places.CONVERSATION);
+        assertThat(LlmAgentSubnet.TURN_ACTIVE).isSameInstanceAs(LlmAgentSubnet.Places.TURN_ACTIVE);
+        assertThat(LlmAgentSubnet.TURN_INPUT).isSameInstanceAs(LlmAgentSubnet.Places.TURN_INPUT);
+        assertThat(LlmAgentSubnet.ANSWER).isSameInstanceAs(LlmAgentSubnet.Places.ANSWER);
+        assertThat(LlmAgentSubnet.HANDOFF).isSameInstanceAs(LlmAgentSubnet.Places.HANDOFF);
+    }
+
+    @Test
+    void config_builder_rejects_null_at_the_setter() {
+        var builder = LlmAgentSubnet.Config.builder("agent", "model");
+        Assertions.assertThrows(NullPointerException.class, () -> builder.dispatchExecutor(null));
+        Assertions.assertThrows(NullPointerException.class, () -> builder.fallbackContent(null));
+        Assertions.assertThrows(NullPointerException.class, () -> builder.invocationIdSupplier(null));
+        Assertions.assertThrows(NullPointerException.class, () -> builder.tools(null));
+        Assertions.assertThrows(NullPointerException.class,
+                () -> LlmAgentSubnet.Config.builder(null, "model"));
+        // The system instruction is optional: null means none.
+        var config = builder.systemInstruction(null).dispatchExecutor(EXECUTOR).build();
+        assertThat(config.systemInstruction()).isEmpty();
     }
 
     // ============================================================
@@ -418,10 +446,10 @@ class LlmAgentSubnetTest {
         Map<Place<?>, List<Token<?>>> midTurnOne = Map.of(
                 AdkColours.USER_IN, List.of(Token.of(user2)),
                 AdkColours.TOOL_RESULTS, List.of(Token.of(results1)),
-                LlmAgentSubnet.REASK_BUDGET, List.of(Token.unit()),
-                LlmAgentSubnet.CONVERSATION, List.of(Token.of(
+                LlmAgentSubnet.Places.REASK_BUDGET, List.of(Token.unit()),
+                LlmAgentSubnet.Places.CONVERSATION, List.of(Token.of(
                         new LlmAgentSubnet.Conversation(List.of(user1)))),
-                LlmAgentSubnet.TURN_ACTIVE, List.of(Token.unit()));
+                LlmAgentSubnet.Places.TURN_ACTIVE, List.of(Token.unit()));
         var marking = BitmapNetExecutor.builder(net, midTurnOne).build().run();
 
         assertThat(requests).hasSize(2);
@@ -674,11 +702,11 @@ class LlmAgentSubnetTest {
                 .environmentPlace(AdkColours.USER_IN)
                 .orchestratorExecutor(EXECUTOR)
                 .start()) {
-            var failures = runner.failureSignal().test();
+            var failures = runner.failures().test();
             var events = runner.adkEvents().test();
             runner.inject(AdkColours.USER_IN, user1).get(5, TimeUnit.SECONDS);
             failures.awaitCount(1);
-            assertThat(((TransitionFailure) failures.values().get(0)).transitionName())
+            assertThat(failures.values().get(0).transitionName())
                     .isEqualTo(failingTransition);
 
             // Wedged: the failed turn still holds the permit, so this input queues.

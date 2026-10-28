@@ -55,7 +55,8 @@ import org.libpetri.adk.colours.AdkColours;
  * answer, and the model turn a re-ask would send back would have no parts.
  *
  * <p>Bind via
- * {@code petriNet.bindActions(ToolDispatchSubnet.actionBindings(toolsByName, contextSupplier, dispatchExecutor))}.
+ * {@code SubnetActions.bindComposed(petriNet, ToolDispatchSubnet.actionBindings(toolsByName, contextSupplier, dispatchExecutor), ...)},
+ * which also checks the bindings cover every transition of the host net.
  */
 public final class ToolDispatchSubnet {
 

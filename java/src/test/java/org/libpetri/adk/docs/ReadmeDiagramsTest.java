@@ -179,7 +179,7 @@ class ReadmeDiagramsTest {
                 names(AdkColours.USER_IN, AdkColours.TURN_ABORT),
                 Map.of(AdkColours.TURN_PERMIT.name(), "●"),
                 Map.of(LlmAgentSubnet.Transitions.ABORT_TURN,
-                        names(LlmAgentSubnet.TURN_INPUT, LlmAgentSubnet.CONVERSATION)),
+                        names(LlmAgentSubnet.Places.TURN_INPUT, LlmAgentSubnet.Places.CONVERSATION)),
                 RankDir.TB, false, ClusterSource.NONE, false,
                 Map.of("nodesep", "0.25"), Map.of()));
 
@@ -198,7 +198,7 @@ class ReadmeDiagramsTest {
                         LlmAgentSubnet.Transitions.RE_ASK,
                         LlmAgentSubnet.Transitions.RE_ASK_EXHAUSTED_FALLBACK),
                 Set.of(),
-                Map.of(LlmAgentSubnet.REASK_BUDGET.name(), "●×K"),
+                Map.of(LlmAgentSubnet.Places.REASK_BUDGET.name(), "●×K"),
                 Map.of(),
                 RankDir.TB, false, ClusterSource.AUTO, true,
                 Map.of("nodesep", "0.25", "newrank", "true"), Map.of()));
@@ -213,7 +213,7 @@ class ReadmeDiagramsTest {
                         LlmAgentSubnet.Transitions.RE_ASK_EXHAUSTED_FALLBACK,
                         LlmAgentSubnet.Transitions.EMIT_ANSWER),
                 Set.of(),
-                Map.of(LlmAgentSubnet.REASK_BUDGET.name(), "●×K"),
+                Map.of(LlmAgentSubnet.Places.REASK_BUDGET.name(), "●×K"),
                 Map.of(),
                 RankDir.TB, false, ClusterSource.NONE, false,
                 Map.of("nodesep", "0.2"), Map.of()));

@@ -6,6 +6,8 @@ import com.google.adk.models.LlmResponse;
 import com.google.genai.types.Content;
 import com.google.genai.types.FunctionCall;
 import com.google.genai.types.FunctionResponse;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -142,10 +144,17 @@ public final class AdkColours {
      * Gemini pairs each {@code functionResponse} with the preceding
      * {@code functionCall} turn, and Gemini 3 additionally requires the turn's
      * {@code thoughtSignature} parts, which a turn rebuilt from the calls alone
-     * would lose. {@code null} when the producer did not have it; consumers then
-     * synthesize a model turn from {@code calls}.
+     * would lose. Nullable: {@code null} when the producer did not have it;
+     * consumers then synthesize a model turn from {@code calls}.
+     *
+     * <p>{@code calls} is required and copied, so a token's batch cannot change
+     * after it is produced.
      */
     public record ToolCalls(List<FunctionCall> calls, Content modelTurn) {
+        public ToolCalls {
+            calls = List.copyOf(Objects.requireNonNull(calls, "calls"));
+        }
+
         /** A batch whose producer does not have the model turn; dispatch rebuilds one. */
         public ToolCalls(List<FunctionCall> calls) {
             this(calls, null);
@@ -161,10 +170,13 @@ public final class AdkColours {
      * in front of the responses, and a results token has no calls left to
      * rebuild it from, so a re-ask without it sends responses Gemini cannot
      * pair with a call and rejects.
+     *
+     * <p>{@code results} is copied, so a token's results cannot change after
+     * it is produced.
      */
     public record ToolResults(List<FunctionResponse> results, Content modelTurn) {
         public ToolResults {
-            Objects.requireNonNull(results, "results");
+            results = List.copyOf(Objects.requireNonNull(results, "results"));
             Objects.requireNonNull(modelTurn, "modelTurn");
         }
     }
@@ -190,10 +202,24 @@ public final class AdkColours {
      * {@code BaseSessionService.appendEvent} — a one-way bridge to the
      * external legacy store for downstream consumers that haven't
      * migrated away from {@code Session.state}.
+     *
+     * <p>{@code delta} is required and copied into an unmodifiable map that
+     * keeps its insertion order. Values may be {@code null} (a delta can
+     * carry one, as {@code Session.state} does), which is why the copy is not
+     * {@link Map#copyOf}.
      */
-    public record LegacySessionWrite(Map<String, Object> delta) {}
+    public record LegacySessionWrite(Map<String, Object> delta) {
+        public LegacySessionWrite {
+            delta = Collections.unmodifiableMap(
+                    new LinkedHashMap<>(Objects.requireNonNull(delta, "delta")));
+        }
+    }
 
-    /** Wrapper colour for an agent-transfer target. */
-    public record TransferTarget(String agentName) {}
+    /** Wrapper colour for an agent-transfer target. {@code agentName} is required. */
+    public record TransferTarget(String agentName) {
+        public TransferTarget {
+            Objects.requireNonNull(agentName, "agentName");
+        }
+    }
 
 }

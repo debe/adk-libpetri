@@ -68,14 +68,14 @@ class EventStoreToFlowableBridgeTest {
     @Test
     void transition_failed_is_published_on_the_failure_signal() {
         var bridge = new EventStoreToFlowableBridge(EVENT_OUT, EventStore.noop());
-        TestSubscriber<Throwable> failures = bridge.failureSignal().test();
+        TestSubscriber<TransitionFailure> failures = bridge.transitionFailures().test();
 
         bridge.append(new NetEvent.TransitionFailed(
                 Instant.now(), "T_llm_call", "model returned 500", "java.io.IOException"));
 
         failures.assertValueCount(1);
         // Identity intact, not flattened into a message a consumer has to regex.
-        var f = (TransitionFailure) failures.values().get(0);
+        var f = failures.values().get(0);
         assertThat(f.transitionName()).isEqualTo("T_llm_call");
         assertThat(f.kind()).isEqualTo(TransitionFailure.Kind.ACTION_THREW);
         assertThat(f.exceptionType()).hasValue("java.io.IOException");
@@ -102,14 +102,14 @@ class EventStoreToFlowableBridgeTest {
     @Test
     void a_deadline_timeout_is_also_published_on_the_failure_signal() {
         var bridge = new EventStoreToFlowableBridge(EVENT_OUT, EventStore.noop());
-        TestSubscriber<Throwable> failures = bridge.failureSignal().test();
+        TestSubscriber<TransitionFailure> failures = bridge.transitionFailures().test();
 
         bridge.append(new NetEvent.TransitionTimedOut(
                 Instant.now(), "PersistState_Persist",
                 Duration.ofSeconds(5), Duration.ofSeconds(7)));
 
         failures.assertValueCount(1);
-        var f = (TransitionFailure) failures.values().get(0);
+        var f = failures.values().get(0);
         assertThat(f.transitionName()).isEqualTo("PersistState_Persist");
         assertThat(f.kind()).isEqualTo(TransitionFailure.Kind.DEADLINE_EXCEEDED);
         assertThat(f.deadline()).hasValue(Duration.ofSeconds(5));

@@ -88,7 +88,7 @@ import org.libpetri.runtime.PetriNetExecutor;
  *     var execRef = new AtomicReference<PetriNetExecutor>();
  *     var config = LlmStreamingStepSubnet.Config.builder("agent")
  *         .executorRef(execRef).build();
- *     return PetriRunner.builder(structure.bindActions(
+ *     return PetriRunner.builder(SubnetActions.bindComposed(structure,
  *                 LlmStreamingStepSubnet.actionBindings(llm, config)))
  *         .environmentPlace(LlmStreamingStepSubnet.Places.CHUNK)
  *         .deferredExecutorRef(execRef)
@@ -126,6 +126,15 @@ public final class LlmStreamingStepSubnet {
         }
     }
 
+    /**
+     * Configuration for one streaming step: the partial events' author and
+     * invocation id, and the per-session executor reference chunks are
+     * injected through.
+     *
+     * <p>Construct it with {@link #builder}: that is the stable construction
+     * path. The canonical constructor, and with it record patterns over this
+     * type, may change in a 0.x minor as components are added.
+     */
     public record Config(
             String author,
             Supplier<String> invocationIdSupplier,

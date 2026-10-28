@@ -106,7 +106,7 @@ import org.libpetri.adk.colours.AdkColours;
  * limit. See ADR 0005.
  *
  * <h2>Reask-budget invariant</h2>
- * <p>{@code BuildPrompt} seeds {@code N} unit tokens on {@link #REASK_BUDGET}
+ * <p>{@code BuildPrompt} seeds {@code N} unit tokens on {@link Places#REASK_BUDGET}
  * (the configured budget). Each LLM↔tool re-ask consumes one. When the place
  * is empty, the inhibitor-guarded fallback transition answers with the
  * configured {@code fallbackContent} — terminating the loop. Whichever
@@ -119,7 +119,7 @@ import org.libpetri.adk.colours.AdkColours;
  * <p>{@code SubnetDef.Builder} doesn't expose {@code .compose()}; the
  * body net is constructed via {@link PetriNet.Builder#compose} for the
  * step and dispatch subnets plus {@link PetriNet.Builder#transition} for
- * the router's transition (aimed at {@link #ANSWER} and {@link #HANDOFF})
+ * the router's transition (aimed at {@link Places#ANSWER} and {@link Places#HANDOFF})
  * and the agent's own transitions, then wrapped via
  * {@link SubnetDef#fromNet(PetriNet, Interface)}.
  *
@@ -152,48 +152,80 @@ public final class LlmAgentSubnet {
         private Transitions() {}
     }
 
-    /** Internal place — reask-budget counter (cardinality = remaining attempts). */
-    public static final Place<Void> REASK_BUDGET = Place.of(NAME + "_reaskBudget", Void.class);
-
     /**
-     * The turns of the current invocation, oldest first: the user turn, then
-     * each model function-call turn followed by its function-response turn.
-     * {@code BuildPrompt} seeds it; {@code ReAsk} consumes it and writes it
-     * back extended, so every continuation request carries the whole exchange
-     * rather than the tool responses alone. The transition that ends the turn
-     * consumes it.
-     *
-     * <p>Scope is one invocation. History across invocations is the caller's
-     * own typed place, read by their prompt-building transition.
+     * The subnet's own places, internal to the turn. Boundary places are on
+     * {@link AdkColours}.
      */
-    public static final Place<Conversation> CONVERSATION =
-            Place.of(NAME + "_conversation", Conversation.class);
+    public static final class Places {
+        /** Internal place — reask-budget counter (cardinality = remaining attempts). */
+        public static final Place<Void> REASK_BUDGET = Place.of(NAME + "_reaskBudget", Void.class);
 
-    /**
-     * Internal place — marked while a turn is in flight: {@code StartTurn}
-     * trades the {@link AdkColours#TURN_PERMIT} for it, and the transition
-     * that ends the turn trades it back.
-     */
-    public static final Place<Void> TURN_ACTIVE = Place.of(NAME + "_turnActive", Void.class);
+        /**
+         * The turns of the current invocation, oldest first: the user turn, then
+         * each model function-call turn followed by its function-response turn.
+         * {@code BuildPrompt} seeds it; {@code ReAsk} consumes it and writes it
+         * back extended, so every continuation request carries the whole exchange
+         * rather than the tool responses alone. The transition that ends the turn
+         * consumes it.
+         *
+         * <p>Scope is one invocation. History across invocations is the caller's
+         * own typed place, read by their prompt-building transition.
+         */
+        public static final Place<Conversation> CONVERSATION =
+                Place.of(NAME + "_conversation", Conversation.class);
 
-    /** Internal place — the admitted user input, waiting for {@code BuildPrompt}. */
-    public static final Place<Content> TURN_INPUT = Place.of(NAME + "_turnInput", Content.class);
+        /**
+         * Internal place — marked while a turn is in flight: {@code StartTurn}
+         * trades the {@link AdkColours#TURN_PERMIT} for it, and the transition
+         * that ends the turn trades it back.
+         */
+        public static final Place<Void> TURN_ACTIVE = Place.of(NAME + "_turnActive", Void.class);
 
-    /**
-     * Internal place — the turn's final answer: the router's text answer or
-     * the reask-exhausted fallback. {@code EmitAnswer} puts it on
-     * {@link AdkColours#EVENT_OUT} and returns the permit.
-     */
-    public static final Place<Event> ANSWER = Place.of(NAME + "_answer", Event.class);
+        /** Internal place — the admitted user input, waiting for {@code BuildPrompt}. */
+        public static final Place<Content> TURN_INPUT = Place.of(NAME + "_turnInput", Content.class);
 
-    /**
-     * Internal place — the model's hand-off. {@code EmitTransfer} puts it on
-     * {@link AdkColours#TRANSFER} and returns the permit.
-     */
-    public static final Place<AdkColours.TransferTarget> HANDOFF =
-            Place.of(NAME + "_handoff", AdkColours.TransferTarget.class);
+        /**
+         * Internal place — the turn's final answer: the router's text answer or
+         * the reask-exhausted fallback. {@code EmitAnswer} puts it on
+         * {@link AdkColours#EVENT_OUT} and returns the permit.
+         */
+        public static final Place<Event> ANSWER = Place.of(NAME + "_answer", Event.class);
 
-    /** Colour of {@link #CONVERSATION}: the invocation's turns, oldest first. */
+        /**
+         * Internal place — the model's hand-off. {@code EmitTransfer} puts it on
+         * {@link AdkColours#TRANSFER} and returns the permit.
+         */
+        public static final Place<AdkColours.TransferTarget> HANDOFF =
+                Place.of(NAME + "_handoff", AdkColours.TransferTarget.class);
+
+        private Places() {}
+    }
+
+    /** @deprecated Use {@link Places#REASK_BUDGET}, the same place. */
+    @Deprecated
+    public static final Place<Void> REASK_BUDGET = Places.REASK_BUDGET;
+
+    /** @deprecated Use {@link Places#CONVERSATION}, the same place. */
+    @Deprecated
+    public static final Place<Conversation> CONVERSATION = Places.CONVERSATION;
+
+    /** @deprecated Use {@link Places#TURN_ACTIVE}, the same place. */
+    @Deprecated
+    public static final Place<Void> TURN_ACTIVE = Places.TURN_ACTIVE;
+
+    /** @deprecated Use {@link Places#TURN_INPUT}, the same place. */
+    @Deprecated
+    public static final Place<Content> TURN_INPUT = Places.TURN_INPUT;
+
+    /** @deprecated Use {@link Places#ANSWER}, the same place. */
+    @Deprecated
+    public static final Place<Event> ANSWER = Places.ANSWER;
+
+    /** @deprecated Use {@link Places#HANDOFF}, the same place. */
+    @Deprecated
+    public static final Place<AdkColours.TransferTarget> HANDOFF = Places.HANDOFF;
+
+    /** Colour of {@link Places#CONVERSATION}: the invocation's turns, oldest first. */
     public record Conversation(List<Content> turns) {
         public Conversation {
             turns = List.copyOf(turns);
@@ -212,6 +244,10 @@ public final class LlmAgentSubnet {
      * <p>{@code dispatchExecutor} is required: it is the executor passed
      * through to {@link ToolDispatchSubnet#actionBindings} for running the
      * agent's {@link BaseTool}s concurrently. Callers own its lifecycle.
+     *
+     * <p>Construct it with {@link #builder}: that is the stable construction
+     * path. The canonical constructor, and with it record patterns over this
+     * type, may change in a 0.x minor as components are added.
      */
     public record Config(
             String name,
@@ -259,16 +295,17 @@ public final class LlmAgentSubnet {
             private Function<FunctionCall, ToolContext> toolContext = call -> null;
 
             private Builder(String name, String model) {
-                this.name = name;
-                this.model = model;
+                this.name = Objects.requireNonNull(name, "name");
+                this.model = Objects.requireNonNull(model, "model");
             }
 
+            /** Optional; {@code null} leaves the request without a system instruction. */
             public Builder systemInstruction(String text)          { this.systemInstruction = text; return this; }
-            public Builder tools(Map<String, BaseTool> tools)      { this.tools = tools; return this; }
+            public Builder tools(Map<String, BaseTool> tools)      { this.tools = Objects.requireNonNull(tools, "tools"); return this; }
             public Builder reaskBudget(int n)                      { this.reaskBudget = n; return this; }
-            public Builder fallbackContent(Content c)              { this.fallbackContent = c; return this; }
-            public Builder invocationIdSupplier(Supplier<String> s){ this.invocationIdSupplier = s; return this; }
-            public Builder dispatchExecutor(ExecutorService e)     { this.dispatchExecutor = e; return this; }
+            public Builder fallbackContent(Content c)              { this.fallbackContent = Objects.requireNonNull(c, "fallbackContent"); return this; }
+            public Builder invocationIdSupplier(Supplier<String> s){ this.invocationIdSupplier = Objects.requireNonNull(s, "invocationIdSupplier"); return this; }
+            public Builder dispatchExecutor(ExecutorService e)     { this.dispatchExecutor = Objects.requireNonNull(e, "dispatchExecutor"); return this; }
 
             /**
              * Model-call callbacks, forwarded to the composed
@@ -276,7 +313,7 @@ public final class LlmAgentSubnet {
              * them at all, so an LLM error inside a composed agent was
              * unrecoverable even though the step subnet supports handling it.
              */
-            public Builder callbacks(LlmStepSubnet.Callbacks c)    { this.callbacks = c; return this; }
+            public Builder callbacks(LlmStepSubnet.Callbacks c)    { this.callbacks = Objects.requireNonNull(c, "callbacks"); return this; }
 
             /**
              * Builds the {@link ToolContext} handed to one tool call, from the
@@ -284,11 +321,15 @@ public final class LlmAgentSubnet {
              * Defaults to {@code call -> null}, for tools that need no state,
              * artifacts or auth.
              */
-            public Builder toolContext(Function<FunctionCall, ToolContext> f) { this.toolContext = f; return this; }
+            public Builder toolContext(Function<FunctionCall, ToolContext> f) {
+                this.toolContext = Objects.requireNonNull(f, "toolContext");
+                return this;
+            }
 
             /** {@link #toolContext} with one supplier for every call. */
             public Builder toolContextSupplier(Supplier<ToolContext> s) {
-                this.toolContext = s == null ? null : call -> s.get();
+                Objects.requireNonNull(s, "toolContextSupplier");
+                this.toolContext = call -> s.get();
                 return this;
             }
 
@@ -327,41 +368,44 @@ public final class LlmAgentSubnet {
     static SubnetDef<Void> buildComposedDef(String netName, SubnetDef<Void> stepDef) {
         var body = PetriNet.builder(netName)
                 .place(AdkColours.TURN_PERMIT)
-                .place(TURN_ACTIVE)
-                .place(TURN_INPUT)
-                .place(REASK_BUDGET)
-                .place(CONVERSATION)
-                .place(ANSWER)
-                .place(HANDOFF)
+                .place(Places.TURN_ACTIVE)
+                .place(Places.TURN_INPUT)
+                .place(Places.REASK_BUDGET)
+                .place(Places.CONVERSATION)
+                .place(Places.ANSWER)
+                .place(Places.HANDOFF)
                 .transition(Transition.builder(Transitions.START_TURN)
                         .inputs(Arc.In.one(AdkColours.USER_IN), Arc.In.one(AdkColours.TURN_PERMIT))
-                        .outputs(Arc.Out.and(TURN_ACTIVE, TURN_INPUT))
+                        .outputs(Arc.Out.and(Places.TURN_ACTIVE, Places.TURN_INPUT))
                         .build())
                 .transition(Transition.builder(Transitions.BUILD_PROMPT)
-                        .inputs(Arc.In.one(TURN_INPUT))
-                        .outputs(Arc.Out.and(AdkColours.LLM_REQUEST, REASK_BUDGET, CONVERSATION))
+                        .inputs(Arc.In.one(Places.TURN_INPUT))
+                        .outputs(Arc.Out.and(AdkColours.LLM_REQUEST, Places.REASK_BUDGET,
+                                Places.CONVERSATION))
                         .build())
                 .transition(Transition.builder(Transitions.RE_ASK)
-                        .inputs(Arc.In.one(AdkColours.TOOL_RESULTS), Arc.In.one(REASK_BUDGET),
-                                Arc.In.one(CONVERSATION))
-                        .outputs(Arc.Out.and(AdkColours.LLM_REQUEST, CONVERSATION))
+                        .inputs(Arc.In.one(AdkColours.TOOL_RESULTS), Arc.In.one(Places.REASK_BUDGET),
+                                Arc.In.one(Places.CONVERSATION))
+                        .outputs(Arc.Out.and(AdkColours.LLM_REQUEST, Places.CONVERSATION))
                         .priority(10)
                         .build())
                 .transition(Transition.builder(Transitions.RE_ASK_EXHAUSTED_FALLBACK)
                         .inputs(Arc.In.one(AdkColours.TOOL_RESULTS))
-                        .inhibitor(REASK_BUDGET)
-                        .outputs(Arc.Out.place(ANSWER))
+                        .inhibitor(Places.REASK_BUDGET)
+                        .outputs(Arc.Out.place(Places.ANSWER))
                         .priority(-10)
                         .build())
-                .transition(RouterSubnet.routeTransition(HANDOFF, ANSWER))
+                .transition(RouterSubnet.routeTransition(Places.HANDOFF, Places.ANSWER))
                 .transition(Transition.builder(Transitions.EMIT_ANSWER)
-                        .inputs(Arc.In.one(ANSWER), Arc.In.one(TURN_ACTIVE), Arc.In.one(CONVERSATION))
-                        .reset(REASK_BUDGET)
+                        .inputs(Arc.In.one(Places.ANSWER), Arc.In.one(Places.TURN_ACTIVE),
+                                Arc.In.one(Places.CONVERSATION))
+                        .reset(Places.REASK_BUDGET)
                         .outputs(Arc.Out.and(AdkColours.EVENT_OUT, AdkColours.TURN_PERMIT))
                         .build())
                 .transition(Transition.builder(Transitions.EMIT_TRANSFER)
-                        .inputs(Arc.In.one(HANDOFF), Arc.In.one(TURN_ACTIVE), Arc.In.one(CONVERSATION))
-                        .reset(REASK_BUDGET)
+                        .inputs(Arc.In.one(Places.HANDOFF), Arc.In.one(Places.TURN_ACTIVE),
+                                Arc.In.one(Places.CONVERSATION))
+                        .reset(Places.REASK_BUDGET)
                         .outputs(Arc.Out.and(AdkColours.TRANSFER, AdkColours.TURN_PERMIT))
                         .build())
                 .transition(abortTurn(stepDef))
@@ -387,13 +431,14 @@ public final class LlmAgentSubnet {
     }
 
     /**
-     * {@code AbortTurn}: takes the turn's {@link #TURN_ACTIVE} token back for
+     * {@code AbortTurn}: takes the turn's {@link Places#TURN_ACTIVE} token back for
      * the permit and resets every place a turn holds, the step subnet's own
      * places included (all of {@code stepDef}'s places but its egress).
      */
     private static Transition abortTurn(SubnetDef<Void> stepDef) {
         var held = new LinkedHashSet<Place<?>>(List.of(
-                TURN_INPUT, REASK_BUDGET, CONVERSATION, ANSWER, HANDOFF,
+                Places.TURN_INPUT, Places.REASK_BUDGET, Places.CONVERSATION,
+                Places.ANSWER, Places.HANDOFF,
                 AdkColours.LLM_REQUEST, AdkColours.LLM_RESPONSE,
                 AdkColours.TOOL_CALLS, AdkColours.TOOL_RESULTS));
         for (var place : stepDef.body().places()) {
@@ -403,7 +448,7 @@ public final class LlmAgentSubnet {
         // (20) included: a chunk admitted in the same pass as the abort is
         // reset with the turn instead of being emitted as a partial of it.
         var builder = Transition.builder(Transitions.ABORT_TURN)
-                .inputs(Arc.In.one(AdkColours.TURN_ABORT), Arc.In.one(TURN_ACTIVE))
+                .inputs(Arc.In.one(AdkColours.TURN_ABORT), Arc.In.one(Places.TURN_ACTIVE))
                 .outputs(Arc.Out.place(AdkColours.TURN_PERMIT))
                 .priority(30);
         for (var place : held) builder.reset(place);
@@ -437,9 +482,9 @@ public final class LlmAgentSubnet {
                 Transitions.RE_ASK,                    reAskAction(config),
                 Transitions.RE_ASK_EXHAUSTED_FALLBACK, reAskExhaustedFallbackAction(config),
                 RouterSubnet.Transitions.ROUTE,
-                        RouterSubnet.routeAction(routerConfig(config), HANDOFF, ANSWER),
-                Transitions.EMIT_ANSWER,               emitAction(ANSWER, AdkColours.EVENT_OUT),
-                Transitions.EMIT_TRANSFER,             emitAction(HANDOFF, AdkColours.TRANSFER),
+                        RouterSubnet.routeAction(routerConfig(config), Places.HANDOFF, Places.ANSWER),
+                Transitions.EMIT_ANSWER,               emitAction(Places.ANSWER, AdkColours.EVENT_OUT),
+                Transitions.EMIT_TRANSFER,             emitAction(Places.HANDOFF, AdkColours.TRANSFER),
                 Transitions.ABORT_TURN,                abortTurnAction(),
                 Transitions.DROP_ABORT,                ctx -> {
                     ctx.input(AdkColours.TURN_ABORT);   // no turn in flight: nothing to abort
@@ -448,7 +493,9 @@ public final class LlmAgentSubnet {
     }
 
     static RouterSubnet.Config routerConfig(Config c) {
-        return new RouterSubnet.Config(c.name(), c.invocationIdSupplier());
+        return RouterSubnet.Config.builder(c.name())
+                .invocationIdSupplier(c.invocationIdSupplier())
+                .build();
     }
 
     // ======================== Agent-owned actions ========================
@@ -460,27 +507,27 @@ public final class LlmAgentSubnet {
     static TransitionAction startTurnAction() {
         return ctx -> {
             ctx.input(AdkColours.TURN_PERMIT);
-            ctx.output(TURN_INPUT, ctx.input(AdkColours.USER_IN));
-            ctx.output(TURN_ACTIVE, (Void) null);
+            ctx.output(Places.TURN_INPUT, ctx.input(AdkColours.USER_IN));
+            ctx.output(Places.TURN_ACTIVE, (Void) null);
             return CompletableFuture.completedFuture(null);
         };
     }
 
     static TransitionAction buildPromptAction(Config config) {
         return ctx -> {
-            Content userContent = ctx.input(TURN_INPUT);
+            Content userContent = ctx.input(Places.TURN_INPUT);
             var request = LlmRequests.build(
                     config.model(),
                     config.systemInstruction(),
                     config.tools(),
                     List.of(userContent));
             ctx.output(AdkColours.LLM_REQUEST, request);
-            ctx.output(CONVERSATION, new Conversation(List.of(userContent)));
+            ctx.output(Places.CONVERSATION, new Conversation(List.of(userContent)));
 
             // Seed N reask-budget unit tokens. The place is empty: the
             // transition that ended the previous turn reset it.
             for (int i = 0; i < config.reaskBudget(); i++) {
-                ctx.output(REASK_BUDGET, (Void) null);
+                ctx.output(Places.REASK_BUDGET, (Void) null);
             }
             return CompletableFuture.completedFuture(null);
         };
@@ -489,9 +536,9 @@ public final class LlmAgentSubnet {
     static TransitionAction reAskAction(Config config) {
         return ctx -> {
             // Consume the budget token (validated by transition input arc).
-            ctx.input(REASK_BUDGET);
+            ctx.input(Places.REASK_BUDGET);
             AdkColours.ToolResults results = ctx.input(AdkColours.TOOL_RESULTS);
-            Conversation conversation = ctx.input(CONVERSATION);
+            Conversation conversation = ctx.input(Places.CONVERSATION);
 
             // The continuation carries the whole invocation so far: the model's
             // function-call turn goes back verbatim (thought signatures included)
@@ -508,7 +555,7 @@ public final class LlmAgentSubnet {
                     config.systemInstruction(),
                     config.tools(),
                     next.turns()));
-            ctx.output(CONVERSATION, next);
+            ctx.output(Places.CONVERSATION, next);
             return CompletableFuture.completedFuture(null);
         };
     }
@@ -521,7 +568,7 @@ public final class LlmAgentSubnet {
                     .author(config.name())
                     .content(config.fallbackContent())
                     .build();
-            ctx.output(ANSWER, event);
+            ctx.output(Places.ANSWER, event);
             return CompletableFuture.completedFuture(null);
         };
     }
@@ -529,8 +576,8 @@ public final class LlmAgentSubnet {
     /** {@code EmitAnswer} / {@code EmitTransfer}: forward the outcome, end the turn. */
     private static <T> TransitionAction emitAction(Place<T> outcome, Place<T> boundary) {
         return ctx -> {
-            ctx.input(TURN_ACTIVE);
-            ctx.input(CONVERSATION);
+            ctx.input(Places.TURN_ACTIVE);
+            ctx.input(Places.CONVERSATION);
             ctx.output(boundary, ctx.input(outcome));
             ctx.output(AdkColours.TURN_PERMIT, (Void) null);
             return CompletableFuture.completedFuture(null);
@@ -540,7 +587,7 @@ public final class LlmAgentSubnet {
     private static TransitionAction abortTurnAction() {
         return ctx -> {
             ctx.input(AdkColours.TURN_ABORT);
-            ctx.input(TURN_ACTIVE);
+            ctx.input(Places.TURN_ACTIVE);
             ctx.output(AdkColours.TURN_PERMIT, (Void) null);
             return CompletableFuture.completedFuture(null);
         };

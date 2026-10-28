@@ -24,7 +24,7 @@ import org.libpetri.adk.colours.AdkColours;
  * {@link com.google.genai.types.GenerateContentConfig#systemInstruction()}. For multi-turn
  * history, keep the history in a typed in-net place and give your own
  * prompt-building transition a Read arc on it (the in-net
- * conversation-place pattern); {@link LlmAgentSubnet#CONVERSATION} is that
+ * conversation-place pattern); {@link LlmAgentSubnet.Places#CONVERSATION} is that
  * pattern scoped to one invocation's tool loop.
  *
  * <p>Topology:
@@ -35,7 +35,8 @@ import org.libpetri.adk.colours.AdkColours;
  * <p>Configuration is captured at action-binding time via
  * {@link Config} — model name, optional system instruction, optional
  * tool registry. Bind via
- * {@code petriNet.bindActions(PromptBuilderSubnet.actionBindings(config))}.
+ * {@code SubnetActions.bindComposed(petriNet, PromptBuilderSubnet.actionBindings(config), ...)},
+ * which also checks the bindings cover every transition of the host net.
  */
 public final class PromptBuilderSubnet {
 
@@ -46,6 +47,14 @@ public final class PromptBuilderSubnet {
         private Transitions() {}
     }
 
+    /**
+     * Prompt configuration: model name, optional system instruction, tools.
+     *
+     * <p>Construct it with {@link #builder} (or {@link #of}): that is the
+     * stable construction path. The canonical constructor, and with it record
+     * patterns over this type, may change in a 0.x minor as components are
+     * added.
+     */
     public record Config(
             String model,
             Optional<String> systemInstruction,

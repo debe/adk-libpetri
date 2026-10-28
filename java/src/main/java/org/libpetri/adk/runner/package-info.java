@@ -1,7 +1,7 @@
 /**
  * Runner-facing ADK integration APIs.
  *
- * <p>The turn-based path built from {@code PetriAgent.of},
+ * <p>The turn-based path built from {@code PetriAgent.builder},
  * {@code LlmAgentSubnet}, and
  * {@code SessionExecutorRegistry.strongOwned()}/
  * {@code SessionExecutorRegistry.cleanerOwned()} is the settled part of
@@ -11,7 +11,7 @@
  *
  * <p>SSE streaming via {@code StreamingLlmAgentSubnet} with
  * {@code RunConfig.StreamingMode.SSE}, and BIDI/live via
- * {@code PetriAgent.ofLive}, {@code BidiPetriAgent}, and
+ * {@code PetriAgent.Builder.live}, {@code BidiPetriAgent}, and
  * {@code LiveConnection}, are beta surfaces and move faster still: they may
  * change incompatibly in any release, including a 0.x minor.
  * {@code LiveConnection} is genai-transport-specific by design.

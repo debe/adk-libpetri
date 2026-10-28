@@ -1003,7 +1003,7 @@ public class VoiceSessionDemoTest {
             throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMillis;
         while (System.currentTimeMillis() < deadline) {
-            if (runner.executor().isQuiescent() && runner.executor().inFlightCount() == 0) {
+            if (runner.isQuiescent()) {
                 return;
             }
             Thread.sleep(10);

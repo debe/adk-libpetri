@@ -4,6 +4,7 @@ import com.google.adk.events.Event;
 import com.google.genai.types.Content;
 import com.google.genai.types.Part;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -71,9 +72,20 @@ import org.libpetri.adk.colours.AdkColours;
  * </ul>
  *
  * <h2>Usage</h2>
- * <p>Built per-app via {@link #def(Set)} since the topology depends on
- * the known-agent set. {@link #targetPlace(String)} gives the {@link
- * Place} a caller composes against for a particular known name.
+ * <p>Built per-app since the topology depends on the known-agent set.
+ * {@link #forTargets(Set)} returns the definition and its action bindings
+ * from one set, so the two cannot disagree:
+ *
+ * <pre>{@code
+ * var router = TransferRouterSubnet.forTargets(Set.of("billing", "sales"));
+ * var net = SubnetActions.bindComposed(
+ *     PetriNet.builder("app").compose(LlmAgentSubnet.DEF).compose(router.def()).build(),
+ *     LlmAgentSubnet.actionBindings(llm, agentConfig),
+ *     router.actionBindings(TransferRouterSubnet.Config.builder("router").build()));
+ * }</pre>
+ *
+ * <p>{@link Places#targetPlace(String)} gives the {@link Place} a caller
+ * composes against for a particular known name.
  */
 public final class TransferRouterSubnet {
 
@@ -88,20 +100,44 @@ public final class TransferRouterSubnet {
     /** Prefix for per-target output places: {@code "TransferRouter_target/<agentName>"}. */
     public static final String TARGET_PLACE_PREFIX = NAME + "_target/";
 
-    /** The "unknown-target" fallback place — fed when the LLM names an unrecognised agent. */
-    public static final Place<AdkColours.TransferTarget> UNKNOWN_TARGET =
-            Place.of(NAME + "_target/_unknown", AdkColours.TransferTarget.class);
+    /** The subnet's own places: the unknown-target fallback and the per-target outputs. */
+    public static final class Places {
+        /** The "unknown-target" fallback place — fed when the LLM names an unrecognised agent. */
+        public static final Place<AdkColours.TransferTarget> UNKNOWN_TARGET =
+                Place.of(NAME + "_target/_unknown", AdkColours.TransferTarget.class);
 
-    /**
-     * Returns the {@link Place} for a particular known agent name. Use
-     * this when composing the subnet into a host net to wire each
-     * per-target output to a downstream agent's input.
-     */
-    public static Place<AdkColours.TransferTarget> targetPlace(String agentName) {
-        Objects.requireNonNull(agentName, "agentName");
-        return Place.of(TARGET_PLACE_PREFIX + agentName, AdkColours.TransferTarget.class);
+        /**
+         * Returns the {@link Place} for a particular known agent name. Use
+         * this when composing the subnet into a host net to wire each
+         * per-target output to a downstream agent's input.
+         */
+        public static Place<AdkColours.TransferTarget> targetPlace(String agentName) {
+            Objects.requireNonNull(agentName, "agentName");
+            return Place.of(TARGET_PLACE_PREFIX + agentName, AdkColours.TransferTarget.class);
+        }
+
+        private Places() {}
     }
 
+    /** @deprecated Use {@link Places#UNKNOWN_TARGET}, the same place. */
+    @Deprecated
+    public static final Place<AdkColours.TransferTarget> UNKNOWN_TARGET = Places.UNKNOWN_TARGET;
+
+    /** @deprecated Use {@link Places#targetPlace(String)}. */
+    @Deprecated
+    public static Place<AdkColours.TransferTarget> targetPlace(String agentName) {
+        return Places.targetPlace(agentName);
+    }
+
+    /**
+     * Configuration for the unknown-target error event: its author and
+     * invocation id.
+     *
+     * <p>Construct it with {@link #builder} (or {@link #of}): that is the
+     * stable construction path. The canonical constructor, and with it record
+     * patterns over this type, may change in a 0.x minor as components are
+     * added.
+     */
     public record Config(
             String author,
             Supplier<String> invocationIdSupplier) {
@@ -111,14 +147,83 @@ public final class TransferRouterSubnet {
             Objects.requireNonNull(invocationIdSupplier, "invocationIdSupplier");
         }
 
+        /** Default config: caller-supplied author, random UUID per invocation id. */
         public static Config of(String author) {
-            return new Config(author, () -> UUID.randomUUID().toString());
+            return builder(author).build();
+        }
+
+        public static Builder builder(String author) {
+            return new Builder(author);
+        }
+
+        public static final class Builder {
+            private final String author;
+            private Supplier<String> invocationIdSupplier = () -> UUID.randomUUID().toString();
+
+            private Builder(String author) {
+                this.author = Objects.requireNonNull(author, "author");
+            }
+
+            public Builder invocationIdSupplier(Supplier<String> s) {
+                this.invocationIdSupplier = Objects.requireNonNull(s, "invocationIdSupplier");
+                return this;
+            }
+
+            public Config build() {
+                return new Config(author, invocationIdSupplier);
+            }
         }
     }
 
     /**
+     * A router for one known-agent set: its {@link #def()} and its
+     * {@link #actionBindings(Config)}, both built from the same set, so a
+     * net bound with them cannot have a demux whose lookup table disagrees
+     * with its branches. Obtain one with {@link TransferRouterSubnet#forTargets(Set)}.
+     */
+    public static final class Targets {
+        private final Set<String> names;
+        private final SubnetDef<Void> def;
+
+        private Targets(Set<String> names) {
+            this.names = Collections.unmodifiableSet(new LinkedHashSet<>(names));
+            this.def = TransferRouterSubnet.def(this.names);
+        }
+
+        /** The known agent names, in the order the demux branches follow. */
+        public Set<String> names() {
+            return names;
+        }
+
+        /** The subnet definition for {@link #names()}. */
+        public SubnetDef<Void> def() {
+            return def;
+        }
+
+        /** Action bindings for {@link #def()}, validated against it. */
+        public Map<String, TransitionAction> actionBindings(Config config) {
+            return bindings(names, def, config);
+        }
+    }
+
+    /**
+     * The router for {@code knownAgentNames}: one value holding the
+     * definition and the action bindings for that set. Prefer this to
+     * calling {@link #def(Set)} and {@link #actionBindings(Set, Config)}
+     * separately, which take the set twice.
+     *
+     * @param knownAgentNames the compile-time-known set of valid transfer
+     *                        targets; see {@link #def(Set)}
+     */
+    public static Targets forTargets(Set<String> knownAgentNames) {
+        Objects.requireNonNull(knownAgentNames, "knownAgentNames");
+        return new Targets(knownAgentNames);
+    }
+
+    /**
      * Build a {@link SubnetDef} whose XOR demux has one branch per
-     * known agent name plus the {@link #UNKNOWN_TARGET} fallback.
+     * known agent name plus the {@link Places#UNKNOWN_TARGET} fallback.
+     * To bind it as well, use {@link #forTargets(Set)}.
      *
      * @param knownAgentNames the compile-time-known set of valid
      *                        transfer targets. Order is preserved
@@ -134,13 +239,13 @@ public final class TransferRouterSubnet {
         // Build per-target output places (in insertion order) + the unknown sink.
         var targets = new LinkedHashMap<String, Place<AdkColours.TransferTarget>>();
         for (var name : orderedNames) {
-            targets.put(name, targetPlace(name));
+            targets.put(name, Places.targetPlace(name));
         }
 
         // Collect all output children: per-target places + unknown.
         var allOutPlaces = new ArrayList<Place<?>>(orderedNames.size() + 1);
         allOutPlaces.addAll(targets.values());
-        allOutPlaces.add(UNKNOWN_TARGET);
+        allOutPlaces.add(Places.UNKNOWN_TARGET);
 
         // Out.xor demands >=2 children. When the known-agent set is empty,
         // there's only the unknown branch — degrade to Out.place so the
@@ -155,7 +260,7 @@ public final class TransferRouterSubnet {
                 .build();
 
         var emitUnknown = Transition.builder(Transitions.EMIT_UNKNOWN_ERROR)
-                .inputs(Arc.In.one(UNKNOWN_TARGET))
+                .inputs(Arc.In.one(Places.UNKNOWN_TARGET))
                 .outputs(Arc.Out.place(AdkColours.EVENT_OUT))
                 .build();
 
@@ -171,7 +276,7 @@ public final class TransferRouterSubnet {
         for (var entry : targets.entrySet()) {
             ifaceBuilder.outputPort("target/" + entry.getKey(), entry.getValue());
         }
-        ifaceBuilder.outputPort("target/_unknown", UNKNOWN_TARGET);
+        ifaceBuilder.outputPort("target/_unknown", Places.UNKNOWN_TARGET);
 
         return SubnetDef.fromNet(body, ifaceBuilder.build());
     }
@@ -180,21 +285,30 @@ public final class TransferRouterSubnet {
      * Action bindings for the subnet. Pass the same set of known names
      * used when calling {@link #def(Set)} — the action's lookup table
      * is built from it.
+     *
+     * @deprecated Use {@link #forTargets(Set)}, whose
+     *             {@link Targets#actionBindings(Config)} cannot be given a
+     *             different set from its {@link Targets#def()}.
      */
+    @Deprecated
     public static Map<String, TransitionAction> actionBindings(Set<String> knownAgentNames, Config config) {
         Objects.requireNonNull(knownAgentNames, "knownAgentNames");
-        Objects.requireNonNull(config, "config");
         var orderedNames = new LinkedHashSet<>(knownAgentNames);
+        return bindings(orderedNames, def(orderedNames), config);
+    }
 
+    private static Map<String, TransitionAction> bindings(
+            Set<String> orderedNames, SubnetDef<Void> def, Config config) {
+        Objects.requireNonNull(config, "config");
         var lookupByName = new LinkedHashMap<String, Place<AdkColours.TransferTarget>>();
         for (var name : orderedNames) {
-            lookupByName.put(name, targetPlace(name));
+            lookupByName.put(name, Places.targetPlace(name));
         }
 
         var session = new LinkedHashMap<String, TransitionAction>();
         session.put(Transitions.DEMUX,              demuxAction(lookupByName));
         session.put(Transitions.EMIT_UNKNOWN_ERROR, emitUnknownErrorAction(config));
-        return SubnetActions.bind(def(orderedNames), session);
+        return SubnetActions.bind(def, session);
     }
 
     private static TransitionAction demuxAction(Map<String, Place<AdkColours.TransferTarget>> lookup) {
@@ -204,7 +318,7 @@ public final class TransferRouterSubnet {
             if (destination != null) {
                 ctx.output(destination, target);
             } else {
-                ctx.output(UNKNOWN_TARGET, target);
+                ctx.output(Places.UNKNOWN_TARGET, target);
             }
             return CompletableFuture.completedFuture(null);
         };
@@ -212,7 +326,7 @@ public final class TransferRouterSubnet {
 
     private static TransitionAction emitUnknownErrorAction(Config config) {
         return ctx -> {
-            AdkColours.TransferTarget bad = ctx.input(UNKNOWN_TARGET);
+            AdkColours.TransferTarget bad = ctx.input(Places.UNKNOWN_TARGET);
             String message = "Cannot transfer to unknown agent: '" + bad.agentName() + "'";
             Event errorEvent = Event.builder()
                     .invocationId(config.invocationIdSupplier().get())

@@ -61,7 +61,9 @@ import org.libpetri.adk.colours.AdkColours;
  * exactly-one production per fire.
  *
  * <p>Users compose by {@code PetriNet.builder("…").compose(LlmStepSubnet.DEF)}
- * and bind actions via {@code petriNet.bindActions(LlmStepSubnet.actionBindings(baseLlm, callbacks))}.
+ * and bind actions via
+ * {@code SubnetActions.bindComposed(petriNet, LlmStepSubnet.actionBindings(baseLlm, callbacks), ...)},
+ * which also checks the bindings cover every transition of the host net.
  */
 public final class LlmStepSubnet {
 
@@ -93,6 +95,11 @@ public final class LlmStepSubnet {
     /**
      * Optional user callbacks. Use {@link #none()} for the
      * pass-through-only configuration.
+     *
+     * <p>Construct it with {@link #builder} (or {@link #none}): that is the
+     * stable construction path. The canonical constructor, and with it record
+     * patterns over this type, may change in a 0.x minor as components are
+     * added.
      */
     public record Callbacks(
             Optional<BeforeModelCallback> beforeModel,
@@ -190,7 +197,7 @@ public final class LlmStepSubnet {
 
     /**
      * Full binding map for this subnet — keyed by the {@link Transitions}
-     * constants, ready to merge into {@link org.libpetri.core.PetriNet#bindActions(Map)}.
+     * constants, ready to pass to {@link SubnetActions#bindComposed}.
      * Validated via {@link SubnetActions#bind}.
      */
     public static Map<String, TransitionAction> actionBindings(BaseLlm baseLlm, Callbacks callbacks) {

@@ -1,5 +1,6 @@
 package org.libpetri.adk.runner;
 
+import java.lang.System.Logger.Level;
 import java.lang.ref.Cleaner;
 import java.lang.ref.Reference;
 import java.lang.ref.WeakReference;
@@ -13,8 +14,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Function;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import org.libpetri.adk.Experimental;
 import org.libpetri.core.Token;
 import org.libpetri.runtime.TerminationReason;
@@ -107,7 +106,13 @@ import org.libpetri.runtime.TerminationReason;
  * drain to quiescence within the checkpoint timeout (or that ends any
  * other way) has its checkpoint removed rather than left stale, and the
  * next runner starts fresh. {@link #discard(SessionKey)} ends a session
- * without saving it.
+ * without saving it. Build one with {@link #builder()}:
+ *
+ * <pre>{@code
+ * var registry = SessionExecutorRegistry.builder()
+ *     .checkpoints(store)
+ *     .build();   // strong-owned; .cleanerOwned() for the Cleaner mode
+ * }</pre>
  */
 public final class SessionExecutorRegistry implements AutoCloseable {
 
@@ -132,7 +137,7 @@ public final class SessionExecutorRegistry implements AutoCloseable {
         @Override public String toString() { return "<no owner>"; }
     };
 
-    private static final Logger LOG = Logger.getLogger(SessionExecutorRegistry.class.getName());
+    private static final System.Logger LOG = System.getLogger(SessionExecutorRegistry.class.getName());
 
     /**
      * How long a checkpointing teardown waits, by default, for a session to
@@ -210,23 +215,29 @@ public final class SessionExecutorRegistry implements AutoCloseable {
      * {@link #cleanerOwned()} that also saves each session's final marking
      * to {@code checkpoints} when its runner is torn down. See
      * {@link SessionCheckpointStore} and the class javadoc.
+     *
+     * @deprecated Use {@code builder().cleanerOwned().checkpoints(checkpoints).build()}.
      */
+    @Deprecated
     @Experimental
     public static SessionExecutorRegistry cleanerOwned(SessionCheckpointStore checkpoints) {
-        return cleanerOwned(checkpoints, DEFAULT_CHECKPOINT_TIMEOUT);
+        return builder().cleanerOwned().checkpoints(checkpoints).build();
     }
 
     /**
      * {@link #cleanerOwned(SessionCheckpointStore)} with a bound other than
      * {@link #DEFAULT_CHECKPOINT_TIMEOUT} on how long teardown waits for a
      * session to drain before it gives up on saving it.
+     *
+     * @deprecated Use {@code builder().cleanerOwned().checkpoints(checkpoints)
+     *             .checkpointTimeout(checkpointTimeout).build()}.
      */
+    @Deprecated
     @Experimental
     public static SessionExecutorRegistry cleanerOwned(SessionCheckpointStore checkpoints,
                                                        Duration checkpointTimeout) {
-        return new SessionExecutorRegistry(Mode.CLEANER,
-                Objects.requireNonNull(checkpoints, "checkpoints"),
-                Objects.requireNonNull(checkpointTimeout, "checkpointTimeout"));
+        return builder().cleanerOwned().checkpoints(checkpoints)
+                .checkpointTimeout(checkpointTimeout).build();
     }
 
     /**
@@ -243,23 +254,96 @@ public final class SessionExecutorRegistry implements AutoCloseable {
      * to {@code checkpoints} on {@link #close(SessionKey)} and
      * {@link #closeAll()}. See {@link SessionCheckpointStore} and the class
      * javadoc.
+     *
+     * @deprecated Use {@code builder().checkpoints(checkpoints).build()}.
      */
+    @Deprecated
     @Experimental
     public static SessionExecutorRegistry strongOwned(SessionCheckpointStore checkpoints) {
-        return strongOwned(checkpoints, DEFAULT_CHECKPOINT_TIMEOUT);
+        return builder().checkpoints(checkpoints).build();
     }
 
     /**
      * {@link #strongOwned(SessionCheckpointStore)} with a bound other than
      * {@link #DEFAULT_CHECKPOINT_TIMEOUT} on how long teardown waits for a
      * session to drain before it gives up on saving it.
+     *
+     * @deprecated Use {@code builder().checkpoints(checkpoints)
+     *             .checkpointTimeout(checkpointTimeout).build()}.
      */
+    @Deprecated
     @Experimental
     public static SessionExecutorRegistry strongOwned(SessionCheckpointStore checkpoints,
                                                       Duration checkpointTimeout) {
-        return new SessionExecutorRegistry(Mode.STRONG,
-                Objects.requireNonNull(checkpoints, "checkpoints"),
-                Objects.requireNonNull(checkpointTimeout, "checkpointTimeout"));
+        return builder().checkpoints(checkpoints).checkpointTimeout(checkpointTimeout).build();
+    }
+
+    /**
+     * A builder covering every registry variant: strong- or cleaner-owned,
+     * with or without a checkpoint store. Strong-owned, the documented
+     * default, unless {@link Builder#cleanerOwned()} is called.
+     * {@link #strongOwned()} and {@link #cleanerOwned()} remain the short
+     * forms for a registry without checkpoints.
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /** Builder for {@link SessionExecutorRegistry}; start with {@link SessionExecutorRegistry#builder()}. */
+    public static final class Builder {
+        private Mode mode = Mode.STRONG;
+        private SessionCheckpointStore checkpoints;
+        private Duration checkpointTimeout;
+
+        private Builder() {}
+
+        /** Entries live until {@code close(SessionKey)}; the default. See {@link SessionExecutorRegistry#strongOwned()}. */
+        public Builder strongOwned() {
+            this.mode = Mode.STRONG;
+            return this;
+        }
+
+        /** Entries are torn down when their lifetime owner is collected. See {@link SessionExecutorRegistry#cleanerOwned()}. */
+        public Builder cleanerOwned() {
+            this.mode = Mode.CLEANER;
+            return this;
+        }
+
+        /**
+         * Save each session's final marking to {@code checkpoints} when its
+         * runner is torn down. See {@link SessionCheckpointStore} and the
+         * {@link SessionExecutorRegistry} class javadoc.
+         */
+        @Experimental
+        public Builder checkpoints(SessionCheckpointStore checkpoints) {
+            this.checkpoints = Objects.requireNonNull(checkpoints, "checkpoints");
+            return this;
+        }
+
+        /**
+         * How long teardown waits for a session to drain before it gives up
+         * on saving it; {@link SessionExecutorRegistry#DEFAULT_CHECKPOINT_TIMEOUT}
+         * when unset.
+         * Needs {@link #checkpoints}.
+         */
+        @Experimental
+        public Builder checkpointTimeout(Duration checkpointTimeout) {
+            this.checkpointTimeout = Objects.requireNonNull(checkpointTimeout, "checkpointTimeout");
+            return this;
+        }
+
+        /**
+         * @throws IllegalStateException if a checkpoint timeout was set
+         *                               without a checkpoint store
+         */
+        public SessionExecutorRegistry build() {
+            if (checkpointTimeout != null && checkpoints == null) {
+                throw new IllegalStateException(
+                        "checkpointTimeout bounds the checkpoint save; set checkpoints(store) too.");
+            }
+            return new SessionExecutorRegistry(mode, checkpoints,
+                    checkpointTimeout == null ? DEFAULT_CHECKPOINT_TIMEOUT : checkpointTimeout);
+        }
     }
 
     /**
@@ -442,11 +526,22 @@ public final class SessionExecutorRegistry implements AutoCloseable {
     }
 
     /**
-     * Returns the runner if present (no creation), or {@code null}. A
-     * runner being torn down is no longer present.
+     * Returns the runner if present (no creation). A runner being torn down
+     * is no longer present.
      */
+    public Optional<PetriRunner> find(SessionKey key) {
+        Objects.requireNonNull(key, "key");
+        return slots.get(key) instanceof Slot.Live live ? Optional.of(live.runner()) : Optional.empty();
+    }
+
+    /**
+     * Returns the runner if present (no creation), or {@code null}.
+     *
+     * @deprecated Use {@link #find(SessionKey)}.
+     */
+    @Deprecated
     public PetriRunner get(SessionKey key) {
-        return slots.get(key) instanceof Slot.Live live ? live.runner() : null;
+        return find(key).orElse(null);
     }
 
     /** Number of sessions with a serving runner; one being torn down no longer counts. */
@@ -587,10 +682,10 @@ public final class SessionExecutorRegistry implements AutoCloseable {
     private void saveFinalMarking(SessionKey key, PetriRunner runner) {
         if (!runner.awaitTermination(checkpointTimeout)) {
             if (Thread.currentThread().isInterrupted()) {
-                LOG.warning(() -> "Interrupted while session " + key + " drained; not "
-                        + "checkpointed, and its earlier checkpoint is removed.");
+                LOG.log(Level.WARNING, () -> "Interrupted while session " + key + " drained; "
+                        + "not checkpointed, and its earlier checkpoint is removed.");
             } else {
-                LOG.warning(() -> "Session " + key + " did not drain within "
+                LOG.log(Level.WARNING, () -> "Session " + key + " did not drain within "
                         + checkpointTimeout + "; not checkpointed, and its earlier "
                         + "checkpoint is removed.");
             }
@@ -601,15 +696,15 @@ public final class SessionExecutorRegistry implements AutoCloseable {
         try {
             marking = runner.checkpointMarking();
         } catch (RuntimeException e) {
-            LOG.log(Level.WARNING, e, () -> "Session " + key + " cannot be checkpointed; "
-                    + "its earlier checkpoint is removed.");
+            LOG.log(Level.WARNING, () -> "Session " + key + " cannot be checkpointed; "
+                    + "its earlier checkpoint is removed.", e);
             removeCheckpoint(key);
             return;
         }
         if (marking.isEmpty()) {
-            TerminationReason reason = runner.executor().terminationReason();
+            TerminationReason reason = runner.terminationReason();
             // A terminal place is a designed end: nothing to resume, nothing to warn about.
-            LOG.log(reason == TerminationReason.TERMINAL ? Level.FINE : Level.WARNING,
+            LOG.log(reason == TerminationReason.TERMINAL ? Level.DEBUG : Level.WARNING,
                     () -> "Session " + key + " ended " + reason + ", not quiescent after "
                             + "its drain, so there is no marking to resume from; its "
                             + "earlier checkpoint is removed.");
@@ -619,8 +714,8 @@ public final class SessionExecutorRegistry implements AutoCloseable {
         try {
             checkpoints.save(key, marking.get());
         } catch (RuntimeException e) {
-            LOG.log(Level.WARNING, e, () -> "Checkpointing session " + key + " failed; "
-                    + "its earlier checkpoint is removed.");
+            LOG.log(Level.WARNING, () -> "Checkpointing session " + key + " failed; "
+                    + "its earlier checkpoint is removed.", e);
             removeCheckpoint(key);
         } catch (Error e) {
             removeCheckpoint(key);
@@ -634,8 +729,8 @@ public final class SessionExecutorRegistry implements AutoCloseable {
         try {
             checkpoints.remove(key);
         } catch (RuntimeException e) {
-            LOG.log(Level.WARNING, e, () -> "Removing the checkpoint of session " + key
-                    + " failed; a later resume may restore an older marking.");
+            LOG.log(Level.WARNING, () -> "Removing the checkpoint of session " + key
+                    + " failed; a later resume may restore an older marking.", e);
         }
     }
 

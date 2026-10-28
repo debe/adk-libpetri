@@ -1,6 +1,7 @@
 package org.libpetri.adk.subnet;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -30,11 +31,12 @@ import org.libpetri.core.TransitionAction;
  * the merged keys against the composed net's transitions:
  *
  * <pre>{@code
+ * var router = TransferRouterSubnet.forTargets(targets);
  * var net = SubnetActions.bindComposed(
  *     PetriNet.builder("app").compose(LlmAgentSubnet.DEF)
- *         .compose(TransferRouterSubnet.def(targets)).build(),
+ *         .compose(router.def()).build(),
  *     LlmAgentSubnet.actionBindings(llm, agentConfig),
- *     TransferRouterSubnet.actionBindings(targets, routerConfig));
+ *     router.actionBindings(routerConfig));
  * }</pre>
  */
 public final class SubnetActions {
@@ -43,7 +45,8 @@ public final class SubnetActions {
 
     /**
      * Validates that {@code session}'s keys exactly match the transition
-     * names declared by {@code def}, then returns {@code session} unchanged.
+     * names declared by {@code def}, then returns an unmodifiable copy of
+     * {@code session}, in its iteration order.
      *
      * @throws IllegalStateException if a declared transition has no binding
      *                               or a binding key matches no declared
@@ -52,12 +55,13 @@ public final class SubnetActions {
     public static Map<String, TransitionAction> bind(
             SubnetDef<?> def, Map<String, TransitionAction> session) {
         validate(def, session);
-        return session;
+        return Collections.unmodifiableMap(new LinkedHashMap<>(session));
     }
 
     /**
      * Merges {@code stateless} ctx-only actions with the caller-supplied
      * {@code session} actions, then validates the union against {@code def}.
+     * Returns the union unmodifiable.
      *
      * @throws IllegalStateException if the two maps bind the same transition,
      *                               or if the union does not exactly cover
@@ -77,12 +81,12 @@ public final class SubnetActions {
             }
         }
         validate(def, merged);
-        return merged;
+        return Collections.unmodifiableMap(merged);
     }
 
     /**
      * Merges binding maps in order, rejecting any transition bound by more
-     * than one of them.
+     * than one of them. Returns the merged map unmodifiable.
      *
      * @throws IllegalStateException if two maps bind the same transition
      */
@@ -97,7 +101,7 @@ public final class SubnetActions {
                 }
             }
         }
-        return merged;
+        return Collections.unmodifiableMap(merged);
     }
 
     /**

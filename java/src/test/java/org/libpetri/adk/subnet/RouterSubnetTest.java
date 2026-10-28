@@ -165,8 +165,9 @@ class RouterSubnetTest {
     @Test
     void invocation_id_supplier_called_per_event_emission() {
         var counter = new AtomicInteger();
-        var config = new RouterSubnet.Config("agent",
-                () -> "inv-" + counter.incrementAndGet());
+        var config = RouterSubnet.Config.builder("agent")
+                .invocationIdSupplier(() -> "inv-" + counter.incrementAndGet())
+                .build();
 
         var fixture = run(config, textResponse("a"), textResponse("b"));
 
@@ -180,7 +181,9 @@ class RouterSubnetTest {
     // ============================================================
 
     private static RouterSubnet.Config routerConfig(String author) {
-        return new RouterSubnet.Config(author, () -> "invocation-fixed");
+        return RouterSubnet.Config.builder(author)
+                .invocationIdSupplier(() -> "invocation-fixed")
+                .build();
     }
 
     private static LlmResponse textResponse(String text) {

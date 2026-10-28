@@ -36,6 +36,23 @@ class SubnetActionsTest {
     }
 
     @Test
+    void merge_and_bind_return_unmodifiable_maps() {
+        var merged = SubnetActions.merge(Map.of("first", ONE), Map.of("second", TWO));
+        assertThrows(UnsupportedOperationException.class, () -> merged.put("third", ONE));
+
+        var def = org.libpetri.core.SubnetDef.fromNet(twoStepNet(),
+                org.libpetri.core.Interface.builder().build());
+        var session = new java.util.HashMap<>(Map.of("first", ONE, "second", TWO));
+        var bound = SubnetActions.bind(def, session);
+        assertThrows(UnsupportedOperationException.class, () -> bound.remove("first"));
+        // A copy: a later change to the caller's map cannot unvalidate it.
+        session.remove("first");
+        assertThat(bound).containsKey("first");
+        assertThrows(UnsupportedOperationException.class,
+                () -> SubnetActions.bind(def, Map.of("first", ONE), Map.of("second", TWO)).clear());
+    }
+
+    @Test
     void merge_rejects_a_transition_bound_twice() {
         var e = assertThrows(IllegalStateException.class,
                 () -> SubnetActions.merge(Map.of("first", ONE), Map.of("first", TWO)));

@@ -1,7 +1,7 @@
 /**
  * Colour declarations shared by the ADK Petri integration.
  *
- * <p>The turn-based path built from {@code PetriAgent.of},
+ * <p>The turn-based path built from {@code PetriAgent.builder},
  * {@code LlmAgentSubnet}, and
  * {@code SessionExecutorRegistry.strongOwned()}/
  * {@code SessionExecutorRegistry.cleanerOwned()} is the settled part of

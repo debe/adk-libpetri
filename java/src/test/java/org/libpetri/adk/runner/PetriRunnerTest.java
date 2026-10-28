@@ -352,8 +352,9 @@ class PetriRunnerTest {
         runner.signal(AdkColours.END_INVOCATION).get(1, TimeUnit.SECONDS);
 
         assertThat(runner.awaitTermination(Duration.ofSeconds(2))).isTrue();
-        assertThat(runner.executor().terminationReason())
+        assertThat(runner.terminationReason())
                 .isEqualTo(org.libpetri.runtime.TerminationReason.TERMINAL);
+        assertThat(runner.isQuiescent()).isTrue();
         egress.assertComplete();
     }
 

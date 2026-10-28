@@ -176,7 +176,7 @@ class AdkNetInvariantsTest {
     void unknown_target_without_consumer_reports_violation() {
         // Manually wire just the unknown place with no consumer.
         var net = PetriNet.builder("orphan-unknown")
-                .place(TransferRouterSubnet.UNKNOWN_TARGET)
+                .place(TransferRouterSubnet.Places.UNKNOWN_TARGET)
                 .build();
 
         var violations = AdkNetInvariants.transferDemuxHasUnknownFallback(net);

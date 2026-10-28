@@ -44,7 +44,7 @@ import com.google.adk.events.Event;
  *       a {@code Place<Scroll> SCROLL_IN}.</li>
  *   <li>The runner exposes a uniform {@link PetriRunner#inject(Place,
  *       Object)} surface — a non-ADK thread looks up the per-session
- *       runner via {@link SessionExecutorRegistry#get(SessionKey)} and
+ *       runner via {@link SessionExecutorRegistry#find(SessionKey)} and
  *       injects without going through the ADK adapter.</li>
  *   <li>The ADK egress
  *       (`{@code runner.adkEvents()}` watching {@code EVENT_OUT})
@@ -145,7 +145,7 @@ class ScrollAwareDemoTest {
 
             // ============================================================
             // 3. Force the per-session runner to be created BEFORE we
-            //    inject scrolls — otherwise registry.get(key) is null
+            //    inject scrolls — otherwise registry.find(key) is empty
             //    (no active runner yet). The realistic application pattern
             //    is identical: the session-start path (e.g. websocket open)
             //    drives runner creation before any side-channel inject.
@@ -179,7 +179,7 @@ class ScrollAwareDemoTest {
             try (var scroller = Executors.newSingleThreadExecutor()) {
                 CompletableFuture.runAsync(() -> {
                     for (int i = 0; i < 5; i++) {
-                        registry.get(sessionKey)
+                        registry.find(sessionKey).orElseThrow()
                                 .inject(SCROLL_IN, new Scroll(0, 40))
                                 .join();
                     }
@@ -191,7 +191,7 @@ class ScrollAwareDemoTest {
             // is in the env place; we need the recording transition to have
             // completed for SCROLL_COUNT to reflect the new total before
             // T_Echo reads it.
-            awaitQuiescent(registry.get(sessionKey), 2_000);
+            awaitQuiescent(registry.find(sessionKey).orElseThrow(), 2_000);
 
             // ============================================================
             // 5. Drive an ADK turn. T_Echo reads SCROLL_COUNT and emits
@@ -251,7 +251,7 @@ class ScrollAwareDemoTest {
     private static void awaitQuiescent(PetriRunner runner, long timeoutMillis) throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMillis;
         while (System.currentTimeMillis() < deadline) {
-            if (runner.executor().isQuiescent() && runner.executor().inFlightCount() == 0) {
+            if (runner.isQuiescent()) {
                 return;
             }
             Thread.sleep(10);

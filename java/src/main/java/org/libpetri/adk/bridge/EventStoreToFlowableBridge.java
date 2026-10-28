@@ -54,7 +54,7 @@ public final class EventStoreToFlowableBridge implements EventStore {
      * unit of work: the ADK adapter fails the turn that was in flight and
      * leaves the session usable.
      */
-    private final PublishProcessor<Throwable> failures = PublishProcessor.create();
+    private final PublishProcessor<TransitionFailure> failures = PublishProcessor.create();
 
     /** Bridge chained on top of another event store. */
     public EventStoreToFlowableBridge(Place<Event> eventOutPlace, EventStore delegate) {
@@ -109,8 +109,20 @@ public final class EventStoreToFlowableBridge implements EventStore {
      * decorator chain, which sees every {@code TransitionFailed} regardless of
      * whether anyone subscribes here.
      */
-    public Flowable<Throwable> failureSignal() {
+    public Flowable<TransitionFailure> transitionFailures() {
         return failures.hide();
+    }
+
+    /**
+     * {@link #transitionFailures()} typed as {@code Throwable}.
+     *
+     * @deprecated Use {@link #transitionFailures()}, which keeps the
+     *             {@link TransitionFailure} type. (The bridge cannot name it
+     *             {@code failures()}: {@link EventStore#failures()} is taken.)
+     */
+    @Deprecated
+    public Flowable<Throwable> failureSignal() {
+        return transitionFailures().cast(Throwable.class);
     }
 
     /** Subscribers see every Event token produced into the configured output place. */

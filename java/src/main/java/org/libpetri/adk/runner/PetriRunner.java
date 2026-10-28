@@ -28,6 +28,7 @@ import org.libpetri.core.Token;
 import org.libpetri.event.EventStore;
 import org.libpetri.adk.Experimental;
 import org.libpetri.adk.bridge.EventStoreToFlowableBridge;
+import org.libpetri.adk.bridge.TransitionFailure;
 import org.libpetri.adk.colours.AdkColours;
 import org.libpetri.runtime.BitmapNetExecutor;
 import org.libpetri.runtime.CompiledNet;
@@ -227,8 +228,19 @@ public final class PetriRunner implements AutoCloseable {
      * {@link EventStore} decorator chain, which sees every failure whether or
      * not anyone subscribes here.
      */
+    public Flowable<TransitionFailure> failures() {
+        return bridge.transitionFailures();
+    }
+
+    /**
+     * {@link #failures()} typed as {@code Throwable}.
+     *
+     * @deprecated Use {@link #failures()}, which keeps the
+     *             {@link TransitionFailure} type.
+     */
+    @Deprecated
     public Flowable<Throwable> failureSignal() {
-        return bridge.failureSignal();
+        return failures().cast(Throwable.class);
     }
 
     /**
@@ -300,6 +312,26 @@ public final class PetriRunner implements AutoCloseable {
     }
 
     /**
+     * Why the run ended, or {@link TerminationReason#RUNNING} while it is
+     * still going: the executor's own state, read without reaching for
+     * {@link #executor()}. Safe to read from any thread.
+     */
+    public TerminationReason terminationReason() {
+        return executor.terminationReason();
+    }
+
+    /**
+     * Whether the net is at rest: no transition is enabled and no action is
+     * in flight. A long-lived net waiting on its environment places sits
+     * here between inputs. libpetri does not synchronise this read with the
+     * orchestrator thread, so from any other thread it is a hint: poll it
+     * until it holds rather than act on a single read.
+     */
+    public boolean isQuiescent() {
+        return executor.isQuiescent();
+    }
+
+    /**
      * The current marking of a running net, keyed by place name: libpetri's
      * {@code snapshot()}, the form {@link Builder#restore(Map)} takes back.
      * Only a result whose {@link SnapshotResult#isRestorePoint()} holds is
@@ -327,7 +359,7 @@ public final class PetriRunner implements AutoCloseable {
      *         one name, which the name-keyed form cannot tell apart
      */
     Optional<Map<String, List<Token<?>>>> checkpointMarking() {
-        if (executor.terminationReason() != TerminationReason.QUIESCENT) {
+        if (terminationReason() != TerminationReason.QUIESCENT) {
             return Optional.empty();
         }
         Marking.resolveSnapshot(Map.of(), net.places());   // rejects shared names
@@ -716,7 +748,10 @@ public final class PetriRunner implements AutoCloseable {
          * the handle only exists after build. Pass the same reference you gave
          * to the subnet's {@code Config.executorRef(...)}; this removes the
          * manual post-build {@code ref.set(...)} step and its ordering trap.
+         *
+         * <p>Beta, like the streaming subnets it serves.
          */
+        @Experimental
         public Builder deferredExecutorRef(AtomicReference<PetriNetExecutor> ref) {
             this.deferredExecutorRef = Objects.requireNonNull(ref, "deferredExecutorRef");
             return this;

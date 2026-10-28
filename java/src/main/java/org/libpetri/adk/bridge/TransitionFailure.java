@@ -8,7 +8,7 @@ import org.libpetri.event.NetEvent;
 
 /**
  * A transition failure, carried on
- * {@link org.libpetri.adk.runner.PetriRunner#failureSignal()} with its identity
+ * {@link org.libpetri.adk.runner.PetriRunner#failures()} with its identity
  * intact.
  *
  * <p>libpetri reports failures as structured {@link NetEvent} records. This used

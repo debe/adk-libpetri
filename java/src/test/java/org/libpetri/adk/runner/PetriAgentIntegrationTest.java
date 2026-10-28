@@ -84,12 +84,11 @@ class PetriAgentIntegrationTest {
         // The same factory each session-runner uses to build its long-lived net.
         var registry = tracked(SessionExecutorRegistry.cleanerOwned());
         var sessionOwners = sessionOwnerMap();
-        var agent = PetriAgent.of(
-                "petri_agent",
-                "Petri-backed LLM agent",
-                registry,
-                key -> petriRunner(llm, "petri_agent"),
-                ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()));
+        var agent = PetriAgent.builder("petri_agent", registry,
+                key -> petriRunner(llm, "petri_agent"))
+                .description("Petri-backed LLM agent")
+                .ownerExtractor(ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()))
+                .build();
 
         // Stock InMemoryRunner — no fork, no special wiring.
         var adkRunner = new InMemoryRunner(agent);
@@ -120,12 +119,11 @@ class PetriAgentIntegrationTest {
 
         var registry = tracked(SessionExecutorRegistry.cleanerOwned());
         var sessionOwners = sessionOwnerMap();
-        var agent = PetriAgent.of(
-                "long_lived",
-                "stays alive across messages",
-                registry,
-                key -> petriRunner(llm, "long_lived"),
-                ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()));
+        var agent = PetriAgent.builder("long_lived", registry,
+                key -> petriRunner(llm, "long_lived"))
+                .description("stays alive across messages")
+                .ownerExtractor(ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()))
+                .build();
 
         var adkRunner = new InMemoryRunner(agent);
         var session = adkRunner.sessionService()
@@ -165,12 +163,11 @@ class PetriAgentIntegrationTest {
 
         var registry = tracked(SessionExecutorRegistry.cleanerOwned());
         var sessionOwners = sessionOwnerMap();
-        var agent = PetriAgent.of(
-                "live_agent",
-                "BIDI bridge test",
-                registry,
-                key -> petriRunner(llm, "live_agent"),
-                ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()));
+        var agent = PetriAgent.builder("live_agent", registry,
+                key -> petriRunner(llm, "live_agent"))
+                .description("BIDI bridge test")
+                .ownerExtractor(ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()))
+                .build();
 
         var adkRunner = new InMemoryRunner(agent);
         var session = adkRunner.sessionService()
@@ -189,11 +186,10 @@ class PetriAgentIntegrationTest {
         // PetriRunner; once it's in the registry we can inject directly.
         // We wait briefly for runLiveImpl to populate the registry.
         var sessionKey = SessionKey.from(session);
-        for (int i = 0; i < 50 && registry.get(sessionKey) == null; i++) {
+        for (int i = 0; i < 50 && registry.find(sessionKey).isEmpty(); i++) {
             Thread.sleep(20);
         }
-        var runner = registry.get(sessionKey);
-        assertThat(runner).isNotNull();
+        var runner = registry.find(sessionKey).orElseThrow();
         runner.inject(AdkColours.USER_IN, userMessage("hi live"))
                 .get(2, TimeUnit.SECONDS);
 
@@ -210,12 +206,11 @@ class PetriAgentIntegrationTest {
 
         var registry = tracked(SessionExecutorRegistry.cleanerOwned());
         var sessionOwners = sessionOwnerMap();
-        var agent = PetriAgent.of(
-                "iso_agent",
-                "isolated per session",
-                registry,
-                key -> petriRunner(llm, "iso_agent"),
-                ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()));
+        var agent = PetriAgent.builder("iso_agent", registry,
+                key -> petriRunner(llm, "iso_agent"))
+                .description("isolated per session")
+                .ownerExtractor(ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()))
+                .build();
 
         var adkRunner = new InMemoryRunner(agent);
 
@@ -230,8 +225,8 @@ class PetriAgentIntegrationTest {
                 userMessage("hello"), RunConfig.builder().build()).blockingForEach(e -> {});
 
         assertThat(registry.size()).isEqualTo(2);
-        assertThat(registry.get(SessionKey.from(s1))).isNotNull();
-        assertThat(registry.get(SessionKey.from(s2))).isNotNull();
+        assertThat(registry.find(SessionKey.from(s1))).isPresent();
+        assertThat(registry.find(SessionKey.from(s2))).isPresent();
     }
 
     // ============================================================
@@ -335,12 +330,11 @@ class PetriAgentIntegrationTest {
 
         var registry = tracked(SessionExecutorRegistry.cleanerOwned());
         var sessionOwners = sessionOwnerMap();
-        var agent = PetriAgent.of(
-                "resilient",
-                "survives a failed turn",
-                registry,
-                key -> petriRunner(llm, "resilient"),
-                ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()));
+        var agent = PetriAgent.builder("resilient", registry,
+                key -> petriRunner(llm, "resilient"))
+                .description("survives a failed turn")
+                .ownerExtractor(ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()))
+                .build();
 
         var adkRunner = new InMemoryRunner(agent);
         var session = adkRunner.sessionService()
@@ -366,7 +360,7 @@ class PetriAgentIntegrationTest {
         // The answer and the returned permit are one firing's deposits, so a
         // snapshot taken once the answer is out holds both.
         var resting = new java.util.TreeMap<String, Integer>();
-        registry.get(SessionKey.from(session)).snapshot().marking().forEach((place, tokens) -> {
+        registry.find(SessionKey.from(session)).orElseThrow().snapshot().marking().forEach((place, tokens) -> {
             if (!tokens.isEmpty() && !place.equals(AdkColours.EVENT_OUT.name())) {
                 resting.put(place, tokens.size());
             }
@@ -390,12 +384,11 @@ class PetriAgentIntegrationTest {
 
         var registry = tracked(SessionExecutorRegistry.cleanerOwned());
         var sessionOwners = sessionOwnerMap();
-        var agent = PetriAgent.of(
-                "stamper",
-                "checks invocation id",
-                registry,
-                key -> petriRunner(llm, "stamper", NET_LOCAL_INVOCATION_ID),
-                ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()));
+        var agent = PetriAgent.builder("stamper", registry,
+                key -> petriRunner(llm, "stamper", NET_LOCAL_INVOCATION_ID))
+                .description("checks invocation id")
+                .ownerExtractor(ctx -> sessionOwners.computeIfAbsent(SessionKey.from(ctx.session()), k -> new Object()))
+                .build();
 
         var adkRunner = new InMemoryRunner(agent);
         var session = adkRunner.sessionService()

@@ -12,8 +12,8 @@ import java.lang.annotation.Target;
  *
  * <p>The whole project is 0.x, so a minor may break API anywhere. This
  * annotation marks the surfaces that move fastest even by that standard. The
- * turn-based core ({@code PetriAgent.of}, the stock non-streaming subnets, the
- * registry) is the settled part and changes there are called out in the
+ * turn-based core ({@code PetriAgent.builder}, the stock non-streaming subnets,
+ * the registry) is the settled part and changes there are called out in the
  * CHANGELOG.
  */
 @Documented

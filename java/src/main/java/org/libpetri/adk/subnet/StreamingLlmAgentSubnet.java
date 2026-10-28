@@ -71,6 +71,10 @@ public final class StreamingLlmAgentSubnet {
      * supplies a fresh one per session. {@link #actionBindings} requires it,
      * and it must then also be registered through
      * {@link PetriRunner.Builder#deferredExecutorRef(AtomicReference)}.
+     *
+     * <p>Construct it with {@link #builder}: that is the stable construction
+     * path. The canonical constructor, and with it record patterns over this
+     * type, may change in a 0.x minor as components are added.
      */
     public record Config(
             String name,
@@ -213,8 +217,8 @@ public final class StreamingLlmAgentSubnet {
         var net = PetriNet.builder(NAME + "-" + config.name()).compose(DEF).build();
         return key -> {
             var ref = new AtomicReference<PetriNetExecutor>();
-            var builder = PetriRunner.builder(
-                    net.bindActions(actionBindings(baseLlm, config.withExecutorRef(ref))));
+            var builder = PetriRunner.builder(SubnetActions.bindComposed(
+                    net, actionBindings(baseLlm, config.withExecutorRef(ref))));
             customize.accept(key, builder);
             return builder
                     .environmentPlace(AdkColours.USER_IN)
@@ -225,24 +229,23 @@ public final class StreamingLlmAgentSubnet {
     }
 
     private static LlmStreamingStepSubnet.Config streamingCfg(Config config) {
-        return new LlmStreamingStepSubnet.Config(
-                config.name(),
-                config.invocationIdSupplier(),
-                config.executorRef());
+        return LlmStreamingStepSubnet.Config.builder(config.name())
+                .invocationIdSupplier(config.invocationIdSupplier())
+                .executorRef(config.executorRef())
+                .build();
     }
 
     private static LlmAgentSubnet.Config agentConfig(Config config) {
-        return new LlmAgentSubnet.Config(
-                config.name(),
-                config.model(),
-                config.systemInstruction(),
-                config.tools(),
-                config.reaskBudget(),
-                config.fallbackContent(),
-                config.invocationIdSupplier(),
-                config.dispatchExecutor(),
-                config.callbacks(),
-                config.toolContext());
+        return LlmAgentSubnet.Config.builder(config.name(), config.model())
+                .systemInstruction(config.systemInstruction().orElse(null))
+                .tools(config.tools())
+                .reaskBudget(config.reaskBudget())
+                .fallbackContent(config.fallbackContent())
+                .invocationIdSupplier(config.invocationIdSupplier())
+                .dispatchExecutor(config.dispatchExecutor())
+                .callbacks(config.callbacks())
+                .toolContext(config.toolContext())
+                .build();
     }
 
     private StreamingLlmAgentSubnet() {}

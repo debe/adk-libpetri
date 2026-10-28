@@ -138,13 +138,16 @@ class MultiAgentDemoTest {
                 .dispatchExecutor(EXECUTOR)
                 .build();
 
-        var routerDef = TransferRouterSubnet.def(knownSpecialists);
-        var routerConfig = new TransferRouterSubnet.Config("planner",
-                () -> "inv-" + System.nanoTime());
+        // One value carries the router's def and its bindings, so the two
+        // cannot be built from different specialist sets.
+        var router = TransferRouterSubnet.forTargets(knownSpecialists);
+        var routerConfig = TransferRouterSubnet.Config.builder("planner")
+                .invocationIdSupplier(() -> "inv-" + System.nanoTime())
+                .build();
 
         var net = PetriNet.builder("multi-agent-app")
                 .compose(plannerSubnet)
-                .compose(routerDef)
+                .compose(router.def())
                 .build();
 
         // ============================================================
@@ -163,7 +166,7 @@ class MultiAgentDemoTest {
         // bindComposed also rejects overlapping maps and uncovered transitions.
         var bound = SubnetActions.bindComposed(net,
                 LlmAgentSubnet.actionBindings(plannerLlm, plannerConfig),
-                TransferRouterSubnet.actionBindings(knownSpecialists, routerConfig));
+                router.actionBindings(routerConfig));
 
         var exporter = InMemorySpanExporter.create();
         var tracerProvider = SdkTracerProvider.builder()
@@ -292,17 +295,18 @@ class MultiAgentDemoTest {
                 .reaskBudget(2)
                 .dispatchExecutor(EXECUTOR)
                 .build();
-        var routerDef = TransferRouterSubnet.def(knownSpecialists);
-        var routerConfig = new TransferRouterSubnet.Config("planner",
-                () -> "inv-fixed");
+        var router = TransferRouterSubnet.forTargets(knownSpecialists);
+        var routerConfig = TransferRouterSubnet.Config.builder("planner")
+                .invocationIdSupplier(() -> "inv-fixed")
+                .build();
 
         var net = SubnetActions.bindComposed(
                 PetriNet.builder("hallucination-app")
                         .compose(plannerSubnet)
-                        .compose(routerDef)
+                        .compose(router.def())
                         .build(),
                 LlmAgentSubnet.actionBindings(plannerLlm, plannerConfig),
-                TransferRouterSubnet.actionBindings(knownSpecialists, routerConfig));
+                router.actionBindings(routerConfig));
 
         var registry = SessionExecutorRegistry.strongOwned();
         var agent = PetriAgent.builder("halluc_agent", registry,
@@ -364,16 +368,18 @@ class MultiAgentDemoTest {
                 .reaskBudget(2)
                 .dispatchExecutor(EXECUTOR)
                 .build();
-        var dlfRouterConfig = new TransferRouterSubnet.Config("planner",
-                () -> "inv-dlf");
+        var dlfRouter = TransferRouterSubnet.forTargets(knownSpecialists);
+        var dlfRouterConfig = TransferRouterSubnet.Config.builder("planner")
+                .invocationIdSupplier(() -> "inv-dlf")
+                .build();
         var net = SubnetActions.bindComposed(
                 PetriNet.builder("dlf-check")
                         .compose(LlmAgentSubnet.DEF)
-                        .compose(TransferRouterSubnet.def(knownSpecialists))
+                        .compose(dlfRouter.def())
                         .build(),
                 LlmAgentSubnet.actionBindings(
                         scriptedLlm(textResponse("verification stub")), dlfConfig),
-                TransferRouterSubnet.actionBindings(knownSpecialists, dlfRouterConfig));
+                dlfRouter.actionBindings(dlfRouterConfig));
 
         // One verify() per property: SmtVerifier.property() replaces rather
         // than adds, so the chain this used to be checked only its last one.
@@ -389,9 +395,9 @@ class MultiAgentDemoTest {
                                 // a finished agent turn, not a deadlock.
                                 AdkColours.EVENT_OUT,
                                 AdkColours.LEGACY_SESSION_WRITE,
-                                TransferRouterSubnet.UNKNOWN_TARGET,
-                                TransferRouterSubnet.targetPlace("billing"),
-                                TransferRouterSubnet.targetPlace("tech_support"),
+                                TransferRouterSubnet.Places.UNKNOWN_TARGET,
+                                TransferRouterSubnet.Places.targetPlace("billing"),
+                                TransferRouterSubnet.Places.targetPlace("tech_support"),
                                 // The planner at rest holds its permit and nothing
                                 // else: the transition that ends a turn clears its
                                 // conversation and reask budget. Excusing the permit

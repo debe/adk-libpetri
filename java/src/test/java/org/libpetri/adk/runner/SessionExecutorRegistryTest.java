@@ -114,8 +114,8 @@ class SessionExecutorRegistryTest {
 
             assertThat(registry.close(K1)).isTrue();
             assertThat(registry.size()).isEqualTo(1);
-            assertThat(registry.get(K1)).isNull();
-            assertThat(registry.get(K2)).isNotNull();
+            assertThat(registry.find(K1)).isEmpty();
+            assertThat(registry.find(K2)).isPresent();
         }
     }
 

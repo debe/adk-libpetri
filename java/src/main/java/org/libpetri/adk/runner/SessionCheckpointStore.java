@@ -18,7 +18,8 @@ import org.libpetri.core.Token;
  *
  * <pre>{@code
  * var checkpoints = SessionCheckpointStore.inMemory();
- * var registry = SessionExecutorRegistry.strongOwned(checkpoints);   // saves on close
+ * var registry = SessionExecutorRegistry.builder()
+ *     .checkpoints(checkpoints).build();                       // saves on close
  * var agent = PetriAgent.builder("agent", registry,
  *         key -> PetriRunner.builder(net)
  *             .environmentPlace(AdkColours.USER_IN)

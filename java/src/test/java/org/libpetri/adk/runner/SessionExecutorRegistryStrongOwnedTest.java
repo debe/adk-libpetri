@@ -48,6 +48,34 @@ class SessionExecutorRegistryStrongOwnedTest {
     private static final SessionKey K1 = new SessionKey("app", "u1", "s1");
 
     @Test
+    void builder_covers_both_modes_and_defaults_to_strong_owned() {
+        try (var strong = SessionExecutorRegistry.builder().build();
+             var cleaner = SessionExecutorRegistry.builder().cleanerOwned().build();
+             var checkpointing = SessionExecutorRegistry.builder()
+                     .checkpoints(SessionCheckpointStore.inMemory())
+                     .checkpointTimeout(java.time.Duration.ofSeconds(1))
+                     .build()) {
+            assertThat(strong.isCleanerOwned()).isFalse();
+            assertThat(cleaner.isCleanerOwned()).isTrue();
+            assertThat(checkpointing.isCleanerOwned()).isFalse();
+        }
+        // A timeout bounds a checkpoint save; without a store it is a mistake.
+        assertThrows(IllegalStateException.class, () -> SessionExecutorRegistry.builder()
+                .checkpointTimeout(java.time.Duration.ofSeconds(1)).build());
+    }
+
+    @Test
+    void find_returns_the_serving_runner_or_empty() {
+        try (var registry = SessionExecutorRegistry.strongOwned()) {
+            assertThat(registry.find(K1)).isEmpty();
+            var runner = registry.getOrCreate(K1, key -> testRunner());
+            assertThat(registry.find(K1)).hasValue(runner);
+            registry.close(K1);
+            assertThat(registry.find(K1)).isEmpty();
+        }
+    }
+
+    @Test
     void factories_return_distinct_mode_instances() {
         try (var strong = SessionExecutorRegistry.strongOwned();
              var cleaner = SessionExecutorRegistry.cleanerOwned()) {

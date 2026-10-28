@@ -99,7 +99,7 @@ class StockSubnetProofsTest {
     void router_routes_every_response_to_exactly_one_branch() {
         assertOneOutcomePerInput(
                 RouterSubnet.DEF.bindActions(RouterSubnet.actionBindings(
-                        new RouterSubnet.Config("agent", () -> "inv"))),
+                        RouterSubnet.Config.builder("agent").invocationIdSupplier(() -> "inv").build())),
                 "llmResponse", () -> Token.of(LlmResponse.builder().build()),
                 out("toolCalls", AdkColours.ToolCalls.class),
                 out("transfer", AdkColours.TransferTarget.class),
@@ -127,9 +127,9 @@ class StockSubnetProofsTest {
             outs.add(out("target/" + name, AdkColours.TransferTarget.class));
         }
         outs.add(out("target/_unknown", AdkColours.TransferTarget.class));
+        var router = TransferRouterSubnet.forTargets(known);
         assertOneOutcomePerInput(
-                TransferRouterSubnet.def(known).bindActions(TransferRouterSubnet.actionBindings(
-                        known, TransferRouterSubnet.Config.of("agent"))),
+                router.def().bindActions(router.actionBindings(TransferRouterSubnet.Config.of("agent"))),
                 "transfer", () -> Token.of(new AdkColours.TransferTarget("billing")),
                 outs.toArray(new Place<?>[0]));
     }
@@ -193,11 +193,11 @@ class StockSubnetProofsTest {
                         .environmentMode(EnvironmentAnalysisMode.arrivals(K)),
                 Map.of(
                         "one turn in flight: placeBound(TURN_ACTIVE, 1)",
-                        SmtProperty.placeBound(LlmAgentSubnet.TURN_ACTIVE, 1),
+                        SmtProperty.placeBound(LlmAgentSubnet.Places.TURN_ACTIVE, 1),
                         "one conversation: placeBound(CONVERSATION, 1)",
-                        SmtProperty.placeBound(LlmAgentSubnet.CONVERSATION, 1),
+                        SmtProperty.placeBound(LlmAgentSubnet.Places.CONVERSATION, 1),
                         "reask budget never stacks: budgetPlaceBounded(REASK_BUDGET, 1)",
-                        AdkNetInvariants.budgetPlaceBounded(LlmAgentSubnet.REASK_BUDGET, 1)));
+                        AdkNetInvariants.budgetPlaceBounded(LlmAgentSubnet.Places.REASK_BUDGET, 1)));
     }
 
     /**
@@ -244,7 +244,7 @@ class StockSubnetProofsTest {
     @EnabledIf("z3Available")
     void llm_agent_recovers_from_a_failure_at_any_step_of_a_turn() {
         var net = withFailures(agentNet(), List.of(
-                LlmAgentSubnet.TURN_INPUT,
+                LlmAgentSubnet.Places.TURN_INPUT,
                 AdkColours.LLM_REQUEST,
                 LlmStepSubnet.Places.READY_TO_CALL,
                 LlmStepSubnet.Places.RAW_RESPONSE,
@@ -261,9 +261,9 @@ class StockSubnetProofsTest {
                         "deadlockFree",
                         SmtProperty.deadlockFree(),
                         "one turn in flight: placeBound(TURN_ACTIVE, 1)",
-                        SmtProperty.placeBound(LlmAgentSubnet.TURN_ACTIVE, 1),
+                        SmtProperty.placeBound(LlmAgentSubnet.Places.TURN_ACTIVE, 1),
                         "one conversation: placeBound(CONVERSATION, 1)",
-                        SmtProperty.placeBound(LlmAgentSubnet.CONVERSATION, 1)));
+                        SmtProperty.placeBound(LlmAgentSubnet.Places.CONVERSATION, 1)));
     }
 
     /**
@@ -287,7 +287,7 @@ class StockSubnetProofsTest {
                         "placeBound(TURN_PERMIT, 1)",
                         SmtProperty.placeBound(AdkColours.TURN_PERMIT, 1),
                         "one turn in flight: placeBound(TURN_ACTIVE, 1)",
-                        SmtProperty.placeBound(LlmAgentSubnet.TURN_ACTIVE, 1)));
+                        SmtProperty.placeBound(LlmAgentSubnet.Places.TURN_ACTIVE, 1)));
     }
 
     /**
@@ -314,11 +314,11 @@ class StockSubnetProofsTest {
                         .environmentMode(EnvironmentAnalysisMode.arrivals(K)),
                 Map.of(
                         "one turn in flight: placeBound(TURN_ACTIVE, 1)",
-                        SmtProperty.placeBound(LlmAgentSubnet.TURN_ACTIVE, 1),
+                        SmtProperty.placeBound(LlmAgentSubnet.Places.TURN_ACTIVE, 1),
                         "placeBound(TURN_PERMIT, 1)",
                         SmtProperty.placeBound(AdkColours.TURN_PERMIT, 1),
                         "one conversation: placeBound(CONVERSATION, 1)",
-                        SmtProperty.placeBound(LlmAgentSubnet.CONVERSATION, 1)));
+                        SmtProperty.placeBound(LlmAgentSubnet.Places.CONVERSATION, 1)));
     }
 
     /** {@link LlmAgentSubnet#DEF} composed alone, with its actions bound. */

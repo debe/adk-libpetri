@@ -33,7 +33,7 @@ import org.libpetri.core.Transition;
 import org.libpetri.core.TransitionAction;
 
 /**
- * End-to-end coverage for {@link PetriAgent#ofLive}: ADK's stock
+ * End-to-end coverage for {@link PetriAgent.Builder#live}: ADK's stock
  * {@link InMemoryRunner#runLive} must reach the shipped {@link BidiPetriAgent}
  * bridge, not the legacy egress-only live path.
  *
@@ -62,7 +62,7 @@ class PetriAgentLiveTest {
     }
 
     @Test
-    void ofLive_bridges_live_queue_model_frames_and_callback_signals() throws InterruptedException {
+    void live_bridges_live_queue_model_frames_and_callback_signals() throws InterruptedException {
         var connection = new FakeLiveConnection();
         var callbackFrames = new AtomicInteger();
         var registry = SessionExecutorRegistry.strongOwned();

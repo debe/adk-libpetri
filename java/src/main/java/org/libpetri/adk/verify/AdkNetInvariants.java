@@ -139,7 +139,7 @@ public final class AdkNetInvariants {
     /**
      * Verifies that any net composing a
      * {@link TransferRouterSubnet}-shaped demux has the
-     * {@link TransferRouterSubnet#UNKNOWN_TARGET} fallback place
+     * {@link TransferRouterSubnet.Places#UNKNOWN_TARGET} fallback place
      * present AND a consumer for it (so an unknown agent name produces
      * a typed error event rather than dead-letter accumulation).
      *
@@ -149,11 +149,11 @@ public final class AdkNetInvariants {
      */
     public static List<Violation> transferDemuxHasUnknownFallback(PetriNet net) {
         Objects.requireNonNull(net, "net");
-        var hasUnknownPlace = net.places().contains(TransferRouterSubnet.UNKNOWN_TARGET);
+        var hasUnknownPlace = net.places().contains(TransferRouterSubnet.Places.UNKNOWN_TARGET);
         if (!hasUnknownPlace) {
             return List.of();  // no transfer demux in this net — invariant vacuously holds
         }
-        var consumers = consumersOf(net, TransferRouterSubnet.UNKNOWN_TARGET);
+        var consumers = consumersOf(net, TransferRouterSubnet.Places.UNKNOWN_TARGET);
         if (consumers.isEmpty()) {
             return List.of(new Violation("transferDemuxHasUnknownFallback",
                     "TransferRouterSubnet's UNKNOWN_TARGET place has no consumer — "

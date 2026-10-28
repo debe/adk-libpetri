@@ -173,7 +173,7 @@ protected Flowable<Event> runAsyncImpl(InvocationContext ctx) {
     if (userContent == null) return Flowable.empty();
 
     // One ADK invocation id across the turn, and a transition failure
-    // fails the turn (failureSignal is control flow, not observability).
+    // fails the turn (failures() is control flow, not observability).
     Flowable<Event> egress = runner.adkEvents()
             .map(e -> e.toBuilder().invocationId(ctx.invocationId()).build());
 
@@ -315,7 +315,7 @@ new InMemoryRunner(streamingAgent).runAsync(session.userId(), session.id(), user
 ## Live (BIDI)
 
 > **Beta.** `BidiPetriAgent`, `LiveConnection`, `PetriAgent.LiveConfig` and
-> `PetriAgent.ofLive` are `@Experimental`: they may change incompatibly
+> `PetriAgent.Builder.live` are `@Experimental`: they may change incompatibly
 > within a 0.x minor. `bridge` already took one such break in 0.4.0 (see
 > the CHANGELOG).
 
@@ -429,7 +429,7 @@ src/main/java/org/libpetri/adk/
 ├── bridge/
 │   ├── EventStoreToFlowableBridge.java    # EventStore to Flowable<Event>
 │   ├── OtelEventStore.java                # OT span per transition fire
-│   └── TransitionFailure.java             # a failed transition, as PetriRunner.failureSignal() emits it
+│   └── TransitionFailure.java             # a failed transition, as PetriRunner.failures() emits it
 ├── subnet/                                # stock subnets + binding helpers
 │   ├── LlmStepSubnet.java                 # LLM call + Before/After/Error callbacks
 │   ├── LlmStreamingStepSubnet.java        # streaming LLM call, chunk env place, final response
@@ -445,7 +445,7 @@ src/main/java/org/libpetri/adk/
 ├── runner/
 │   ├── PetriRunner.java                   # per-session NetExecutor handle
 │   ├── PetriAgent.java                    # normal, SSE, and live BaseAgent adapter
-│   ├── BidiPetriAgent.java                # Live/BIDI pump used by PetriAgent.ofLive
+│   ├── BidiPetriAgent.java                # Live/BIDI pump behind PetriAgent.Builder.live
 │   ├── LiveConnection.java                # genai Live server-message boundary
 │   ├── SessionExecutorRegistry.java       # lazy Map<SessionKey, PetriRunner>
 │   ├── SessionCheckpointStore.java        # drain-then-save checkpoints for resumeFrom (experimental)

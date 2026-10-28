@@ -100,6 +100,47 @@ existed.
 - **One compiled net per net.** The default executor factory compiles a
   net once and shares the immutable `CompiledNet` across the sessions that
   run it, instead of recompiling on every session start.
+- **Breaking:** colour records copy and null-check their contents.
+  `ToolCalls.calls` and `ToolResults.results` are immutable copies
+  (`modelTurn` on `ToolCalls` is documented as nullable);
+  `LegacySessionWrite.delta` is an ordered unmodifiable copy that still
+  accepts null values; `TransferTarget` rejects a null `agentName`.
+- **Breaking:** `SubnetActions.bind` and `SubnetActions.merge` return
+  unmodifiable maps; the single-map `bind` returns a copy rather than the
+  caller's map.
+- **Breaking:** `LlmAgentSubnet.Config.Builder` setters reject `null`
+  (except `systemInstruction`) instead of failing at `build()`.
+- Subnet `Config` records are documented as builder-constructed: their
+  canonical constructors and record patterns may change in a 0.x minor.
+  `RouterSubnet.Config` and `TransferRouterSubnet.Config` gain
+  `builder(author)`.
+- `TransferRouterSubnet.forTargets(Set)` returns a `Targets` value whose
+  `def()` and `actionBindings(Config)` come from one set. The two-set
+  `TransferRouterSubnet.actionBindings(Set, Config)` is deprecated.
+- Internal places move to nested holders: `LlmAgentSubnet.Places`
+  (`REASK_BUDGET`, `CONVERSATION`, `TURN_ACTIVE`, `TURN_INPUT`, `ANSWER`,
+  `HANDOFF`) and `TransferRouterSubnet.Places` (`UNKNOWN_TARGET`,
+  `targetPlace(name)`). The top-level constants remain as deprecated
+  aliases to the same instances.
+- `PetriRunner.failures()` returns `Flowable<TransitionFailure>`;
+  `failureSignal()` is deprecated. On `EventStoreToFlowableBridge` the
+  typed stream is `transitionFailures()` (`EventStore` already declares
+  `failures()`), and its `failureSignal()` is deprecated too.
+- `PetriAgent.of(...)` and `PetriAgent.ofLive(...)` are deprecated in
+  favour of `PetriAgent.builder(...)`, the settled construction path.
+- `PetriRunner.terminationReason()` and `PetriRunner.isQuiescent()` read
+  the executor's state without going through `executor()`.
+- `SessionExecutorRegistry.find(SessionKey)` returns
+  `Optional<PetriRunner>`; the null-returning `get` is deprecated.
+  `SessionExecutorRegistry.builder()` covers strong- and cleaner-owned
+  registries with an optional checkpoint store and timeout; the four
+  checkpointing `strongOwned(...)`/`cleanerOwned(...)` overloads are
+  deprecated. The registry logs through `System.Logger` instead of
+  `java.util.logging`.
+- `PetriRunner.Builder.deferredExecutorRef` is marked `@Experimental`.
+- `StreamingLlmAgentSubnet.runnerFactory` binds through
+  `SubnetActions.bindComposed`; stock-subnet javadoc no longer recommends
+  a bare `bindActions`.
 - **ADK 1.8.0 -> 1.10.1**, the earlier step: genai stays `1.58.0`,
   protobuf stays `4.33.5` and rxjava stays `3.1.12`, so the protobuf floor
   guidance is unchanged. ADK 1.10.x moves

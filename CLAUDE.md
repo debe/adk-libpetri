@@ -218,7 +218,7 @@ bug classes the design is meant to eliminate.
    wrap each other via the delegate pattern. Never reach for
    `ExecutionContextProvider` for observability. That is only for
    action-side ambient-context propagation.
-   `PetriRunner.failureSignal()` is control flow, not observability: it
+   `PetriRunner.failures()` is control flow, not observability: it
    exists so a caller can fail the turn that was in flight without
    killing the session's egress, and it emits `TransitionFailure` only.
    Route anything you want to *record* through the `EventStore` chain.
@@ -261,11 +261,14 @@ bug classes the design is meant to eliminate.
   `LlmAgent_BuildPrompt`) so `SubnetActions.bind` validates keys
   reliably.
 - Boundary `Place<T>` constants live in `AdkColours`. A subnet's
-  internal places are public constants on the owning subnet class:
-  in a nested `Places` holder (`LlmStepSubnet.Places`,
-  `LlmStreamingStepSubnet.Places`) or directly on the class
-  (`LlmAgentSubnet.REASK_BUDGET`, `TransferRouterSubnet.UNKNOWN_TARGET`
-  and its `targetPlace(name)` factory).
+  internal places are public constants in a nested `Places` holder on
+  the owning subnet class (`LlmStepSubnet.Places`,
+  `LlmStreamingStepSubnet.Places`, `LlmAgentSubnet.Places.REASK_BUDGET`,
+  `TransferRouterSubnet.Places.UNKNOWN_TARGET` and its
+  `targetPlace(name)` factory). The old top-level constants on
+  `LlmAgentSubnet` and `TransferRouterSubnet` are `@Deprecated` aliases.
+- Subnet `Config` records are built with their builders (or static
+  factories); canonical constructors may change in a 0.x minor.
 - Tests use `BitmapNetExecutor.builder(net, initial).run()` for
   synchronous test patterns. Long-lived BIDI tests use `runAsync`
   plus drain.

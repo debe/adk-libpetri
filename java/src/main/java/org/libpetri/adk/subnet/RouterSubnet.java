@@ -47,7 +47,8 @@ import org.libpetri.adk.colours.AdkColours;
  * production per fire).
  *
  * <p>Bind via
- * {@code petriNet.bindActions(RouterSubnet.actionBindings(RouterConfig.of("agent-name")))}.
+ * {@code SubnetActions.bindComposed(petriNet, RouterSubnet.actionBindings(RouterSubnet.Config.of("agent-name")))},
+ * which also checks the bindings cover every transition of the host net.
  */
 public final class RouterSubnet {
 
@@ -64,6 +65,15 @@ public final class RouterSubnet {
         private Transitions() {}
     }
 
+    /**
+     * Configuration for the router's answer events: their author and
+     * invocation id.
+     *
+     * <p>Construct it with {@link #builder} (or {@link #of}): that is the
+     * stable construction path. The canonical constructor, and with it record
+     * patterns over this type, may change in a 0.x minor as components are
+     * added.
+     */
     public record Config(String author, Supplier<String> invocationIdSupplier) {
         public Config {
             Objects.requireNonNull(author, "author");
@@ -75,7 +85,29 @@ public final class RouterSubnet {
          * invocation id.
          */
         public static Config of(String author) {
-            return new Config(author, () -> UUID.randomUUID().toString());
+            return builder(author).build();
+        }
+
+        public static Builder builder(String author) {
+            return new Builder(author);
+        }
+
+        public static final class Builder {
+            private final String author;
+            private Supplier<String> invocationIdSupplier = () -> UUID.randomUUID().toString();
+
+            private Builder(String author) {
+                this.author = Objects.requireNonNull(author, "author");
+            }
+
+            public Builder invocationIdSupplier(Supplier<String> s) {
+                this.invocationIdSupplier = Objects.requireNonNull(s, "invocationIdSupplier");
+                return this;
+            }
+
+            public Config build() {
+                return new Config(author, invocationIdSupplier);
+            }
         }
     }
 

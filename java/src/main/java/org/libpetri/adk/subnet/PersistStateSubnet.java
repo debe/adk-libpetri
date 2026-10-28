@@ -78,6 +78,14 @@ public final class PersistStateSubnet {
         private Transitions() {}
     }
 
+    /**
+     * Configuration for the persist step; see the class javadoc for each
+     * component.
+     *
+     * <p>Construct it with {@link #builder}: that is the stable construction
+     * path. The canonical constructor, and with it record patterns over this
+     * type, may change in a 0.x minor as components are added.
+     */
     public record Config(
             String author,
             Supplier<String> invocationIdSupplier,
@@ -186,10 +194,10 @@ public final class PersistStateSubnet {
      * Build a {@link AdkColours.LegacySessionWrite} envelope from a raw
      * {@code Map<String, Object>}.
      *
-     * <p>This is the <b>only</b> sanctioned way to construct an
-     * envelope. Named loudly because the {@code Map<String, Object>}
-     * shape is the legacy-ADK-Session boundary, not an endorsement of
-     * a kitchen-sink in-net state representation. For in-net state,
+     * <p>Equivalent to the record's constructor. Named loudly because
+     * the {@code Map<String, Object>} shape is the legacy-ADK-Session
+     * boundary, not an endorsement of a kitchen-sink in-net state
+     * representation. For in-net state,
      * declare typed {@link org.libpetri.core.Place}s per domain
      * concept and Read them — the in-net conversation-place pattern.
      */

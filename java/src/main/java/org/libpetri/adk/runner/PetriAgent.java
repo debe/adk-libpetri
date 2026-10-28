@@ -162,7 +162,7 @@ public final class PetriAgent extends BaseAgent {
      * runner.
      */
     private static Flowable<Event> turnFailureSignal(PetriRunner runner) {
-        return runner.failureSignal().flatMap(t -> Flowable.<Event>error(t));
+        return runner.failures().flatMap(t -> Flowable.<Event>error(t));
     }
 
     /**
@@ -179,7 +179,7 @@ public final class PetriAgent extends BaseAgent {
      */
     private static PetriRunner abortTurnsOnFailure(PetriRunner runner) {
         if (runner.declaresEnvironmentPlace(AdkColours.TURN_ABORT)) {
-            runner.failureSignal().subscribe(
+            runner.failures().subscribe(
                     failure -> runner.signal(AdkColours.TURN_ABORT),
                     // The signal never errors; a run that ends completes it.
                     error -> { });
@@ -219,32 +219,13 @@ public final class PetriAgent extends BaseAgent {
     }
 
     /**
-     * @param name           agent name (per ADK rules: identifier-shaped, not "user")
-     * @param description    human-readable description
-     * @param registry       shared {@link SessionExecutorRegistry}; one
-     *                       {@code PetriAgent} typically owns its own,
-     *                       but a registry can be shared across multiple
-     *                       agents that want to coordinate session
-     *                       runners
-     * @param runnerFactory  lazy factory invoked on first call per
-     *                       session — gets the {@link SessionKey} so it
-     *                       can build a per-session-customised
-     *                       {@link PetriRunner} (e.g., per-user OT
-     *                       baggage, per-session initial marking)
-     * @param ownerExtractor returns the owner object for an invocation.
-     *                       Must return the same object identity for every
-     *                       invocation in the same session (a different
-     *                       owner for a known session throws). Under
-     *                       {@link SessionExecutorRegistry#cleanerOwned()}
-     *                       it is also the <b>lifetime owner</b>: the
-     *                       runner is torn down when it becomes
-     *                       unreachable. Under
-     *                       {@link SessionExecutorRegistry#strongOwned()}
-     *                       it is only an identity, teardown is
-     *                       {@code close(SessionKey)}, and
-     *                       {@link #builder} lets you omit it. See the
-     *                       class javadoc for the lifetime contract.
+     * Equivalent to {@code builder(name, registry, runnerFactory)} with
+     * {@link Builder#description} and {@link Builder#ownerExtractor}.
+     *
+     * @deprecated Use {@link #builder}, the settled construction path; this
+     *             overload set grew one parameter list per option.
      */
+    @Deprecated
     public static PetriAgent of(String name,
                                 String description,
                                 SessionExecutorRegistry registry,
@@ -257,7 +238,8 @@ public final class PetriAgent extends BaseAgent {
     }
 
     /**
-     * Starts a {@code PetriAgent}. The minimal form, for the default
+     * Starts a {@code PetriAgent}; this is the settled construction path. The
+     * minimal form, for the default
      * {@link SessionExecutorRegistry#strongOwned()} registry, needs nothing
      * more:
      *
@@ -270,6 +252,18 @@ public final class PetriAgent extends BaseAgent {
      * <p>A {@link SessionExecutorRegistry#cleanerOwned()} registry also needs
      * {@link Builder#ownerExtractor}; {@link Builder#build()} rejects it
      * otherwise.
+     *
+     * @param name          agent name (per ADK rules: identifier-shaped, not "user")
+     * @param registry      shared {@link SessionExecutorRegistry}; one
+     *                      {@code PetriAgent} typically owns its own,
+     *                      but a registry can be shared across multiple
+     *                      agents that want to coordinate session
+     *                      runners
+     * @param runnerFactory lazy factory invoked on first call per
+     *                      session — gets the {@link SessionKey} so it
+     *                      can build a per-session-customised
+     *                      {@link PetriRunner} (e.g., per-user OT
+     *                      baggage, per-session initial marking)
      */
     public static Builder builder(String name,
                                   SessionExecutorRegistry registry,
@@ -304,8 +298,15 @@ public final class PetriAgent extends BaseAgent {
 
         /**
          * The per-invocation owner. Required for a cleaner-owned registry,
-         * optional for a strong-owned one. See {@link PetriAgent#of} for the
-         * contract.
+         * optional for a strong-owned one.
+         *
+         * <p>It must return the same object identity for every invocation in
+         * the same session (a different owner for a known session throws).
+         * Under {@link SessionExecutorRegistry#cleanerOwned()} it is also the
+         * <b>lifetime owner</b>: the runner is torn down when it becomes
+         * unreachable. Under {@link SessionExecutorRegistry#strongOwned()} it
+         * is only an identity, and teardown is {@code close(SessionKey)}. See
+         * the {@link PetriAgent} class javadoc for the lifetime contract.
          */
         public Builder ownerExtractor(Function<InvocationContext, Object> ownerExtractor) {
             this.ownerExtractor = Objects.requireNonNull(ownerExtractor, "ownerExtractor");
@@ -313,12 +314,15 @@ public final class PetriAgent extends BaseAgent {
         }
 
         /**
-         * OpenTelemetry root-span observability. Pass the same
-         * {@code OtelEventStore} that is chained into the runner's
-         * {@code eventStore(...)}; see {@link PetriAgent#of(String, String,
-         * SessionExecutorRegistry, Function, Function, Tracer, OtelEventStore)}.
-         * Both or neither: passing both {@code null} switches tracing off,
-         * and {@link #build()} rejects exactly one.
+         * OpenTelemetry root-span observability. Opens a
+         * {@code petri.invocation.<agent>} span around each invocation and
+         * binds its {@link Context} onto {@code otelEventStore} for the
+         * duration of the invocation, so every transition span that store
+         * emits attaches as a child. Pass the same {@code OtelEventStore}
+         * that is chained into the runner's {@code eventStore(...)};
+         * otherwise binding has no effect. Both or neither: passing both
+         * {@code null} switches tracing off, and {@link #build()} rejects
+         * exactly one.
          *
          * <p>One store holds one invocation binding at a time, so every
          * session sharing it parents its transition spans on the latest
@@ -361,15 +365,13 @@ public final class PetriAgent extends BaseAgent {
     }
 
     /**
-     * Overload that wires OpenTelemetry root-span observability.
-     * Opens a {@code petri.invocation.<agent>} span around each
-     * {@link #runAsyncImpl} call and binds its {@link Context} onto the
-     * supplied {@link OtelEventStore} for the duration of the invocation,
-     * so every transition span emitted by that store attaches as a child.
-     * Pass the SAME {@code OtelEventStore} instance that's chained into
-     * the runner's {@code eventStore(...)} — otherwise binding has no
-     * effect.
+     * Equivalent to {@code builder(name, registry, runnerFactory)} with
+     * {@link Builder#description}, {@link Builder#ownerExtractor} and
+     * {@link Builder#tracing}.
+     *
+     * @deprecated Use {@link #builder} with {@link Builder#tracing}.
      */
+    @Deprecated
     public static PetriAgent of(String name,
                                 String description,
                                 SessionExecutorRegistry registry,
@@ -387,7 +389,10 @@ public final class PetriAgent extends BaseAgent {
 
     /**
      * Factory for BIDI/live agents that should use the shipped bridge path.
+     *
+     * @deprecated Use {@link #builder} with {@link Builder#live}.
      */
+    @Deprecated
     @Experimental
     public static PetriAgent ofLive(String name,
                                     String description,
@@ -404,7 +409,11 @@ public final class PetriAgent extends BaseAgent {
 
     /**
      * Factory for BIDI/live agents that also wire OpenTelemetry root-span observability.
+     *
+     * @deprecated Use {@link #builder} with {@link Builder#live} and
+     *             {@link Builder#tracing}.
      */
+    @Deprecated
     @Experimental
     public static PetriAgent ofLive(String name,
                                     String description,

@@ -6,6 +6,7 @@ import com.google.adk.events.Event;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -21,7 +22,9 @@ class TransferRouterSubnetTest {
 
     private static final Set<String> KNOWN = Set.of("billing", "sales", "support");
     private static final TransferRouterSubnet.Config CONFIG =
-            new TransferRouterSubnet.Config("router", () -> "inv-fixed");
+            TransferRouterSubnet.Config.builder("router")
+                    .invocationIdSupplier(() -> "inv-fixed")
+                    .build();
 
     // ============================================================
     //  Happy path — valid names route to per-target places
@@ -33,15 +36,15 @@ class TransferRouterSubnetTest {
                 new AdkColours.TransferTarget("billing"));
 
         // The token landed on the per-billing target place.
-        assertThat(tokensAt(fixture, TransferRouterSubnet.targetPlace("billing")))
+        assertThat(tokensAt(fixture, TransferRouterSubnet.Places.targetPlace("billing")))
                 .hasSize(1);
-        assertThat(tokensAt(fixture, TransferRouterSubnet.targetPlace("billing")).get(0).agentName())
+        assertThat(tokensAt(fixture, TransferRouterSubnet.Places.targetPlace("billing")).get(0).agentName())
                 .isEqualTo("billing");
 
         // Other target places stay empty.
-        assertThat(tokensAt(fixture, TransferRouterSubnet.targetPlace("sales"))).isEmpty();
-        assertThat(tokensAt(fixture, TransferRouterSubnet.targetPlace("support"))).isEmpty();
-        assertThat(tokensAt(fixture, TransferRouterSubnet.UNKNOWN_TARGET)).isEmpty();
+        assertThat(tokensAt(fixture, TransferRouterSubnet.Places.targetPlace("sales"))).isEmpty();
+        assertThat(tokensAt(fixture, TransferRouterSubnet.Places.targetPlace("support"))).isEmpty();
+        assertThat(tokensAt(fixture, TransferRouterSubnet.Places.UNKNOWN_TARGET)).isEmpty();
 
         // No unknown-error event emitted.
         assertThat(fixture.events).isEmpty();
@@ -54,9 +57,9 @@ class TransferRouterSubnetTest {
                 new AdkColours.TransferTarget("support"),
                 new AdkColours.TransferTarget("billing"));
 
-        assertThat(tokensAt(fixture, TransferRouterSubnet.targetPlace("sales"))).hasSize(1);
-        assertThat(tokensAt(fixture, TransferRouterSubnet.targetPlace("support"))).hasSize(1);
-        assertThat(tokensAt(fixture, TransferRouterSubnet.targetPlace("billing"))).hasSize(1);
+        assertThat(tokensAt(fixture, TransferRouterSubnet.Places.targetPlace("sales"))).hasSize(1);
+        assertThat(tokensAt(fixture, TransferRouterSubnet.Places.targetPlace("support"))).hasSize(1);
+        assertThat(tokensAt(fixture, TransferRouterSubnet.Places.targetPlace("billing"))).hasSize(1);
         assertThat(fixture.events).isEmpty();
     }
 
@@ -70,7 +73,7 @@ class TransferRouterSubnetTest {
                 new AdkColours.TransferTarget("Salez" /* typo */));
 
         // Token transited through UNKNOWN_TARGET (consumed) and produced an Event.
-        assertThat(tokensAt(fixture, TransferRouterSubnet.UNKNOWN_TARGET)).isEmpty();
+        assertThat(tokensAt(fixture, TransferRouterSubnet.Places.UNKNOWN_TARGET)).isEmpty();
         assertThat(fixture.events).hasSize(1);
 
         Event errorEvent = fixture.events.get(0);
@@ -128,8 +131,8 @@ class TransferRouterSubnetTest {
     @Test
     void target_place_helper_returns_consistent_place_record() {
         // Two calls with the same name → equal Place records (record equality).
-        var p1 = TransferRouterSubnet.targetPlace("billing");
-        var p2 = TransferRouterSubnet.targetPlace("billing");
+        var p1 = TransferRouterSubnet.Places.targetPlace("billing");
+        var p2 = TransferRouterSubnet.Places.targetPlace("billing");
         assertThat(p1).isEqualTo(p2);
         assertThat(p1.name()).isEqualTo("TransferRouter_target/billing");
         assertThat(p1.tokenType()).isEqualTo(AdkColours.TransferTarget.class);
@@ -148,10 +151,10 @@ class TransferRouterSubnetTest {
                 new AdkColours.TransferTarget("support"),
                 new AdkColours.TransferTarget("ghost"));
 
-        int billing  = tokensAt(fixture, TransferRouterSubnet.targetPlace("billing")).size();
-        int sales    = tokensAt(fixture, TransferRouterSubnet.targetPlace("sales")).size();
-        int support  = tokensAt(fixture, TransferRouterSubnet.targetPlace("support")).size();
-        int unknown  = tokensAt(fixture, TransferRouterSubnet.UNKNOWN_TARGET).size();
+        int billing  = tokensAt(fixture, TransferRouterSubnet.Places.targetPlace("billing")).size();
+        int sales    = tokensAt(fixture, TransferRouterSubnet.Places.targetPlace("sales")).size();
+        int support  = tokensAt(fixture, TransferRouterSubnet.Places.targetPlace("support")).size();
+        int unknown  = tokensAt(fixture, TransferRouterSubnet.Places.UNKNOWN_TARGET).size();
         int events   = fixture.events.size();
 
         // 3 valid → 3 tokens spread one each across billing/sales/support.
@@ -168,13 +171,28 @@ class TransferRouterSubnetTest {
     // ============================================================
 
     @Test
-    void mismatched_known_set_between_def_and_bindings_is_caught() {
-        // bindings for {a, b} validated against def({a, b, c}) — SubnetActions catches it
-        // because SubnetActions builds the def fresh from the supplied set, so the demux
-        // transition's structure matches. This test just confirms the bindings round-trip.
-        var bindings = TransferRouterSubnet.actionBindings(Set.of("a", "b"), CONFIG);
-        assertThat(bindings).containsKey(TransferRouterSubnet.Transitions.DEMUX);
-        assertThat(bindings).containsKey(TransferRouterSubnet.Transitions.EMIT_UNKNOWN_ERROR);
+    void for_targets_builds_def_and_bindings_from_one_set() {
+        var router = TransferRouterSubnet.forTargets(new LinkedHashSet<>(List.of("b", "a")));
+        assertThat(router.names()).containsExactly("b", "a").inOrder();
+        assertThat(router.def().iface().ports().stream().map(p -> p.name()).toList())
+                .containsAtLeast("target/a", "target/b", "target/_unknown");
+
+        var bindings = router.actionBindings(CONFIG);
+        assertThat(bindings.keySet()).containsExactly(
+                TransferRouterSubnet.Transitions.DEMUX,
+                TransferRouterSubnet.Transitions.EMIT_UNKNOWN_ERROR);
+        // The bindings bind the def they came with: no mismatch to catch.
+        SubnetActions.bindComposed(
+                PetriNet.builder("for-targets").compose(router.def()).build(), bindings);
+    }
+
+    @Test
+    @SuppressWarnings("deprecation")
+    void deprecated_aliases_are_the_same_places() {
+        assertThat(TransferRouterSubnet.UNKNOWN_TARGET)
+                .isSameInstanceAs(TransferRouterSubnet.Places.UNKNOWN_TARGET);
+        assertThat(TransferRouterSubnet.targetPlace("billing"))
+                .isEqualTo(TransferRouterSubnet.Places.targetPlace("billing"));
     }
 
     // ============================================================
@@ -188,11 +206,10 @@ class TransferRouterSubnetTest {
     private static Fixture run(Set<String> knownNames,
                                 TransferRouterSubnet.Config config,
                                 AdkColours.TransferTarget... transfers) {
-        var def = TransferRouterSubnet.def(knownNames);
-        var net = PetriNet.builder("test")
-                .compose(def)
-                .build()
-                .bindActions(TransferRouterSubnet.actionBindings(knownNames, config));
+        var router = TransferRouterSubnet.forTargets(knownNames);
+        var net = SubnetActions.bindComposed(
+                PetriNet.builder("test").compose(router.def()).build(),
+                router.actionBindings(config));
 
         List<Token<?>> tokens = new ArrayList<>();
         for (var t : transfers) tokens.add(Token.of(t));

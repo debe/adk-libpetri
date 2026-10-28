@@ -70,7 +70,7 @@ class SessionCheckpointTest {
     void a_session_closed_at_rest_resumes_with_its_marking() throws Exception {
         var checkpoints = SessionCheckpointStore.inMemory();
         var net = agentNet();
-        try (var registry = SessionExecutorRegistry.strongOwned(checkpoints)) {
+        try (var registry = SessionExecutorRegistry.builder().checkpoints(checkpoints).build()) {
             var runner = registry.getOrCreate(KEY, key -> startResuming(net, checkpoints, key));
             TestSubscriber<Event> egress = runner.adkEvents().test();
             runner.inject(AdkColours.USER_IN, userMessage("remember me")).get(1, TimeUnit.SECONDS);
@@ -83,8 +83,8 @@ class SessionCheckpointTest {
             before.remove(AdkColours.EVENT_OUT.name());
             assertThat(saved).isEqualTo(before);
             assertThat(saved.get(AdkColours.TURN_PERMIT.name())).hasSize(1);
-            assertThat(saved).doesNotContainKey(LlmAgentSubnet.CONVERSATION.name());
-            assertThat(saved).doesNotContainKey(LlmAgentSubnet.REASK_BUDGET.name());
+            assertThat(saved).doesNotContainKey(LlmAgentSubnet.Places.CONVERSATION.name());
+            assertThat(saved).doesNotContainKey(LlmAgentSubnet.Places.REASK_BUDGET.name());
 
             var resumed = registry.getOrCreate(KEY, key -> startResuming(net, checkpoints, key));
             // Restored, not seeded again on top: still exactly one permit.
@@ -105,7 +105,7 @@ class SessionCheckpointTest {
     void delivered_events_do_not_accumulate_across_resumes() throws Exception {
         var checkpoints = SessionCheckpointStore.inMemory();
         var net = agentNet();
-        try (var registry = SessionExecutorRegistry.strongOwned(checkpoints)) {
+        try (var registry = SessionExecutorRegistry.builder().checkpoints(checkpoints).build()) {
             for (int i = 0; i < 3; i++) {
                 var runner = registry.getOrCreate(KEY, key -> startResuming(net, checkpoints, key));
                 TestSubscriber<Event> egress = runner.adkEvents().test();
@@ -129,7 +129,7 @@ class SessionCheckpointTest {
         var checkpoints = SessionCheckpointStore.inMemory();
         var net = counterNet(new CountDownLatch(0));
         Function<SessionKey, PetriRunner> factory = key -> counterRunner(net, checkpoints, key).start();
-        try (var registry = SessionExecutorRegistry.cleanerOwned(checkpoints)) {
+        try (var registry = SessionExecutorRegistry.builder().cleanerOwned().checkpoints(checkpoints).build()) {
             bumpOnce(registry, factory);
 
             long deadline = System.currentTimeMillis() + 10_000;
@@ -161,7 +161,7 @@ class SessionCheckpointTest {
     void a_runner_names_further_places_to_leave_out() throws Exception {
         var checkpoints = SessionCheckpointStore.inMemory();
         var net = counterNet(new CountDownLatch(0));
-        try (var registry = SessionExecutorRegistry.strongOwned(checkpoints)) {
+        try (var registry = SessionExecutorRegistry.builder().checkpoints(checkpoints).build()) {
             var runner = registry.getOrCreate(KEY, key -> counterRunner(net, checkpoints, key)
                     .excludeFromCheckpoint(DONE)
                     .start());
@@ -185,7 +185,7 @@ class SessionCheckpointTest {
         var checkpoints = SessionCheckpointStore.inMemory();
         var net = counterNet(new CountDownLatch(0));
         Function<SessionKey, PetriRunner> factory = key -> counterRunner(net, checkpoints, key).start();
-        try (var registry = SessionExecutorRegistry.strongOwned(checkpoints)) {
+        try (var registry = SessionExecutorRegistry.builder().checkpoints(checkpoints).build()) {
             var first = registry.getOrCreate(KEY, factory);
             first.inject(BUMP, "x").get(1, TimeUnit.SECONDS);
             registry.close(KEY);
@@ -245,14 +245,14 @@ class SessionCheckpointTest {
         var checkpoints = SessionCheckpointStore.inMemory();
         var release = new CountDownLatch(1);
         var net = counterNet(release);
-        try (var registry = SessionExecutorRegistry.strongOwned(checkpoints)) {
+        try (var registry = SessionExecutorRegistry.builder().checkpoints(checkpoints).build()) {
             var runner = registry.getOrCreate(KEY, key -> counterRunner(net, checkpoints, key).start());
             runner.inject(BUMP, "x").get(1, TimeUnit.SECONDS);
             runner.inject(WORK, "job").get(1, TimeUnit.SECONDS);
 
             var closing = CompletableFuture.supplyAsync(() -> registry.close(KEY), EXECUTOR);
             awaitDraining(runner);
-            assertThat(registry.get(KEY)).isNull();
+            assertThat(registry.find(KEY)).isEmpty();
             assertThat(runner.inject(BUMP, "late").get(1, TimeUnit.SECONDS)).isFalse();
             assertThat(closing.isDone()).isFalse();
 
@@ -275,7 +275,8 @@ class SessionCheckpointTest {
         var release = new CountDownLatch(1);
         var net = counterNet(release);
         checkpoints.save(KEY, Map.of(COUNTER.name(), List.of(Token.of(41))));
-        try (var registry = SessionExecutorRegistry.strongOwned(checkpoints, Duration.ofMillis(100))) {
+        try (var registry = SessionExecutorRegistry.builder().checkpoints(checkpoints)
+                .checkpointTimeout(Duration.ofMillis(100)).build()) {
             var runner = registry.getOrCreate(KEY, key -> counterRunner(net, checkpoints, key).start());
             runner.inject(WORK, "job").get(1, TimeUnit.SECONDS);
 
@@ -309,7 +310,7 @@ class SessionCheckpointTest {
         var net = counterNet(release);
         // An older checkpoint, so resuming early would be visibly wrong.
         checkpoints.save(KEY, Map.of(COUNTER.name(), List.of(Token.of(7))));
-        try (var registry = SessionExecutorRegistry.strongOwned(checkpoints)) {
+        try (var registry = SessionExecutorRegistry.builder().checkpoints(checkpoints).build()) {
             var old = registry.getOrCreate(KEY, key -> counterRunner(net, checkpoints, key).start());
             assertThat(counterOf(old.snapshot().marking())).isEqualTo(7);
             old.inject(BUMP, "x").get(1, TimeUnit.SECONDS);
@@ -317,7 +318,7 @@ class SessionCheckpointTest {
 
             var closing = CompletableFuture.supplyAsync(() -> registry.close(KEY), EXECUTOR);
             awaitDraining(old);
-            assertThat(registry.get(KEY)).isNull();
+            assertThat(registry.find(KEY)).isEmpty();
 
             var factoryCalls = new AtomicInteger();
             var oldTerminatedAtCreate = new AtomicReference<Boolean>();
@@ -339,7 +340,7 @@ class SessionCheckpointTest {
             var marking = fresh.snapshot().marking();
             assertThat(counterOf(marking)).isEqualTo(8);
             assertThat(marking.get(DONE.name()).getFirst().value()).isEqualTo("job");
-            assertThat(registry.get(KEY)).isSameInstanceAs(fresh);
+            assertThat(registry.find(KEY)).hasValue(fresh);
         }
     }
 
@@ -364,7 +365,7 @@ class SessionCheckpointTest {
             }
         };
         var net = counterNet(new CountDownLatch(0));
-        try (var registry = SessionExecutorRegistry.strongOwned(broken)) {
+        try (var registry = SessionExecutorRegistry.builder().checkpoints(broken).build()) {
             var runner = registry.getOrCreate(KEY, key -> counterRunner(net, broken, key).start());
             runner.inject(BUMP, "x").get(1, TimeUnit.SECONDS);
 
@@ -399,7 +400,7 @@ class SessionCheckpointTest {
         var checkpoints = SessionCheckpointStore.inMemory();
         var net = counterNet(new CountDownLatch(0));
         Function<SessionKey, PetriRunner> factory = key -> counterRunner(net, checkpoints, key).start();
-        try (var registry = SessionExecutorRegistry.strongOwned(checkpoints)) {
+        try (var registry = SessionExecutorRegistry.builder().checkpoints(checkpoints).build()) {
             var runner = registry.getOrCreate(KEY, factory);
             runner.inject(BUMP, "x").get(1, TimeUnit.SECONDS);
             registry.close(KEY);
