@@ -93,12 +93,12 @@ OS, not the GitHub theme.
 Follow the re-check procedure in
 [ADR 0002](docs/adr/0002-adk-version-compat.md). Also re-check, with
 `javap -c -p` on the new `google-adk` jar, the bytecode claims in
-[java/README.md's "ADK Java 1.10.1 behaviour the argument relies on"](java/README.md#adk-java-1101-behaviour-the-argument-relies-on),
+[java/README.md's "ADK Java 1.13.0 behaviour the argument relies on"](java/README.md#adk-java-1130-behaviour-the-argument-relies-on),
 which no test pins: `ParallelAgent.runAsyncImpl` is
 `Flowable.merge(...).takeUntil(escalate)`; `InvocationContext.endInvocation`
 is a non-volatile field read only in `BaseAgent` and `BaseLlmFlow`; and
 `Functions` uses `concatMapEager`/`concatMapMaybe` and never reads
-`endInvocation`. Update the README's "ADK 1.10.1" mentions with them.
+`endInvocation`. Update the README's "ADK 1.13.0" mentions with them.
 
 ## Architecture
 

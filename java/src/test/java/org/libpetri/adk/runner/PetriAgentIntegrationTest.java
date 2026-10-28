@@ -415,6 +415,9 @@ class PetriAgentIntegrationTest {
         // perfectly consistent about being wrong.
         for (var e : agentEvents) {
             assertThat(e.invocationId()).isNotEqualTo(NET_LOCAL_INVOCATION_ID);
+            // ADK's Event.build() assigns no id; the adapter stamps one, as ADK's
+            // own agents do, because ADK reads event ids back from the session.
+            assertThat(e.id()).isNotEmpty();
         }
     }
 

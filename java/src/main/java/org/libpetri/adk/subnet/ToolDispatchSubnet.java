@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import org.libpetri.core.Arc;
 import org.libpetri.core.SubnetDef;
@@ -82,11 +83,15 @@ public final class ToolDispatchSubnet {
      * @param toolsByName       lookup keyed by {@link BaseTool#name()}. Must
      *                          be non-null; an empty map is legal (every call
      *                          routes to an unknown-tool error response).
-     * @param contextSupplier   supplies the {@link ToolContext} passed to
-     *                          every {@link BaseTool#runAsync} invocation.
+     * @param contextFor        builds the {@link ToolContext} passed to the
+     *                          {@link BaseTool#runAsync} of one call, from that
+     *                          call. Called once per call within a dispatch
+     *                          fire, before the call's task starts, so give
+     *                          each call a context of its own: for example
+     *                          {@code ToolContext.builder(ic).functionCallId(call.id().orElse(null)).build()},
+     *                          which ADK's confirmation and auth requests need.
      *                          May return {@code null} if the tools don't
-     *                          consult the context. Called once per call
-     *                          within a dispatch fire.
+     *                          consult the context.
      * @param dispatchExecutor  executor used to run individual tool
      *                          invocations concurrently. Each call gets its
      *                          own task; the action's returned future
@@ -97,20 +102,32 @@ public final class ToolDispatchSubnet {
      */
     public static Map<String, TransitionAction> actionBindings(
             Map<String, BaseTool> toolsByName,
-            Supplier<ToolContext> contextSupplier,
+            Function<FunctionCall, ToolContext> contextFor,
             ExecutorService dispatchExecutor) {
         Objects.requireNonNull(toolsByName, "toolsByName");
-        Objects.requireNonNull(contextSupplier, "contextSupplier");
+        Objects.requireNonNull(contextFor, "contextFor");
         Objects.requireNonNull(dispatchExecutor, "dispatchExecutor");
         var session = new LinkedHashMap<String, TransitionAction>();
         session.put(Transitions.DISPATCH,
-                dispatchAction(toolsByName, contextSupplier, dispatchExecutor));
+                dispatchAction(toolsByName, contextFor, dispatchExecutor));
         return SubnetActions.bind(DEF, session);
+    }
+
+    /**
+     * {@link #actionBindings(Map, Function, ExecutorService)} with one context
+     * supplier for every call, which cannot tell the calls apart.
+     */
+    public static Map<String, TransitionAction> actionBindings(
+            Map<String, BaseTool> toolsByName,
+            Supplier<ToolContext> contextSupplier,
+            ExecutorService dispatchExecutor) {
+        Objects.requireNonNull(contextSupplier, "contextSupplier");
+        return actionBindings(toolsByName, call -> contextSupplier.get(), dispatchExecutor);
     }
 
     private static TransitionAction dispatchAction(
             Map<String, BaseTool> tools,
-            Supplier<ToolContext> contextSupplier,
+            Function<FunctionCall, ToolContext> contextFor,
             ExecutorService dispatchExecutor) {
         return ctx -> {
             var batch = ctx.input(AdkColours.TOOL_CALLS);
@@ -134,7 +151,7 @@ public final class ToolDispatchSubnet {
             // don't pin platform threads.
             List<CompletableFuture<FunctionResponse>> futures = new ArrayList<>(calls.size());
             for (var call : calls) {
-                var toolCtx = contextSupplier.get();
+                var toolCtx = contextFor.apply(call);
                 futures.add(CompletableFuture.supplyAsync(
                         () -> dispatchOneSync(tools, call, toolCtx),
                         dispatchExecutor));

@@ -162,6 +162,22 @@ class BidiPetriAgentTest {
             await(() -> !f.conn.realtimeSends.isEmpty() && !f.conn.contentSends.isEmpty(), 2000);
             assertThat(f.conn.realtimeSends).containsExactly(audio);
             assertThat(f.conn.contentSends).containsExactly(text);
+            assertThat(f.conn.partials).containsExactly(false);
+        }
+    }
+
+    @Test
+    void a_partial_content_request_reaches_the_connection_as_partial() throws Exception {
+        try (var f = newFixture()) {
+            Content first = Content.builder().role("user").parts(List.of(Part.fromText("hi"))).build();
+            Content rest = Content.builder().role("user").parts(List.of(Part.fromText("there"))).build();
+
+            f.queue.content(first, true);
+            f.queue.content(rest);
+
+            await(() -> f.conn.partials.size() == 2, 2000);
+            assertThat(f.conn.contentSends).containsExactly(first, rest).inOrder();
+            assertThat(f.conn.partials).containsExactly(true, false).inOrder();
         }
     }
 
@@ -308,11 +324,17 @@ class BidiPetriAgentTest {
         final PublishProcessor<LiveServerMessage> raw = PublishProcessor.create();
         final List<Blob> realtimeSends = new CopyOnWriteArrayList<>();
         final List<Content> contentSends = new CopyOnWriteArrayList<>();
+        final List<Boolean> partials = new CopyOnWriteArrayList<>();
         final AtomicBoolean closed = new AtomicBoolean();
 
         @Override public Flowable<LiveServerMessage> rawReceive() { return raw; }
         @Override public Completable sendRealtime(Blob blob) { realtimeSends.add(blob); return Completable.complete(); }
-        @Override public Completable sendContent(Content content) { contentSends.add(content); return Completable.complete(); }
+        @Override public Completable sendContent(Content content) { return sendContent(content, false); }
+        @Override public Completable sendContent(Content content, boolean partial) {
+            contentSends.add(content);
+            partials.add(partial);
+            return Completable.complete();
+        }
         @Override public Completable sendHistory(List<Content> history) { return Completable.complete(); }
         @Override public Flowable<LlmResponse> receive() { return Flowable.empty(); }
         @Override public void close() { closed.set(true); }

@@ -76,6 +76,9 @@ class PetriAgentSseTest {
         assertThat(turnInvocationId).doesNotContain("net-generated-");
         assertThat(events.stream().map(Event::invocationId).distinct().toList())
                 .containsExactly(turnInvocationId);
+        // Every event, partials included, carries an id of its own.
+        assertThat(events.stream().map(Event::id).filter(id -> id != null && !id.isEmpty()).distinct().count())
+                .isEqualTo(events.size());
     }
 
     @Test

@@ -184,6 +184,27 @@ Adopted alongside them, though never deferred:
   `END_INVOCATION`. That ends the whole per-session run, so it is a session
   end, not ADK's per-invocation end; the `END_INVOCATION` inhibitors stay.
 
+## Addendum: libpetri 10.0.0 (2026-10-28)
+
+libpetri 9.0.0 and 10.0.0 change only the verifier. Their jars' `core`,
+`runtime`, `event`, `export` and `verification` packages are byte-identical
+to 8.0.0's; `analysis` and `smt` differ. The API adds
+`SmtVerifier.partialOrderReduction`, `SmtProperty.nameAligned` and
+`quiescentNameAligned`, and `StateClassGraph.buildStubborn`. The new
+`SmtProperty` members break only an exhaustive switch over it, and there is
+none here.
+
+The full build passes unchanged with `z3` on the path (no proof flips, no
+skipped test), and the `spec/fixtures/nets` and diagram goldens do not
+drift. The gains are narrower than the release notes suggest:
+
+- Stubborn sets (VER-024) speed up only the untimed quiescence proofs
+  (`deadlockFree`).
+- Linear-bound-first (VER-015) skips nets with environment places, and every
+  `StockSubnetProofsTest` proof uses `arrivals(...)`.
+
+It also puts the Java port on the verifier generation libpetri-py 7.3 is on.
+
 ## Next-bump procedure
 
 Unchanged from [ADR 0002](0002-adk-version-compat.md). Add one step: run the

@@ -443,8 +443,7 @@ public final class PetriAgent extends BaseAgent {
             // terminal predicate then drops the failure subscription with the
             // rest of the turn, so it never outlives the invocation and the
             // session's hot egress is left intact for the next one.
-            var egress = runner.adkEvents()
-                    .map(e -> e.toBuilder().invocationId(ctx.invocationId()).build());
+            var egress = runner.adkEvents().map(e -> stamped(e, ctx));
             var turn = Flowable.merge(egress, turnFailureSignal(runner))
                     .takeUntil((Event e) -> !e.partial().orElse(false));
             var replayed = turn.replay();
@@ -475,7 +474,7 @@ public final class PetriAgent extends BaseAgent {
                                 // to a fresh random UUID per event: the reply would be
                                 // persisted under an id unrelated to the user message it
                                 // answers, and to the span opened for the turn.
-                                .map(e -> e.toBuilder().invocationId(ctx.invocationId()).build())
+                                .map(e -> stamped(e, ctx))
                                 .filter(e -> !e.partial().orElse(false)),
                         turnFailureSignal(runner))
                 .take(1)
@@ -508,6 +507,20 @@ public final class PetriAgent extends BaseAgent {
      * turn-based model, and supersession is the trigger for the previous
      * span's end. No-op when OTel isn't wired.
      */
+    /**
+     * The turn's invocation id, and an event id where the net left none. ADK's
+     * {@code Event.build()} assigns no id, and ADK reads ids back from the
+     * session (an {@code LlmAgent} resuming in the same invocation compares
+     * them), so every event this agent emits carries one.
+     */
+    private static Event stamped(Event e, InvocationContext ctx) {
+        var b = e.toBuilder().invocationId(ctx.invocationId());
+        if (e.id() == null || e.id().isEmpty()) {
+            b.id(ctx.newUuid());
+        }
+        return b.build();
+    }
+
     private void openInvocationSpan(InvocationContext ctx, SessionKey key) {
         if (tracer == null) {
             return;

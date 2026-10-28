@@ -25,14 +25,16 @@ both questions cheaply at the next bump instead of re-deriving it.
 adk-libpetri imports these host types (from `src/main` plus the test-tree
 exemplars). Anything outside this list can change freely without affecting us:
 
-- `com.google.adk.agents`: `BaseAgent`, `InvocationContext`, `RunConfig`,
-  `LiveRequestQueue`, `LlmAgent` (demos only)
+- `com.google.adk.agents`: `BaseAgent` (a `workflow.BaseNode` since 1.12),
+  `InvocationContext`, `RunConfig`, `LiveRequestQueue`, `LiveRequest`,
+  `LlmAgent` (demos only)
 - `com.google.adk.events`: `Event`, `EventActions`
 - `com.google.adk.models`: `BaseLlm`, `BaseLlmConnection`, `LlmRequest`,
   `LlmResponse`, `GeminiUtil`, `GeminiLlmConnection` (foil only)
 - `com.google.adk.runner`: `InMemoryRunner` (demos only)
 - `com.google.adk.sessions`: `BaseSessionService`, `Session`, `InMemorySessionService`
-- `com.google.adk.tools`: `BaseTool`, `ToolContext`
+- `com.google.adk.tools`: `BaseTool`, `ToolContext` (its call-scoped members
+  live on `agents.Context` since 1.12)
 - `com.google.genai`: `Client`, `AsyncSession`, `ResponseStream`, plus
   `types.{Content, Part, FunctionCall, FunctionResponse, LiveServerMessage,
   LiveServerContent, VoiceActivity, Blob, ...}`
@@ -199,7 +201,8 @@ Cheap, ordered, and stops early when nothing on our surface moved.
    red is good news about ADK and means the README claim needs updating, not
    the test silencing.
 5. **Re-confirm the two bypass rationales by grep**, since neither has a test:
-   `Gemini.java` still `thenApplyAsync`-hops in `generateContent`, and
+   `Gemini.java` still `thenApplyAsync`-hops on `generateContent`'s path (in
+   the private `sendRequest` since 1.12), and
    `GeminiLlmConnection` still has no `voiceActivity` mapping.
 6. **Full suite**, then update this ADR's "what changed" section with the new
    delta and the version in Scope.

@@ -21,7 +21,7 @@ Java 25, Maven 3.9.x via wrapper.
 | | Version |
 |---|---|
 | `org.libpetri:libpetri`              | 10.0.0 (Maven Central) |
-| `com.google.adk:google-adk`          | 1.10.1 (Maven Central) |
+| `com.google.adk:google-adk`          | 1.13.0 (Maven Central) |
 | `com.google.genai:google-genai`      | 1.58.0 (transitive via google-adk) |
 | `io.reactivex.rxjava3:rxjava`        | 3.1.12 |
 | `io.opentelemetry:opentelemetry-api` | 1.51.0 (transitive via google-adk and libpetri); tests pin `opentelemetry-sdk-testing` 1.65.0 |
@@ -37,7 +37,7 @@ verification suite skip silently.
 
 ### Protobuf version floor
 
-ADK 1.10.1's transitives (the `com.google.cloud` clients such as
+ADK 1.13.0's transitives (the `com.google.cloud` clients such as
 `google-cloud-aiplatform` and `google-cloud-storage`, and
 `com.google.api.grpc:proto-google-common-protos`) ship protobuf gencode
 compiled against 4.33.x. The protobuf runtime contract is "runtime at
@@ -236,8 +236,8 @@ The root README explains the two registry modes in
 
 ## Calling Gemini without `commonPool`
 
-The async genai client and ADK's own `Gemini.generateContent` schedule
-continuations on `ForkJoinPool.commonPool()`, the shared singleton this
+The async genai client and ADK's own `Gemini.generateContent` (through its
+private `sendRequest`) schedule continuations on `ForkJoinPool.commonPool()`, the shared singleton this
 project bans. The fix needs no fork: call genai's synchronous API on a
 virtual thread. genai's sync facade (`client.models.generateContent` /
 `generateContentStream`) and OkHttp's synchronous `execute()` both run on
@@ -354,7 +354,7 @@ application code.
 
 The VAD and barge-in signals (`LiveServerContent.interrupted()`,
 `LiveServerMessage.voiceActivity()`) are public on genai, but ADK Java
-1.10.1's `GeminiLlmConnection` maps a VAD-only frame to an "Unknown server
+1.13.0's `GeminiLlmConnection` maps a VAD-only frame to an "Unknown server
 message" error, so the speech-activity edges never reach a `receive()`
 consumer
 ([`VoiceVadEdgeAdkFoilTest`](src/test/java/org/libpetri/adk/demos/VoiceVadEdgeAdkFoilTest.java)).
@@ -383,29 +383,33 @@ fully-qualified names are a fork by classpath shadowing and break
 [design commitment 4](../README.md#design-commitments). Implement
 `LiveConnection` and call `bridge(...)` instead.
 
-## ADK Java 1.10.1 behaviour the argument relies on
+## ADK Java 1.13.0 behaviour the argument relies on
 
 The root README's ADK-side paragraphs rest on these facts about the
-`google-adk` 1.10.1 bytecode. No test pins them; re-check them with
+`google-adk` 1.13.0 bytecode. No test pins them; re-check them with
 `javap -c -p` on the new jar at every ADK bump, as part of the procedure
 in [ADR 0002](../docs/adr/0002-adk-version-compat.md#next-bump-re-check-procedure),
-and update the "ADK 1.10.1" mentions with them.
+and update the "ADK 1.13.0" mentions with them.
 
 - **`ParallelAgent.runAsyncImpl` is
   `Flowable.merge(branches).takeUntil(escalate)`.** The first branch to
   escalate ends the merge and disposes the rest: first-escalation-wins.
-  Escalate gives no preference order, no K-of-N without a check-and-act
-  counter in `session.state`, and no provable at-most-once commit
+  Since 1.11 only an escalation authored by a direct sub-agent counts; a
+  nested agent's escalate no longer stops the siblings. Escalate gives no
+  preference order, no K-of-N without a check-and-act counter in
+  `session.state`, and no provable at-most-once commit
   ([G4](../README.md#g4-at-most-one-commit-per-turn-race-optimistic-commit-quorum)).
 - **`InvocationContext.endInvocation` is a plain non-volatile `boolean`.**
   It is copied per agent run (`toBuilder`) and again per `ParallelAgent`
   branch, so `setEndInvocation(true)` in one branch is invisible to
-  siblings and parent. Only `BaseAgent.run`, `BaseLlmFlow.runOneStep` and
-  `BaseLlmFlow.runLive` read it; `BaseLlmFlow.run` does not
+  siblings and parent. Only `BaseAgent.runWithCallbacks` (named `run`
+  before 1.11), `BaseLlmFlow.runOneStep` and `BaseLlmFlow.runLive` read it;
+  `BaseLlmFlow.run` and the new `workflow` package do not
   ([N1](../README.md#n1-not-yet-guaranteed-staleness-across-turns)).
 - **`Functions` runs tool calls with `Observable.concatMapEager` or
-  `concatMapMaybe`**, chosen by `RunConfig.toolExecutionMode`, and never
-  reads `endInvocation` ([N1](../README.md#n1-not-yet-guaranteed-staleness-across-turns)).
+  `concatMapMaybe`**, chosen by `RunConfig.toolExecutionMode` (with
+  `subscribeOn` per call for `PARALLEL_SUBSCRIBE`), and never reads
+  `endInvocation` ([N1](../README.md#n1-not-yet-guaranteed-staleness-across-turns)).
 - **Fan-out width is fixed before the run.** ADK's idiom is
   `SequentialAgent(ParallelAgent(sub-agents with outputKey), synthesizer)`,
   whose branch count is fixed at build time. RxJava's
@@ -413,7 +417,8 @@ and update the "ADK 1.10.1" mentions with them.
   subscription ([N2](../README.md#n2-not-yet-guaranteed-variable-n-fan-out)).
 
 [ADR 0004](../docs/adr/0004-libpetri-8-and-adk-1.10.md) records the move
-to ADK 1.10.
+to ADK 1.10, and [ADR 0011](../docs/adr/0011-adk-java-1.13.md) the move to
+1.13.
 
 ## Source layout
 

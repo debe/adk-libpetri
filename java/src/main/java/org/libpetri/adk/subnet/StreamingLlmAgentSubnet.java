@@ -5,6 +5,7 @@ import com.google.adk.models.BaseLlm;
 import com.google.adk.tools.BaseTool;
 import com.google.adk.tools.ToolContext;
 import com.google.genai.types.Content;
+import com.google.genai.types.FunctionCall;
 import com.google.genai.types.Part;
 import java.util.Map;
 import java.util.Objects;
@@ -82,7 +83,7 @@ public final class StreamingLlmAgentSubnet {
             ExecutorService dispatchExecutor,
             AtomicReference<PetriNetExecutor> executorRef,
             LlmStepSubnet.Callbacks callbacks,
-            Supplier<ToolContext> toolContextSupplier) {
+            Function<FunctionCall, ToolContext> toolContext) {
 
         public Config {
             Objects.requireNonNull(name, "name");
@@ -97,7 +98,7 @@ public final class StreamingLlmAgentSubnet {
             Objects.requireNonNull(invocationIdSupplier, "invocationIdSupplier");
             Objects.requireNonNull(dispatchExecutor, "dispatchExecutor");
             callbacks = callbacks == null ? LlmStepSubnet.Callbacks.none() : callbacks;
-            toolContextSupplier = toolContextSupplier == null ? () -> null : toolContextSupplier;
+            toolContext = toolContext == null ? call -> null : toolContext;
         }
 
         public static Builder builder(String name, String model) {
@@ -108,7 +109,7 @@ public final class StreamingLlmAgentSubnet {
         public Config withExecutorRef(AtomicReference<PetriNetExecutor> ref) {
             return new Config(name, model, systemInstruction, tools, reaskBudget,
                     fallbackContent, invocationIdSupplier, dispatchExecutor,
-                    Objects.requireNonNull(ref, "ref"), callbacks, toolContextSupplier);
+                    Objects.requireNonNull(ref, "ref"), callbacks, toolContext);
         }
 
         public static final class Builder {
@@ -122,7 +123,7 @@ public final class StreamingLlmAgentSubnet {
             private Supplier<String> invocationIdSupplier = () -> UUID.randomUUID().toString();
             private ExecutorService dispatchExecutor;
             private LlmStepSubnet.Callbacks callbacks = LlmStepSubnet.Callbacks.none();
-            private Supplier<ToolContext> toolContextSupplier = () -> null;
+            private Function<FunctionCall, ToolContext> toolContext = call -> null;
             private AtomicReference<PetriNetExecutor> executorRef;
 
             private Builder(String name, String model) {
@@ -140,15 +141,21 @@ public final class StreamingLlmAgentSubnet {
             /** Model-call callbacks, forwarded to the composed {@link LlmStepSubnet}. */
             public Builder callbacks(LlmStepSubnet.Callbacks c)    { this.callbacks = c; return this; }
 
-            /** Supplies the {@link ToolContext} handed to each tool; defaults to {@code () -> null}. */
-            public Builder toolContextSupplier(Supplier<ToolContext> s) { this.toolContextSupplier = s; return this; }
+            /** Builds the {@link ToolContext} handed to one tool call; defaults to {@code call -> null}. */
+            public Builder toolContext(Function<FunctionCall, ToolContext> f) { this.toolContext = f; return this; }
+
+            /** {@link #toolContext} with one supplier for every call. */
+            public Builder toolContextSupplier(Supplier<ToolContext> s) {
+                this.toolContext = s == null ? null : call -> s.get();
+                return this;
+            }
             public Builder executorRef(AtomicReference<PetriNetExecutor> ref) { this.executorRef = ref; return this; }
 
             public Config build() {
                 return new Config(name, model, Optional.ofNullable(systemInstruction),
                         tools, reaskBudget, fallbackContent, invocationIdSupplier,
                         dispatchExecutor, executorRef,
-                        callbacks, toolContextSupplier);
+                        callbacks, toolContext);
             }
         }
     }
@@ -171,7 +178,7 @@ public final class StreamingLlmAgentSubnet {
         return SubnetActions.bind(DEF, SubnetActions.merge(
                 LlmStreamingStepSubnet.actionBindings(baseLlm, streamingCfg(config)),
                 ToolDispatchSubnet.actionBindings(
-                        config.tools(), config.toolContextSupplier(), config.dispatchExecutor()),
+                        config.tools(), config.toolContext(), config.dispatchExecutor()),
                 LlmAgentSubnet.ownActions(agentConfig)));
     }
 
@@ -235,7 +242,7 @@ public final class StreamingLlmAgentSubnet {
                 config.invocationIdSupplier(),
                 config.dispatchExecutor(),
                 config.callbacks(),
-                config.toolContextSupplier());
+                config.toolContext());
     }
 
     private StreamingLlmAgentSubnet() {}

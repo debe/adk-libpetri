@@ -149,7 +149,9 @@ public final class BidiPetriAgent {
                 req -> {
                     // sendRealtime/sendContent return cold Completables; subscribe to fire and close on send failure.
                     req.blob().ifPresent(b -> connection.sendRealtime(b).subscribe(() -> {}, connection::close));
-                    req.content().ifPresent(c -> connection.sendContent(c).subscribe(() -> {}, connection::close));
+                    // A partial request leaves the user's turn open (turnComplete=false), as ADK 1.13 sends it.
+                    req.content().ifPresent(c -> connection.sendContent(c, req.isPartial())
+                            .subscribe(() -> {}, connection::close));
                     if (req.shouldClose()) {
                         connection.close();
                     }

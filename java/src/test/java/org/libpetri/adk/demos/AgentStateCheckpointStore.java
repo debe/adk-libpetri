@@ -94,7 +94,7 @@ public final class AgentStateCheckpointStore implements SessionCheckpointStore {
     public Optional<Map<String, List<Token<?>>>> load(SessionKey key) {
         var session = session(key);
         if (session.isEmpty()) return Optional.empty();
-        var events = session.get().events();
+        var events = session.get().immutableEvents();
         for (int i = events.size() - 1; i >= 0; i--) {
             var state = events.get(i).actions().agentState()
                     .map(s -> s.get(MARKING_KEY))

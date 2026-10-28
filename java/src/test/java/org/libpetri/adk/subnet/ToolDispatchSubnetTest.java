@@ -256,6 +256,33 @@ class ToolDispatchSubnetTest {
         assertThat(captured.get()).isSameInstanceAs(sentinel);
     }
 
+    @Test
+    void each_call_gets_the_tool_context_built_for_it() {
+        // A context per call is what lets a tool see its own functionCallId,
+        // which ADK's requestConfirmation and auth requests need.
+        var contextsByCallId = new java.util.concurrent.ConcurrentHashMap<String, ToolContext>();
+        var receivedByArg = new java.util.concurrent.ConcurrentHashMap<Object, ToolContext>();
+        var capturingTool = new BaseTool("capture", "captures context") {
+            @Override
+            public Single<Map<String, Object>> runAsync(Map<String, Object> args, ToolContext toolCtx) {
+                receivedByArg.put(args.get("n"), toolCtx);
+                return Single.just(Map.of());
+            }
+        };
+        Function<FunctionCall, ToolContext> contextFor = call -> contextsByCallId.computeIfAbsent(
+                call.id().orElseThrow(), id -> org.mockito.Mockito.mock(ToolContext.class));
+
+        var fixture = runWithContext(
+                Map.of("capture", capturingTool),
+                contextFor,
+                callBatch(call("capture", Map.of("n", 1), "c-1"), call("capture", Map.of("n", 2), "c-2")));
+
+        assertThat(fixture.responses()).hasSize(2);
+        assertThat(receivedByArg.get(1)).isSameInstanceAs(contextsByCallId.get("c-1"));
+        assertThat(receivedByArg.get(2)).isSameInstanceAs(contextsByCallId.get("c-2"));
+        assertThat(contextsByCallId.get("c-1")).isNotSameInstanceAs(contextsByCallId.get("c-2"));
+    }
+
     // ============================================================
     //  Subnet shape + binding validation
     // ============================================================
@@ -297,10 +324,24 @@ class ToolDispatchSubnetTest {
             Map<String, BaseTool> tools,
             Supplier<ToolContext> supplier,
             AdkColours.ToolCalls calls) {
+        return run(tools, ToolDispatchSubnet.actionBindings(tools, supplier, EXECUTOR), calls);
+    }
+
+    private static Fixture runWithContext(
+            Map<String, BaseTool> tools,
+            Function<FunctionCall, ToolContext> contextFor,
+            AdkColours.ToolCalls calls) {
+        return run(tools, ToolDispatchSubnet.actionBindings(tools, contextFor, EXECUTOR), calls);
+    }
+
+    private static Fixture run(
+            Map<String, BaseTool> tools,
+            Map<String, org.libpetri.core.TransitionAction> actions,
+            AdkColours.ToolCalls calls) {
         var net = PetriNet.builder("test-net")
                 .compose(ToolDispatchSubnet.DEF)
                 .build()
-                .bindActions(ToolDispatchSubnet.actionBindings(tools, supplier, EXECUTOR));
+                .bindActions(actions);
 
         Map<Place<?>, List<Token<?>>> initial = Map.of(
                 AdkColours.TOOL_CALLS, List.of(Token.of(calls)));

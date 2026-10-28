@@ -848,7 +848,7 @@ class LlmAgentSubnetTest {
     }
 
     /**
-     * The composite must forward the toolContextSupplier it is given.
+     * The composite must forward the tool context it is given.
      *
      * <p>It used to hard-code {@code () -> null} when delegating to
      * {@link ToolDispatchSubnet}, so a tool needing state, artifacts or auth
@@ -863,12 +863,13 @@ class LlmAgentSubnetTest {
                 .toolContextSupplier(() -> marker)
                 .build();
 
-        assertThat(config.toolContextSupplier().get()).isSameInstanceAs(marker);
-        // Default stays the documented () -> null rather than becoming required.
+        var someCall = FunctionCall.builder().name("t").id("c-1").build();
+        assertThat(config.toolContext().apply(someCall)).isSameInstanceAs(marker);
+        // Default stays the documented call -> null rather than becoming required.
         var plain = LlmAgentSubnet.Config.builder("agent", "fake-model")
                 .dispatchExecutor(EXECUTOR)
                 .build();
-        assertThat(plain.toolContextSupplier().get()).isNull();
+        assertThat(plain.toolContext().apply(someCall)).isNull();
         assertThat(plain.callbacks()).isEqualTo(LlmStepSubnet.Callbacks.none());
     }
 }

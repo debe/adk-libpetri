@@ -53,13 +53,28 @@ existed.
   `.gitignore` hid its package from git, so CI never ran the diagram golden
   check.
 - **Dependencies**: libpetri `3.0.1` -> `10.0.0` and google-adk `1.8.0` ->
-  `1.10.1`. genai stays `1.58.0`, protobuf stays `4.33.5` and rxjava stays
-  `3.1.12`, so the protobuf floor guidance is unchanged. ADK 1.10.x moves
+  `1.13.0`. libpetri 9.0 and 10.0 needed no code change: their breaks
+  (`NameColouredEncoder.buildPlan`, two new `SmtProperty` records) touch
+  nothing here, and every proof keeps its verdict. ADK 1.13 moves genai to
+  `1.77.0` transitively; see [ADR 0011](docs/adr/0011-adk-java-1.13.md).
+- **Live sends keep `partial`.** `BidiPetriAgent.bridge` forwards a
+  `LiveRequest`'s `partial` flag (ADK 1.13) to
+  `sendContent(content, partial)`, so a partial send leaves the user's turn
+  open. `SyncGeminiLiveConnection` implements the two-argument form.
+- **Every event `PetriAgent` emits has an id.** ADK's `Event.build()`
+  assigns none and ADK reads ids back from the session; the adapter stamps
+  `ctx.newUuid()` where the net left none.
+- **Breaking: a `ToolContext` per tool call.** `LlmAgentSubnet.Config` and
+  `StreamingLlmAgentSubnet.Config` replace `toolContextSupplier` with
+  `toolContext`, a `Function<FunctionCall, ToolContext>`, so a tool can see
+  its own `functionCallId`. `ToolDispatchSubnet.actionBindings` takes the
+  function too. The builders' `toolContextSupplier(...)` and the
+  `Supplier` overload of `actionBindings` remain as adapters.
+- **ADK 1.8.0 -> 1.10.1**, the earlier step: genai stays `1.58.0`,
+  protobuf stays `4.33.5` and rxjava stays `3.1.12`, so the protobuf floor
+  guidance is unchanged. ADK 1.10.x moves
   `io.modelcontextprotocol.sdk:mcp` to `2.0.0`; adk-libpetri does not use it.
   See [ADR 0004](docs/adr/0004-libpetri-8-and-adk-1.10.md).
-  libpetri 9.0 and 10.0 needed no code change: their breaks
-  (`NameColouredEncoder.buildPlan`, two new `SmtProperty` records) touch
-  nothing here, and every proof keeps its verdict.
 - **Z3 is now an external binary** (libpetri 4.0). SMT verification runs a
   `z3` executable (4.8+, on `PATH` or named by `LIBPETRI_Z3`) instead of JNI
   natives. This matters only to consumers who run libpetri's verifier; the

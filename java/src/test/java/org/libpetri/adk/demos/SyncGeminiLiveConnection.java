@@ -56,10 +56,11 @@ import org.libpetri.adk.runner.PetriRunner;
  *       so {@link #rawReceive()} exposes the unabstracted {@link LiveServerMessage}
  *       stream and {@link #voiceSignals(LiveServerMessage)} decodes the edges the
  *       net cares about (speech start/stop, barge-in interrupt, turn complete).</li>
- *   <li><b>Hardcoded {@code turnComplete=true}.</b> ADK's
- *       {@code BaseLlmConnection.sendContent} forces a turn boundary on every send,
- *       which breaks history replay and streaming tool responses.
- *       {@link #sendClientContent(Content, boolean)} restores explicit control.</li>
+ *   <li><b>Turn shape.</b> Before ADK 1.13, {@code BaseLlmConnection.sendContent}
+ *       forced a turn boundary on every send, which broke history replay and
+ *       streaming tool responses. 1.13 adds {@code sendContent(content, partial)},
+ *       which this class implements; {@link #sendClientContent(Content, boolean)}
+ *       sets {@code turnComplete} directly.</li>
  * </ul>
  *
  * <h2>How the decoded edges reach the net (env-place injection only)</h2>
@@ -192,11 +193,7 @@ public final class SyncGeminiLiveConnection implements LiveConnection {
 
     // ---- BaseLlmConnection contract -------------------------------------------
 
-    /**
-     * Send client content with explicit {@code turnComplete} control, the
-     * semantics ADK's {@link #sendContent(Content)} loses by hardcoding
-     * {@code turnComplete=true}.
-     */
+    /** Send client content with explicit {@code turnComplete} control. */
     public Completable sendClientContent(Content content, boolean turnComplete) {
         Objects.requireNonNull(content, "content");
         return Completable.fromFuture(sessionFuture.thenCompose(session ->
@@ -218,6 +215,12 @@ public final class SyncGeminiLiveConnection implements LiveConnection {
     @Override
     public Completable sendContent(Content content) {
         return sendClientContent(content, true);
+    }
+
+    /** A partial send leaves the turn open: {@code turnComplete = !partial}, as ADK 1.13's own. */
+    @Override
+    public Completable sendContent(Content content, boolean partial) {
+        return sendClientContent(content, !partial);
     }
 
     @Override

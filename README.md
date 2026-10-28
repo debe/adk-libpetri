@@ -34,7 +34,7 @@ In Python (ADK 2.13) there are three ways in:
 - **Compose it in code** from stock subnets (`LlmAgent`, `ToolDispatch`,
   `Router`, ...) and run it as a `PetriAgent`, an ordinary `BaseAgent`.
 
-The Java port (ADK Java 1.10.1) replaces `SequentialAgent`, `ParallelAgent`,
+The Java port (ADK Java 1.13.0) replaces `SequentialAgent`, `ParallelAgent`,
 `LoopAgent`, `BaseLlmFlow` and `AgentTransfer` with the same nets behind the
 same `PetriAgent`. Neither port forks ADK or genai.
 
@@ -205,7 +205,7 @@ CI proves [G1](#g1-one-turn-at-a-time-and-no-stranded-turn) and
 ```
 
 Not on Maven Central yet: build it with `cd java && ./mvnw install`. Java 25,
-ADK Java 1.10.1, libpetri 10.0.0. Read the
+ADK Java 1.13.0, libpetri 10.0.0. Read the
 [protobuf version floor](java/README.md#protobuf-version-floor) before you pin
 protobuf yourself. The same agent as above:
 
@@ -253,7 +253,7 @@ behaviour), **Proven, no foil**, **Behavioural + foil**, **Behavioural**
 | [K-of-N: one synthesis](#g4-at-most-one-commit-per-turn-race-optimistic-commit-quorum) | `In.exactly(3, RESULT)` | Waits for all N | Proven + foil | Per turn |
 | [Silence escalation ladder](#g5-escalation-ladders-timed-recovery-as-places) | `delayed` rungs under `inhibitor(MODEL_ACTIVE)` | No counterpart | Behavioural | Clock tests, to the millisecond |
 | [Voice composition deadlock-free](#g6-full-duplex-vad-barge-in-chunk-drop-ordering-experimental) | Env places modelled `bounded(1)` | No counterpart | Proven, no foil | `deadlock_free` only |
-| [VAD edges recovered](#g6-full-duplex-vad-barge-in-chunk-drop-ordering-experimental) | `VadTapGemini` plus the `Vad` window | ADK Java 1.10.1 maps them to an error | Behavioural + foil | Java only; ADK Python keeps the edges |
+| [VAD edges recovered](#g6-full-duplex-vad-barge-in-chunk-drop-ordering-experimental) | `VadTapGemini` plus the `Vad` window | ADK Java 1.13.0 maps them to an error | Behavioural + foil | Java only; ADK Python keeps the edges |
 | [Compiled workflow safety](#compile-a-workflow) | Turn permit, idle place per node, terminal-conflict place | Raises at finalize; ends the branch on an unmatched route | Proven, no foil | Python only |
 | [Blueprint claims](#write-the-net-in-yaml-or-json) | The claims in `prove:` | No counterpart | Proven, no foil | Python only; per the claim's printed scope |
 
@@ -419,10 +419,10 @@ error through `InMemoryRunner`.
 
 **Status: Proven + foil.** Per turn.
 
-**ADK side.** ADK Java 1.10.1's `ParallelAgent` is
+**ADK side.** ADK Java 1.13.0's `ParallelAgent` is
 `Flowable.merge(branches).takeUntil(escalate)`: first escalation wins, with no
 preference order, no K-of-N and no provable at-most-once commit
-([detail](java/README.md#adk-java-1101-behaviour-the-argument-relies-on)).
+([detail](java/README.md#adk-java-1130-behaviour-the-argument-relies-on)).
 ADK Python 2.13's `Workflow`: `JoinNode` waits for every predecessor, a plain
 successor fires once per branch, and losers are not cancelled
 ([foils](python/tests/demos/patterns/)).
@@ -506,7 +506,7 @@ an answer cancels escalation and at most one answer leaves.
 recovery); **Behavioural + foil** (VAD-edge recovery); **Behavioural** (the
 rest).
 
-**ADK side.** ADK Java 1.10.1's `GeminiLlmConnection` maps a VAD-only frame to
+**ADK side.** ADK Java 1.13.0's `GeminiLlmConnection` maps a VAD-only frame to
 an "Unknown server message" error
 ([`VoiceVadEdgeAdkFoilTest`](java/src/test/java/org/libpetri/adk/demos/VoiceVadEdgeAdkFoilTest.java)).
 ADK Python 2.13 keeps the edges on `Event.voice_activity`.
@@ -543,7 +543,7 @@ to be backed with a demo, a foil and an SMT property.*
 ADK Java's `InvocationContext.endInvocation` is a plain field copied per agent
 run and per `ParallelAgent` branch, so one branch's `setEndInvocation(true)`
 is invisible to its siblings, and the tool path never reads it
-([detail](java/README.md#adk-java-1101-behaviour-the-argument-relies-on)).
+([detail](java/README.md#adk-java-1130-behaviour-the-argument-relies-on)).
 
 The sketch stamps each result with its generation. `BumpGeneration` advances a
 seeded `LATEST_GENERATION` on every new turn; each commit site reads it and
@@ -677,7 +677,7 @@ One adapter per entry point; nothing in ADK is patched or forked.
 
 <p align="center"><img src="docs/assets/bidi-halves.svg" alt="BIDI halves: bridge pumps LiveRequestQueue frames into a LiveConnection and hands each raw server message to the onServerMessage callback, which injects or signals into the session net; the net authors every Event on its egress stream. Below, three ways to get voice-activity edges: VadTapGemini and SyncGeminiLiveConnection in Java, and in Python stock ADK's Event.voice_activity or GenaiLiveConnection" width="860"></p>
 
-ADK Java 1.10.1 drops the voice-activity edges, so Java recovers them with
+ADK Java 1.13.0 drops the voice-activity edges, so Java recovers them with
 `VadTapGemini` (wraps ADK's live transport through the `connectLiveTransport`
 seam) or `SyncGeminiLiveConnection` (reads genai directly). ADK Python 2.13
 keeps them. Never shadow ADK's classes on the classpath to fix this: that is a
@@ -822,7 +822,7 @@ blueprints.
 | Port | ADK | libpetri | Release |
 |---|---|---|---|
 | **Python** ([`python/`](python/)) | ADK Python 2.13 (`google-adk~=2.13.0`) | `libpetri>=7.3,<8` (PyPI, over the Rust runtime) | 0.1.0a1, preliminary |
-| **Java** ([`java/`](java/)) | ADK Java 1.10.1 | `org.libpetri:libpetri:10.0.0` | 0.4.0, unreleased |
+| **Java** ([`java/`](java/)) | ADK Java 1.13.0 | `org.libpetri:libpetri:10.0.0` | 0.4.0, unreleased |
 | TypeScript, Rust | reserved | | |
 
 Each port has its own version and tags (`python/v…`, `java/v…`).

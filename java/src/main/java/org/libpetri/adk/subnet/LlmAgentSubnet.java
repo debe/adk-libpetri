@@ -5,6 +5,7 @@ import com.google.adk.models.BaseLlm;
 import com.google.adk.tools.BaseTool;
 import com.google.adk.tools.ToolContext;
 import com.google.genai.types.Content;
+import com.google.genai.types.FunctionCall;
 import com.google.genai.types.Part;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -16,6 +17,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
+import java.util.function.Function;
 import org.libpetri.core.Arc;
 import org.libpetri.core.Interface;
 import org.libpetri.core.PetriNet;
@@ -219,7 +221,7 @@ public final class LlmAgentSubnet {
             Supplier<String> invocationIdSupplier,
             ExecutorService dispatchExecutor,
             LlmStepSubnet.Callbacks callbacks,
-            Supplier<ToolContext> toolContextSupplier) {
+            Function<FunctionCall, ToolContext> toolContext) {
 
         public Config {
             Objects.requireNonNull(name, "name");
@@ -234,7 +236,7 @@ public final class LlmAgentSubnet {
             Objects.requireNonNull(invocationIdSupplier, "invocationIdSupplier");
             Objects.requireNonNull(dispatchExecutor, "dispatchExecutor");
             callbacks = callbacks == null ? LlmStepSubnet.Callbacks.none() : callbacks;
-            toolContextSupplier = toolContextSupplier == null ? () -> null : toolContextSupplier;
+            toolContext = toolContext == null ? call -> null : toolContext;
         }
 
         public static Builder builder(String name, String model) {
@@ -252,7 +254,7 @@ public final class LlmAgentSubnet {
             private Supplier<String> invocationIdSupplier = () -> UUID.randomUUID().toString();
             private ExecutorService dispatchExecutor;
             private LlmStepSubnet.Callbacks callbacks = LlmStepSubnet.Callbacks.none();
-            private Supplier<ToolContext> toolContextSupplier = () -> null;
+            private Function<FunctionCall, ToolContext> toolContext = call -> null;
 
             private Builder(String name, String model) {
                 this.name = name;
@@ -275,17 +277,23 @@ public final class LlmAgentSubnet {
             public Builder callbacks(LlmStepSubnet.Callbacks c)    { this.callbacks = c; return this; }
 
             /**
-             * Supplies the {@link ToolContext} handed to each tool. Defaults to
-             * {@code () -> null}, which was previously hard-coded with no way to
-             * override it, so tools needing state, artifacts or auth could not
-             * be used through this composite.
+             * Builds the {@link ToolContext} handed to one tool call, from the
+             * call (see {@link ToolDispatchSubnet#actionBindings(Map, Function, ExecutorService)}).
+             * Defaults to {@code call -> null}, for tools that need no state,
+             * artifacts or auth.
              */
-            public Builder toolContextSupplier(Supplier<ToolContext> s) { this.toolContextSupplier = s; return this; }
+            public Builder toolContext(Function<FunctionCall, ToolContext> f) { this.toolContext = f; return this; }
+
+            /** {@link #toolContext} with one supplier for every call. */
+            public Builder toolContextSupplier(Supplier<ToolContext> s) {
+                this.toolContext = s == null ? null : call -> s.get();
+                return this;
+            }
 
             public Config build() {
                 return new Config(name, model, Optional.ofNullable(systemInstruction),
                         tools, reaskBudget, fallbackContent, invocationIdSupplier,
-                        dispatchExecutor, callbacks, toolContextSupplier);
+                        dispatchExecutor, callbacks, toolContext);
             }
         }
     }
@@ -391,7 +399,7 @@ public final class LlmAgentSubnet {
         return SubnetActions.bind(DEF, SubnetActions.merge(
                 LlmStepSubnet.actionBindings(baseLlm, config.callbacks()),
                 ToolDispatchSubnet.actionBindings(
-                        config.tools(), config.toolContextSupplier(), config.dispatchExecutor()),
+                        config.tools(), config.toolContext(), config.dispatchExecutor()),
                 ownActions(config)));
     }
 

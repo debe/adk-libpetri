@@ -37,7 +37,7 @@ class AgentStateCheckpointStoreTest {
         assertThat(store.load(key)).hasValue(marking);
         // It is an ordinary ADK event, carried in agentState.
         var stored = sessions.getSession("app", "user", "s1", java.util.Optional.empty())
-                .blockingGet().events().getLast();
+                .blockingGet().immutableEvents().getLast();
         assertThat(stored.actions().agentState().orElseThrow())
                 .containsKey(AgentStateCheckpointStore.MARKING_KEY);
     }
@@ -95,6 +95,6 @@ class AgentStateCheckpointStoreTest {
 
     private static int events(InMemorySessionService sessions) {
         return sessions.getSession("app", "user", "s1", java.util.Optional.empty())
-                .blockingGet().events().size();
+                .blockingGet().immutableEvents().size();
     }
 }

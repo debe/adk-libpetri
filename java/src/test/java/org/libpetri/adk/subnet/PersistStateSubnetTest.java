@@ -52,9 +52,9 @@ class PersistStateSubnetTest {
 
         runWith(config, PersistStateSubnet.legacyWrite(Map.of("foo", "bar")));
 
-        assertThat(session.events()).hasSize(1);
-        assertThat(session.events().get(0).author()).isEqualTo("agent");
-        assertThat(session.events().get(0).invocationId()).isEqualTo("inv-fixed");
+        assertThat(session.immutableEvents()).hasSize(1);
+        assertThat(session.immutableEvents().get(0).author()).isEqualTo("agent");
+        assertThat(session.immutableEvents().get(0).invocationId()).isEqualTo("inv-fixed");
         assertThat(session.state()).containsEntry("foo", "bar");
     }
 
@@ -72,12 +72,12 @@ class PersistStateSubnetTest {
                 PersistStateSubnet.legacyWrite(Map.of("k1", "v1")),
                 PersistStateSubnet.legacyWrite(Map.of("k2", "v2")));
 
-        assertThat(session.events()).hasSize(2);
+        assertThat(session.immutableEvents()).hasSize(2);
         // Both keys are merged into state. (Order of merging is the orchestrator's
         // serial fire order — both end up present regardless.)
         assertThat(session.state()).containsAtLeast("k1", "v1", "k2", "v2");
         // Each event got a fresh invocationId from the supplier.
-        var ids = session.events().stream().map(Event::invocationId).toList();
+        var ids = session.immutableEvents().stream().map(Event::invocationId).toList();
         assertThat(ids).containsExactly("inv-1", "inv-2").inOrder();
     }
 
@@ -94,7 +94,7 @@ class PersistStateSubnetTest {
                 PersistStateSubnet.legacyWrite(Map.of("k", "first")),
                 PersistStateSubnet.legacyWrite(Map.of("k", "second")));
 
-        assertThat(session.events()).hasSize(2);
+        assertThat(session.immutableEvents()).hasSize(2);
         // Two events appended; final state has either "first" or "second" —
         // libpetri picks a deterministic fire order from the initial-marking
         // iteration order, so this test asserts on the final state without
@@ -176,7 +176,7 @@ class PersistStateSubnetTest {
         executor.run();
 
         // Both deltas persisted serially through the single Persist transition.
-        assertThat(session.events()).hasSize(2);
+        assertThat(session.immutableEvents()).hasSize(2);
         assertThat(session.state()).containsAtLeast("from", "A", "from-b", "B");
     }
 
