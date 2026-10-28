@@ -166,4 +166,16 @@ async def test_compiled_terminal_run_many_times_matches_native(orchestrator) -> 
     native, petri, _ = await run_both(with_returning_terminal, ["go"], orchestrator)
     assert [e.error_code for e in petri.events if e.error_code] == []
     assert petri.final_output == native.final_output == "Triggered for input: og"
-    assert rows(petri) == rows(native)
+    # The one approximated difference (the report's "branches"): ADK 2.13 keeps
+    # a Workflow's terminal output event on its fan-out lane, but publishes a
+    # delegated output on any other claimer's branch, here the compiled node's.
+    lane_free = [
+        r if not r[2].startswith("root_agent@1/send_output@") else (r[0], None, *r[2:])
+        for r in rows(native)
+    ]
+    assert rows(petri) == lane_free
+    assert [r[1] for r in rows(native)[3:]] == [
+        "make_uppercase@1",
+        "count_characters@1",
+        "reverse_string@1",
+    ]

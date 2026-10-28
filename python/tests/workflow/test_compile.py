@@ -191,3 +191,41 @@ def test_a_route_with_no_edge_is_a_reachable_unmatched_sink() -> None:
     proofs = verify_workflow(compile_workflow(wf), k=2)
     assert [p.result.verdict for p in proofs if p.kind == "route coverage"] == ["violated"]
     assert all(p.proven for p in proofs if p.kind != "route coverage")
+
+
+def _interruptible(cw) -> list[str]:  # type: ignore[no-untyped-def]
+    return [f.subject for f in cw.report.findings if "compiled interruptible" in f.message]
+
+
+def test_a_node_requiring_confirmation_is_compiled_interruptible() -> None:
+    """ADK 2.12: ``FunctionNode(require_confirmation=...)`` asks before it runs."""
+    from .samples import finish, node
+
+    gate = node(samples.upper, name="gate", require_confirmation=True, rerun_on_resume=True)
+    wf = Workflow(name="confirm", edges=[("START", gate, node(finish))])
+    assert _interruptible(compile_workflow(wf)) == ["gate"]
+
+
+def test_a_tool_node_requiring_confirmation_is_compiled_interruptible() -> None:
+    from google.adk.tools import FunctionTool
+
+    def lookup(user_id: str) -> str:
+        return user_id
+
+    wf = Workflow(
+        name="tool_confirm",
+        edges=[("START", FunctionTool(lookup, require_confirmation=True))],
+    )
+    assert _interruptible(compile_workflow(wf)) == ["lookup"]
+
+
+def test_a_confirmation_predicates_state_parameters_are_state_reads() -> None:
+    """ADK fills a predicate parameter that is not the node's own from ctx.state."""
+    from .samples import node
+
+    def big(text: str, limit: int) -> bool:
+        return len(text) > limit
+
+    gate = node(samples.upper, name="gate", require_confirmation=big, rerun_on_resume=True)
+    with pytest.raises(WorkflowTranslationError, match="require_confirmation parameter limit"):
+        compile_workflow(Workflow(name="pred", edges=[("START", gate)]))

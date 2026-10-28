@@ -49,7 +49,7 @@ pytest -k foil                           # ADK-only foils (green-lock ADK behavi
 ruff check . && ruff format --check . && pyright
 ```
 
-Python 3.11+, google-adk `~=2.11.0`, libpetri-py `>=7.3,<8`. `REQUIRE_Z3=1`
+Python 3.11+, google-adk `~=2.13.0`, libpetri-py `>=7.3,<8`. `REQUIRE_Z3=1`
 makes `tests/test_z3_gate.py` fail without the `z3` binary. Never name a test
 directory `docs/` (the TypeDoc rule in `.gitignore` would hide it).
 
@@ -320,7 +320,7 @@ structural changes. Python-specific rules:
 - **`_net_node.py`** (`NetNodeBase`) holds the turn and per-session runner
   logic both `PetriWorkflow` and `PetriNet` subclass; change it once.
 - **A compiled workflow is a `BaseNode`** (`PetriWorkflow`), not a
-  `BaseAgent`: ADK 2.11 runs a `BaseAgent` root on its legacy path, which has
+  `BaseAgent`: ADK 2.13 runs a `BaseAgent` root on its legacy path, which has
   no node `Context` to run child nodes with.
 - **Timed tests run on `lp.SteppedClock`** (Java's `ManualClock`):
   `.clock(c).deadline_tolerance(timedelta(0))` on the runner builder, then

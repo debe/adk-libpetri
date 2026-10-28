@@ -474,11 +474,13 @@ class PetriNet(NetNodeBase):
     draws a node's ``graph`` field: places, transitions and the nodes they run."""
 
     _blueprint: Blueprint = PrivateAttr()
+    _resolved: tuple[BaseNode, ...] = PrivateAttr(default=())
 
     def model_post_init(self, context: Any, /) -> None:
         super().model_post_init(context)
         source = _nearest_source()
         nodes = _named_nodes(self.nodes, source)
+        self._resolved = tuple(nodes.values())
         data: dict[str, Any] = {
             "places": self.places,
             "transitions": self.transitions,
@@ -586,6 +588,9 @@ class PetriNet(NetNodeBase):
 
     def _net_spec(self) -> Any:
         return self._blueprint.spec
+
+    def _static_nodes(self) -> tuple[BaseNode, ...]:
+        return self._resolved
 
     def _initial_counts(self) -> dict[str, int]:
         return self._blueprint.initial_counts()

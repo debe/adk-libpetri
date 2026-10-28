@@ -16,7 +16,7 @@ from adk_libpetri.web.builder_guard import take_note
 from adk_libpetri.web.loader import net_nodes
 from adk_libpetri.workflow import PetriWorkflow
 
-from .conftest import HERO, add_workflow_app
+from .conftest import HERO, LOCAL, add_workflow_app
 
 SAVE = "/dev/apps/{app}/builder/save"
 
@@ -60,7 +60,7 @@ def served(agents: Path) -> Iterator[tuple[TestClient, PetriAgentLoader]]:
     plain.mkdir()
     (plain / "root_agent.yaml").write_text(PLAIN)
     loader = PetriAgentLoader(str(agents))
-    with TestClient(build_app(str(agents), loader=loader)) as client:
+    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as client:
         yield client, loader
     for root in list(loader._agent_cache.values()):
         for node in net_nodes(root):
@@ -411,7 +411,7 @@ def test_single_agent_mode_guards_the_net_and_shows_the_card(
     net = (app / "root_agent.yaml").read_text()
     loader = PetriAgentLoader(str(app))
     monkeypatch.chdir(loader.agents_dir)  # as serve() does
-    with TestClient(build_app(str(app), loader=loader)) as client:
+    with TestClient(build_app(str(app), loader=loader), client=LOCAL) as client:
         card = yaml.safe_load(client.get("/dev/apps/race/builder?tmp=true").text)
         assert card["agent_class"] == "adk_libpetri.net.PetriNet" and "tools" in card
         assert "places" not in card

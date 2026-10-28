@@ -198,8 +198,13 @@ async def test_compiled_run_appends_no_events_of_its_own(orchestrator: Any) -> N
     native, petri, _ = await run_both(Factory(texts), turns, orchestrator, **OPTS)
     assert [len(t) for t in petri.turns] == [len(t) for t in native.turns]
     # Each parked turn ends on human_review's own interrupt event, as in ADK.
+    # Since v2.13.0 the sample makes the id unique per invocation and run:
+    # human_review_{invocation_id}_{run_id}, here runs 1 and 2.
     for r in (petri, native):
-        assert [t[-1].long_running_tool_ids for t in r.turns[:-1]] == [{"human_review"}] * 2
+        ids = [t[-1].long_running_tool_ids for t in r.turns[:-1]]
+        assert [len(i) for i in ids] == [1, 1]
+        for (i,), run_id in zip(ids, ("1", "2"), strict=True):
+            assert i.startswith("human_review_") and i.endswith(f"_{run_id}")
 
 
 async def test_budgeted_revise_edge_keeps_parity(orchestrator: Any) -> None:

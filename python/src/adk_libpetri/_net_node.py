@@ -29,7 +29,7 @@ import contextlib
 import hashlib
 import threading
 import weakref
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Iterable, Iterator
 from typing import TYPE_CHECKING, Any
 
 from google.adk.workflow import BaseNode
@@ -117,6 +117,16 @@ class NetNodeBase(BaseNode):
     @property
     def registry(self) -> SessionExecutorRegistry:
         return self._registry
+
+    def _static_nodes(self) -> Iterable[BaseNode]:
+        """The ADK nodes the net's transitions run."""
+        return ()
+
+    def _iter_static_children(self) -> Iterator[BaseNode]:
+        # ADK walks a root's static children for what Runner.close() closes
+        # (each LlmAgent's toolsets, 2.13) and for agent transfer paths. A
+        # net's nodes are no Workflow graph, so it names them itself.
+        yield from self._static_nodes()
 
     @property
     def orchestrator(self) -> OrchestratorLoop:

@@ -25,6 +25,7 @@ files are not changed for that: the swap is done on the reloaded module's agent.
 from __future__ import annotations
 
 import importlib
+import re
 from types import ModuleType
 from typing import Any
 
@@ -96,18 +97,29 @@ def _tool_responses(fake: ScriptedLlm) -> list[Any]:
     ]
 
 
+_CALL_RUN_ID = re.compile(r"@adk-[0-9a-f-]+")
+
+
+def _run_ids_out(path: str) -> str:
+    """A node run as a tool is keyed by its function call id (ADK 2.12:
+    ``customer_lookup_workflow@adk-<uuid>``), which differs per run."""
+    return _CALL_RUN_ID.sub("@<call>", path)
+
+
 def _shape(events: list[Any]) -> list[tuple[Any, ...]]:
     """Each event as (author, node path, output_for, output, text, function
-    calls/responses, agent_state, end_of_agent); ids and branch suffixes are
-    per run and left out."""
+    calls/responses, agent_state, end_of_agent); ids, call run ids and branch
+    suffixes are per run and left out."""
     rows = []
     for e in events:
         parts = e.content.parts if e.content and e.content.parts else []
         rows.append(
             (
                 e.author,
-                e.node_info.path if e.node_info else None,
-                e.node_info.output_for if e.node_info else None,
+                _run_ids_out(e.node_info.path) if e.node_info else None,
+                [_run_ids_out(p) for p in e.node_info.output_for]
+                if e.node_info and e.node_info.output_for
+                else None,
                 e.output,
                 "".join(p.text or "" for p in parts),
                 [p.function_call.name for p in parts if p.function_call]

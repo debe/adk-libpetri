@@ -1,11 +1,11 @@
-"""Pattern C foil: optimistic commit with fallback in stock ADK 2.11.
+"""Pattern C foil: optimistic commit with fallback in stock ADK 2.12.
 
 Run a cheap path and a slow path concurrently, commit the cheap answer when it
 validates, fall back to the already-running slow answer when it does not, and never
 commit twice. Port of ``PatternC_AdkOnlyFoilTest.java``. Each test green-locks a gap
 in ADK's own orchestration; if a future ADK release closes one, its assertion flips red.
 
-What ``google.adk.workflow.Workflow`` can and cannot express (ADK Python 2.11 source):
+What ``google.adk.workflow.Workflow`` can and cannot express (ADK Python 2.12 source):
 
 * **Conditional fallback works, but only sequentially.** A node that emits
   ``Event(route=...)`` selects its outgoing edges (``Graph.get_next_pending_nodes`` in

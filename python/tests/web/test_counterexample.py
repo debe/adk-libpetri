@@ -29,6 +29,8 @@ from adk_libpetri.web import PetriAgentLoader, build_app, proof_view
 from adk_libpetri.web.loader import net_nodes
 from support.smt_proofs import requires_z3
 
+from .conftest import LOCAL
+
 FIRES = (
     "Race_Start",
     "Race_RunA",
@@ -217,7 +219,7 @@ def test_graphviz_draws_the_net_into_the_picture(graph: NetGraph) -> None:
 @pytest.fixture
 def client(agents: Path, keep_base: None) -> Iterator[TestClient]:
     loader = PetriAgentLoader(str(agents))
-    with TestClient(build_app(str(agents), loader=loader)) as c:
+    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as c:
         yield c
     for root in list(loader._agent_cache.values()):
         for node in net_nodes(root):

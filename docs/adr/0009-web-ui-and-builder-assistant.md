@@ -4,7 +4,7 @@
 - **Date:** 2026-10-07
 - **Scope:** Python `0.1.0`, `adk_libpetri.web`, `net.graph`, `net.report`,
   `net.counterexample`, `bridge.marking_trace` (all `@experimental`).
-  google-adk `~=2.11.0`.
+  google-adk `~=2.13.0` (first written against `2.11.0`).
 
 ## Context
 
@@ -35,8 +35,10 @@ rewrite of its compiled JavaScript. Five seams in ADK 2.11 are enough:
 3. The dev UI's graph view draws any node's pydantic field named `graph`
    whose value has `.nodes[].name` and `.edges[].from_node/.to_node/.route`
    (`cli/utils/graph_serialization.py`). It has no class check, and
-   `runners.py` (`_collect_toolset`) and `cli/utils/state.py` only iterate
-   `graph.nodes`.
+   `cli/utils/state.py` only iterates `graph.nodes`. `runners.py`
+   (`_collect_toolset`, which closes toolsets on `Runner.close()`) walks
+   `_iter_static_children` since 2.13; `NetNodeBase` overrides it to name
+   the ADK nodes a net runs, so their toolsets are closed.
 4. The UI lights up what ran on the client. A drawn node lights up when its
    `<title>` (the DOT node id) equals an event's author or the last segment
    of its `nodeInfo.path`, or when its label text contains that name
@@ -658,8 +660,9 @@ Add to ADR 0006's list:
 - `get_fast_api_app(web=True)` still builds a `NestedAgentLoader` when given
   no loader (`PetriAgentLoader` subclasses it to list the same apps);
 - `graph_serialization.serialize_agent` still draws a `graph` field by duck
-  type, and `_collect_toolset` and `create_empty_state` still only iterate
-  `graph.nodes`;
+  type, `create_empty_state` still only iterates `graph.nodes`, and
+  `_collect_toolset` still finds a net's toolsets through
+  `_iter_static_children` (`tests/net/test_static_children.py`);
 - `get_fast_api_app` still takes `agent_loader` and still registers its
   routes on `app.router.routes` as `APIRoute`s whose endpoints take the
   arguments we pass; the builder's app name is still
@@ -680,13 +683,21 @@ Add to ADR 0006's list:
   `.../events/{e}/graph`, and `agent_state` still colours nothing for a
   non-`Workflow` node;
 - `POST /dev/apps/{app_name}/builder/save` still takes `files` and `tmp`,
-  validates uploads the same way (`_check_uploaded_yaml`), copies every file
+  validates uploads the same way (`_check_uploaded_yaml`, which since 2.12
+  takes the app root and rejects an app name whose import resolves outside
+  the app), copies every file
   of `<app>/tmp/<app>` into the app on a real save and then deletes the
   draft, and the UI still never cancels or refreshes a draft when it enters
   builder mode (`loadExistingAgentConfiguration`); the canvas
   (`generateYamlFile`) still sends only the fields listed above, still
   saves the draft before each assistant message, and still drops `tools`
   for a root that is not an `LlmAgent`;
+- both builder routes still carry ADK's loopback-only dependency
+  (`_require_local_agent_builder_client`, new in 2.12), which our stand-ins
+  copy from the routes they replace (`route.dependencies`), and
+  `get_fast_api_app` still serves its built-in agents (the builder
+  assistant) only for a loopback `bind_host`, which `build_app` passes from
+  `host`;
 - `GET /dev/apps/{app_name}/builder` still takes `file_path` and `tmp` and
   answers plain text; the canvas (`loadFromYaml`, `reloadCanvasFromYaml`
   after each reply) still reads the root's `tools` and draws them in the

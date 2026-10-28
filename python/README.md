@@ -22,7 +22,7 @@ pip install --pre adk-libpetri
 
 0.1.0a1 is a preliminary release (`--pre`): the API may change before 0.1.0.
 
-Python 3.11+. Pulls `google-adk~=2.11.0` and `libpetri`. Proofs need a `z3`
+Python 3.11+. Pulls `google-adk~=2.13.0` and `libpetri`. Proofs need a `z3`
 binary (4.8+) on `PATH` or named by `LIBPETRI_Z3`; the runtime does not.
 
 ## Three ways in
@@ -157,7 +157,7 @@ event replay, a node that takes `ctx` (children it runs through
 turns.
 
 `tests/workflow/adk_samples` runs ADK's own workflow samples (google/adk-python
-v2.11.0, `contributing/samples`) natively and compiled, with scripted models,
+v2.13.0, `contributing/samples`) natively and compiled, with scripted models,
 and compares outputs, authors, node paths, texts, state and raised
 exceptions. Of the 24 runnable samples, 22 match (10 need `state="legacy_read"`)
 and 2 are rejected for their `mode='task'` agents; the Antigravity sample needs
@@ -377,9 +377,9 @@ check it with `adk-libpetri check`/`verify`. See
 See [ADR 0006](https://github.com/debe/adk-libpetri/blob/main/docs/adr/0006-python-port-and-adk-python-compat.md) for
 the spikes behind these points, and for the procedure for bumping ADK.
 
-## ADK Python 2.11 behaviour the foils lock in
+## ADK Python 2.13 behaviour the foils lock in
 
-The ADK-only foils (`pytest -k foil`) run stock google-adk 2.11 with no net
+The ADK-only foils (`pytest -k foil`) run stock google-adk 2.13 with no net
 and assert what it does today. If an ADK release changes one of these, its
 foil goes red and the claim here gets updated. Where the Java foil does not
 carry over, the Python foil says so and asserts the Python behaviour.
@@ -418,7 +418,7 @@ the same input into a typed error `Event` and ends the turn normally.
 **Voice-activity edges**
 (`tests/demos/test_voice_vad_edge_adk_foil.py`). The verdict is the reverse of
 Java's. ADK Java 1.10.1's `GeminiLlmConnection` drops the VAD speech-activity
-edges; ADK Python 2.11's `GeminiLlmConnection.receive` yields
+edges; ADK Python 2.13's `GeminiLlmConnection.receive` yields
 `LlmResponse(voice_activity=...)` for a VAD frame, and the live flow copies it
 onto `Event.voice_activity` for the `Runner.run_live` caller. The foil runs
 ADK's real `GeminiLlmConnection` over a fake genai session. Python therefore

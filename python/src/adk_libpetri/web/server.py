@@ -59,6 +59,10 @@ def build_app(
 
     loader = loader or PetriAgentLoader(agents_dir)
     adk_options.setdefault("web", True)
+    # ADK 2.12 serves its built-in agents (the builder assistant) only on a
+    # loopback bind it is told about, as `adk web` tells it.
+    if "host" in adk_options:
+        adk_options.setdefault("bind_host", adk_options["host"])
     adk_options.setdefault("logo_text", "ADK · libpetri")
     adk_options.setdefault("logo_image_url", "/dev-ui/adk_favicon.svg")
     app = get_fast_api_app(agents_dir=agents_dir, agent_loader=loader, **adk_options)

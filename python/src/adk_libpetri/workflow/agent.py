@@ -5,7 +5,7 @@ Drop-in for ``Runner(node=workflow)``::
     node = PetriWorkflow.from_workflow(workflow, orchestrator=OrchestratorLoop.shared())
     runner = InMemoryRunner(node=node, app_name="app")
 
-It is a ``BaseNode``, not a ``BaseAgent``, on purpose: ADK 2.11 still runs a
+It is a ``BaseNode``, not a ``BaseAgent``, on purpose: ADK 2.13 still runs a
 ``BaseAgent`` root on its legacy path, which has no node ``Context`` to run
 child nodes with. As a node it also nests inside another ``Workflow``.
 
@@ -43,10 +43,10 @@ answers as ``ctx.resume_inputs``) is a *resume*: they go to the net's
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Iterable, Mapping
+from collections.abc import AsyncGenerator, Iterable, Iterator, Mapping
 from typing import Any
 
-from google.adk.workflow import Workflow
+from google.adk.workflow import START, BaseNode, Workflow
 from google.adk.workflow._graph import EdgeItem
 from pydantic import Field, PrivateAttr
 
@@ -138,6 +138,12 @@ class PetriWorkflow(NetNodeBase):
     def _net_spec(self) -> Any:
         compiled = getattr(self, "_compiled", None)
         return compiled.spec if compiled is not None else None
+
+    def _static_nodes(self) -> Iterator[BaseNode]:
+        compiled = getattr(self, "_compiled", None)
+        graph = compiled.workflow.graph if compiled is not None else None
+        if graph is not None:
+            yield from (n for n in graph.nodes if n.name != START.name)
 
     def _initial_counts(self) -> dict[str, int]:
         return {p: n for p, n in self._compiled.initial_counts().items() if n}

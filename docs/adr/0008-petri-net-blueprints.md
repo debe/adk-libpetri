@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-06
 - **Scope:** Python `0.1.0`, `adk_libpetri.net` (`@experimental`).
-  google-adk `~=2.11.0`, libpetri-py `>=7.2,<8`.
+  google-adk `~=2.13.0` (first written against `2.11.0`), libpetri-py `>=7.3,<8`.
 
 ## Context
 
@@ -285,6 +285,8 @@ with nodes unless `assume_atomic_nodes: true` records that judgement.
   libpetri-py writes a unit `()` token, and `MarkingView` fails to decode it
   ("Expected python.object token, found ()"). Parsing, fingerprints and
   proofs handle timeout outputs; running them waits on a libpetri fix.
+  Still present in libpetri-py 7.3.0: `tests/net/test_timeout_marking.py`
+  is a strict xfail on it, so it fails the suite once a fix lands.
 
 ## Next steps
 

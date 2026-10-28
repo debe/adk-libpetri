@@ -15,7 +15,7 @@ the Live API is tied to a genai SDK version, so the consumer owns it
   ``send_content`` (the protocol method) completes the turn, as ADK's does.
 
 **Python differs from Java on why.** In Java, ADK's ``GeminiLlmConnection``
-drops the VAD edges, which is the reason this class exists. ADK Python 2.11
+drops the VAD edges, which is the reason this class exists. ADK Python 2.12
 forwards them (``LlmResponse.voice_activity``, then ``Event.voice_activity``;
 see ``test_voice_vad_edge_adk_foil``), so here the class is the *full-control*
 route: one long-lived raw stream across turns, with no LlmResponse shaping in

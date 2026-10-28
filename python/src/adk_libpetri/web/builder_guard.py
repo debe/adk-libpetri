@@ -365,6 +365,7 @@ def install_builder_guard(
     builder save route.
     """
     original: Save | None = None
+    guards: list[Any] = []
     for route in app.router.routes:
         if (
             isinstance(route, APIRoute)
@@ -372,6 +373,7 @@ def install_builder_guard(
             and "POST" in (route.methods or ())
         ):
             original = route.endpoint
+            guards = list(route.dependencies)  # ADK 2.12: loopback callers only
             break
     if original is None:
         return False
@@ -457,6 +459,7 @@ def install_builder_guard(
         SAVE_PATH,
         builder_save,
         methods=["POST"],
+        dependencies=guards,
         response_model_exclude_none=True,
         include_in_schema=False,
     )

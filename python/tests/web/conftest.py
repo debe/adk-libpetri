@@ -13,6 +13,9 @@ from adk_libpetri._aio import OrchestratorLoop
 HERO = Path(__file__).parents[1] / "readme_diagrams" / "hero"
 LOOP_CONFIG = Path(__file__).parents[1] / "workflow" / "adk_samples" / "loop_config"
 PATTERNS = Path(__file__).parents[1] / "demos" / "patterns" / "yaml"
+# A browser on the server's machine: ADK 2.12 answers the builder routes only
+# for a loopback peer, and TestClient's default peer is "testclient".
+LOCAL = ("127.0.0.1", 50000)
 
 
 def make_agents(root: Path) -> Path:

@@ -140,8 +140,9 @@ def test_translation_report() -> None:
     exact = {(f.subject, f.message) for f in report.of("exact")}
     assert (
         "join_for_results",
-        "join over ['make_uppercase', 'count_characters', 'reverse_string'] (consume semantics); "
-        "its input dict is in edge order, where ADK's follows set iteration",
+        "join over ['make_uppercase', 'count_characters', 'reverse_string'] (consume semantics, "
+        "latest arrival per predecessor); its input dict is in edge order, where ADK's follows "
+        "set iteration",
     ) in exact
     assert {f.subject for f in report.of("exact")} == {
         "make_uppercase",

@@ -1,7 +1,7 @@
 """The live-connection contract the BIDI bridge needs (``@experimental``).
 
 ADK's ``BaseLlmConnection.receive()`` yields ``LlmResponse``s. ADK Python
-2.11 maps more of a server frame onto them than ADK Java did (voice-activity
+2.12 maps more of a server frame onto them than ADK Java did (voice-activity
 edges included), but a net may still want the raw provider frame.
 :meth:`LiveConnection.raw_receive` exposes it so a bridge consumer decodes
 what its net cares about and injects it through env places.

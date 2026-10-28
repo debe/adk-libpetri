@@ -11,7 +11,7 @@ consequence of the ``VALIDATION_PASSED`` / ``VALIDATION_FAILED`` and
 ``COMMITTED`` markings: no caller-side retry, no loop, no ``session.state``
 field carrying the verdict across node boundaries.
 
-**Why this exists.** ADK Python 2.11 is closer than ADK Java here, and the foil
+**Why this exists.** ADK Python 2.12 is closer than ADK Java here, and the foil
 says so: a ``Workflow`` route *can* skip the slow path when the cheap answer
 validates, so the Java claim that the stock agents cannot express the conditional
 fallback holds only for the deprecated ``SequentialAgent``. What no Workflow

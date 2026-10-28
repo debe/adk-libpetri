@@ -12,12 +12,14 @@ from adk_libpetri.bridge import MarkingTraces
 from adk_libpetri.web import PetriAgentLoader, build_app, server
 from adk_libpetri.web.loader import net_nodes
 
+from .conftest import LOCAL
+
 
 @pytest.fixture
 def served(agents: Path) -> Iterator[tuple[TestClient, PetriAgentLoader]]:
     loader = PetriAgentLoader(str(agents))
     app = build_app(str(agents), loader=loader)
-    with TestClient(app) as client:
+    with TestClient(app, client=LOCAL) as client:
         yield client, loader
     for root in list(loader._agent_cache.values()):
         for node in net_nodes(root):
@@ -45,10 +47,33 @@ def test_serve_points_at_adks_dev_ui_only(
     assert capsys.readouterr().out == "ADK dev UI: http://127.0.0.1:8123/dev-ui/\n"
 
 
+@pytest.mark.parametrize(("host", "allowed"), [("127.0.0.1", True), ("0.0.0.0", False)])
+def test_the_builder_assistant_is_served_on_a_loopback_host_only(
+    agents: Path, host: str, allowed: bool
+) -> None:
+    """ADK 2.12 serves its built-in agents only on a loopback bind it is told
+    about; ``build_app`` tells it the ``host``, as ``adk web`` does."""
+    loader = PetriAgentLoader(str(agents))
+    build_app(str(agents), loader=loader, host=host)
+    assert loader._allow_special_agents is allowed
+
+
+def test_the_builder_routes_keep_adks_loopback_guard(agents: Path) -> None:
+    """Our ``GET builder`` and ``builder/save`` stand in front of ADK's, so they
+    carry its loopback-only dependency: a remote peer is refused."""
+    loader = PetriAgentLoader(str(agents))
+    with TestClient(build_app(str(agents), loader=loader)) as remote:
+        assert remote.get("/dev/apps/race/builder").status_code == 403
+        upload = ("files", ("race/root_agent.yaml", b"name: race\n", "application/x-yaml"))
+        r = remote.post("/dev/apps/race/builder/save?tmp=true", files=[upload])
+        assert r.status_code == 403
+    assert (agents / "race" / "tmp").exists() is False
+
+
 def test_a_loader_given_traces_traces_runs_through_adks_api(agents: Path) -> None:
     traces = MarkingTraces()
     loader = PetriAgentLoader(str(agents), traces=traces)
-    with TestClient(build_app(str(agents), loader=loader)) as client:
+    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as client:
         sid = client.post("/apps/race/users/u/sessions", json={}).json()["id"]
         client.post(
             "/run",
@@ -141,7 +166,7 @@ def test_a_nested_app_is_listed_and_served(agents: Path) -> None:
     group.mkdir()
     (agents / "race").rename(group / "race")
     loader = PetriAgentLoader(str(agents))
-    with TestClient(build_app(str(agents), loader=loader)) as client:
+    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as client:
         assert "group.race" in client.get("/list-apps").json()
         dot = client.get("/dev/apps/group.race/build_graph_image").json()[""]["dotSrc"]
         assert "Race_Commit" in dot

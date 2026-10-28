@@ -12,7 +12,7 @@ from adk_libpetri.net import BlueprintError
 from adk_libpetri.web import PetriAgentLoader, build_app
 from adk_libpetri.web.loader import net_nodes
 
-from .conftest import add_composed_app, add_workflow_app
+from .conftest import LOCAL, add_composed_app, add_workflow_app
 
 GRAPH = "/dev/apps/{app}/build_graph_image"
 
@@ -33,7 +33,7 @@ def client(agents: Path) -> Iterator[TestClient]:
     broken.mkdir()
     (broken / "root_agent.yaml").write_text(BROKEN)
     loader = PetriAgentLoader(str(agents))
-    with TestClient(build_app(str(agents), loader=loader)) as c:
+    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as c:
         yield c
     for root in list(loader._agent_cache.values()):
         for node in net_nodes(root):
@@ -99,7 +99,7 @@ def test_each_subnet_is_drawn_and_opens_on_its_own(tmp_path: Path) -> None:
     agents.mkdir()
     add_composed_app(agents)
     loader = PetriAgentLoader(str(agents))
-    with TestClient(build_app(str(agents), loader=loader)) as c:
+    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as c:
         drawn = _dot(c, "composed", dark_mode="true")
         assert set(drawn) == {"", "first", "second", "assistant"}
         assert '"first" [id="subnet:first"' in drawn[""]  # collapsed: click it to open

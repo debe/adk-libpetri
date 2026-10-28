@@ -1,10 +1,10 @@
-"""Pattern A foil: a speculative race (first answer wins, at most one commit) in stock ADK 2.11.
+"""Pattern A foil: a speculative race (first answer wins, at most one commit) in stock ADK 2.12.
 
 Port of ``PatternA_AdkOnlyFoilTest.java``. Each test green-locks a gap in ADK's own
 orchestration; if a future ADK release closes one, its assertion flips red and the
 pattern catalog gets updated.
 
-What ``google.adk.workflow.Workflow`` cannot express, and why (ADK Python 2.11 source):
+What ``google.adk.workflow.Workflow`` cannot express, and why (ADK Python 2.12 source):
 
 * **No first-wins join.** ``JoinNode._requires_all_predecessors`` is ``True``
   (``workflow/_join_node.py``), and ``Workflow._buffer_barrier_trigger``
@@ -29,7 +29,7 @@ What ``google.adk.workflow.Workflow`` cannot express, and why (ADK Python 2.11 s
   cancels its siblings on an escalation.
 
 Deviation from the Java foil: the Java version says the agent tree has no
-first-wins path. In ADK Python 2.11 the deprecated ``ParallelAgent`` has one: a branch
+first-wins path. In ADK Python 2.12 the deprecated ``ParallelAgent`` has one: a branch
 that escalates ends the merge and cancels the other branches.
 ``test_foil_deprecated_parallel_agent_escalation_is_first_wins`` locks that in rather
 than hiding it. The cost is that the branch has to opt in by escalating, and no

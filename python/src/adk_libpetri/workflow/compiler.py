@@ -18,7 +18,9 @@ Translation (``N`` a node, places named ``wf/N/...``):
   with routed edges and no match lands on ``wf/N/unmatched``, making ADK's
   silent branch end a place a proof can name.
 * **JoinNode** -- one ``wf/J/from/P`` place per predecessor, consumed together
-  (consume semantics; identical to ADK on a DAG).
+  (consume semantics, as ADK 2.13). A predecessor's repeat arrival replaces its
+  earlier one (``Wf_J_Latest_P``), as ADK keeps the latest output, and a join
+  still missing a predecessor when the run ends does not hold the turn open.
 * **terminal output** -- one ``wf/N/terminalOutput`` per terminal node, holding
   its last output as ADK's ``node_outputs`` does. The node runs with
   ``use_as_output``, so its own event is the workflow's output event. Two
@@ -79,6 +81,7 @@ from .._spec import (
     and_,
     at_least,
     delayed,
+    exactly,
     one,
     out,
     xor,
@@ -367,7 +370,10 @@ def compile_workflow(
     report.add(
         "approximated",
         "branches",
-        "ADK branch scoping is passed through per trigger; isolation scopes are ADK's own",
+        "ADK branch scoping is passed through per trigger; isolation scopes are ADK's own. "
+        "A terminal node's output event is the exception: ADK publishes a delegated output on "
+        "the claimer's branch and exempts only a Workflow parent, so a terminal run on a "
+        "fan-out lane publishes on this node's branch where Workflow keeps the lane's",
     )
     report.add(
         "approximated",
@@ -493,8 +499,8 @@ def _plan_node(
         report.add(
             "exact",
             node.name,
-            f"join over {preds} (consume semantics); its input dict is in edge order, "
-            "where ADK's follows set iteration",
+            f"join over {preds} (consume semantics, latest arrival per predecessor); its "
+            "input dict is in edge order, where ADK's follows set iteration",
         )
     if plan.wait_for_output and not plan.is_join:
         report.add(
@@ -554,10 +560,18 @@ def _static_interrupt(node: BaseNode) -> str | None:
     """Why ``node`` interrupts by construction, if it does."""
     from google.adk.agents.llm_agent import LlmAgent
     from google.adk.workflow import FunctionNode
+    from google.adk.workflow._tool_node import _get_tool_auth_config, _ToolNode
 
     inner = _unwrap(node)
+    if isinstance(inner, FunctionNode) and inner.require_confirmation:
+        return "requires confirmation (require_confirmation)"
     if isinstance(inner, FunctionNode) and inner.auth_config is not None:
         return "requests credentials (auth_config)"
+    if isinstance(inner, _ToolNode):
+        if getattr(inner.tool, "_require_confirmation", False):
+            return "tool requires confirmation"
+        if _get_tool_auth_config(inner.tool) is not None:
+            return "tool requests credentials"
     if isinstance(inner, LlmAgent):
         confirming = [
             getattr(t, "name", type(t).__name__)
@@ -567,6 +581,28 @@ def _static_interrupt(node: BaseNode) -> str | None:
         if confirming:
             return f"tools {confirming} require confirmation"
     return None
+
+
+def _confirmation_state_reads(node: Any) -> list[str]:
+    """The session-state keys a ``require_confirmation`` predicate may read: ADK
+    fills a predicate parameter that is not one of the node's own arguments,
+    its context or ``node_input`` from ``ctx.state`` by name
+    (``FunctionNode._check_require_confirmation``)."""
+    from google.adk.utils.context_utils import find_context_parameter
+
+    pred = node.require_confirmation
+    try:
+        params = inspect.signature(pred).parameters
+    except (TypeError, ValueError):
+        return []  # ADK passes such a predicate the node's arguments only
+    ctx_name = find_context_parameter(pred) or ("ctx" if "ctx" in params else "tool_context")
+    own = set(node._sig.parameters) if getattr(node, "_sig", None) is not None else set()
+    return [
+        f"require_confirmation parameter {name}"
+        for name, p in params.items()
+        if name not in own | {ctx_name, "node_input"}
+        and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+    ]
 
 
 def _unwrap(node: BaseNode) -> BaseNode:
@@ -604,6 +640,8 @@ def _check_node(
         sig = getattr(node, "_sig", None)
         if node.parameter_binding == "state" and sig is not None:
             reads += [f"parameter {p}" for p in sig.parameters if p not in (ctx_name, "node_input")]
+        if callable(node.require_confirmation):
+            reads += _confirmation_state_reads(node)
         if sig is not None and ctx_name in sig.parameters:
             found = _ctx_state_reads(node, ctx_name)
             if found is None:
@@ -626,7 +664,7 @@ def _check_node(
             report.add(
                 "rejected",
                 subject,
-                f"mode={node.mode!r} agent: it waits for the user across turns inside one "
+                f"mode={str(node.mode)!r} agent: it waits for the user across turns inside one "
                 "workflow run, which the net does not model; run it as a PetriAgent or use "
                 "mode='single_turn'",
             )
@@ -934,6 +972,22 @@ def _build_spec(
             )
         )
 
+    # -- join arrivals -------------------------------------------------------------
+    # ADK keeps a join's arrivals as a set with each predecessor's latest
+    # output, consumed when the join fires: a second arrival from the same
+    # predecessor replaces the first.
+    arrivals = tuple(_from(n, q) for n, p in plans.items() if p.is_join for q in p.preds)
+    for q in arrivals:
+        join, pred = q.name.split("/")[1], q.name.rsplit("/", 1)[1]
+        ts.append(
+            TransitionSpec(
+                f"Wf_{join}_Latest_{pred}",
+                (exactly(2, q), one(QUIET)),
+                and_(q, QUIET),
+                priority=40,
+            )
+        )
+
     # -- turn end ----------------------------------------------------------------
     idles = tuple(_idle(n) for n in plans)
     work = _work_places(plans, budgets)
@@ -944,6 +998,11 @@ def _build_spec(
     # is absent while a retry is pending (the P-invariant the verifier finds).
     in_retry = {q.name for n, p in plans.items() for q in _retry_chain(n, p)}
     clearable = tuple(q for q in work if q.name not in in_retry)
+    # A join still missing a predecessor does not hold the turn open: ADK ends
+    # the run with its arrivals unconsumed and drops them with the run's
+    # state. A parked turn keeps them for its resume.
+    pending = tuple(q for q in clearable if q in arrivals)
+    clearable = tuple(q for q in clearable if q not in arrivals)
     unmatched = tuple(_unmatched(n) for n, p in plans.items() if p.unmatched)
     ends = (C.EVENT_OUT, C.TURN_PERMIT)
     no_park = (PARKED,) if interruptible else ()
@@ -968,7 +1027,7 @@ def _build_spec(
                 and_(*ends),
                 reads=(QUIET, *idles),
                 inhibitors=(*clearable, FAILED, *no_park),
-                resets=(*others, *unmatched, *budget_places),
+                resets=(*others, *unmatched, *budget_places, *pending),
                 priority=-100,
             )
         )
@@ -981,7 +1040,7 @@ def _build_spec(
                     and_(*ends, CONFLICT),
                     reads=(QUIET, *idles),
                     inhibitors=(*clearable, FAILED, *no_park),
-                    resets=(*terminals, *unmatched, *budget_places),
+                    resets=(*terminals, *unmatched, *budget_places, *pending),
                     priority=-95,
                 )
             )
@@ -992,7 +1051,7 @@ def _build_spec(
             and_(*ends),
             reads=(QUIET, *idles),
             inhibitors=(*clearable, FAILED, *terminals, *no_park),
-            resets=(*unmatched, *budget_places),
+            resets=(*unmatched, *budget_places, *pending),
             priority=-100,
         )
     )
@@ -1002,7 +1061,7 @@ def _build_spec(
             (one(TURN_ACTIVE), at_least(1, FAILED)),
             and_(*ends),
             reads=(QUIET, *idles),
-            resets=(*clearable, *terminals, *unmatched, *budget_places, PARKED),
+            resets=(*clearable, *pending, *terminals, *unmatched, *budget_places, PARKED),
             priority=-90,
         )
     )
@@ -1280,6 +1339,19 @@ def _actions(cw: CompiledWorkflow, scope: TurnScope, author: str) -> dict[str, A
 
         acts[f"Wf_Edge_{a}_{b}"] = edge
         acts[f"Wf_Edge_{a}_{b}_Exhausted"] = exhausted
+
+    for n, p in plans.items():
+        if not p.is_join:
+            continue
+        for q in p.preds:
+            arrival = _from(n, q)
+
+            def latest(ctx: Ctx, place: Place[WfToken] = arrival) -> None:
+                ctx.input(QUIET)
+                ctx.signal(QUIET)
+                ctx.output(place, ctx.inputs(place)[-1])  # tokens arrive in FIFO order
+
+            acts[f"Wf_{n}_Latest_{q}"] = latest
 
     def finish(ctx: Ctx, result: TurnResult, **event: Any) -> None:
         """Record the turn's result, then emit the marker event that ends it."""

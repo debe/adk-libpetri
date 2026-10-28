@@ -1,0 +1,16 @@
+# The timeout branch answers and leaves a token on a place of its own.
+agent_class: adk_libpetri.net.PetriNet
+name: timeout_mark
+nodes: [[.agent.slow]]
+places:
+  a: {}
+  late: {type: str}
+  timed_out: {}
+transitions:
+  To_Start:
+    in: [userIn]
+    out: a
+  To_Slow:
+    in: [a]
+    node: slow
+    out: {xor: [late, {timeout: 50, child: {and: [timed_out, eventOut]}}]}

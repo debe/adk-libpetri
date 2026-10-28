@@ -7,7 +7,7 @@ why the Java exemplars read genai's Live session directly
 (``SyncGeminiLiveConnection``) or tap ADK's live transport (``VadTapGemini``).
 Java green-locks the drop so that a fix in ADK turns its test red.
 
-**What ADK Python 2.11 does.** The opposite. ``GeminiLlmConnection.receive``
+**What ADK Python 2.12 does.** The opposite. ``GeminiLlmConnection.receive``
 yields ``LlmResponse(voice_activity=...)`` for a VAD frame (no error), and the
 live flow copies it onto ``Event.voice_activity`` and yields it to the
 ``Runner.run_live`` caller. So in Python a barge-in frontend built on stock ADK

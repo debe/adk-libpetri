@@ -2,10 +2,11 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
-- **Scope:** Python `0.1.0`. google-adk `2.11.0` (pinned `~=2.11.0`), google-genai
+- **Scope:** Python `0.1.0`. google-adk `2.13.0` (pinned `~=2.13.0`; first
+  written against `2.11.0`), google-genai
   `>=2.19` (resolved transitively, `2.28.0` at the time of writing), libpetri-py
-  `>=7.2,<8`, the first release with the Python event-store protocol, token
-  capture, the stepped clock and `action_on_loop` (see below).
+  `>=7.3,<8` (7.2 was the first release with the Python event-store protocol, token
+  capture, the stepped clock and `action_on_loop`; see below).
 
 ## Context
 
@@ -57,7 +58,7 @@ transitions therefore hop to the caller's loop and use exactly this, so every
 ADK node keeps ADK's session, plugin and tracing behaviour.
 
 **S5, PetriAgent as a pydantic `BaseAgent`.** Non-field state goes in
-`PrivateAttr`s. A `BaseAgent` root still runs on ADK 2.11's legacy agent path
+`PrivateAttr`s. A `BaseAgent` root still runs on ADK 2.12's legacy agent path
 (`run_async(InvocationContext)`), which has no node `Context` and no event
 queue. That is fine for `PetriAgent`, whose net emits its own events, but not
 for a compiled workflow, which needs to run child nodes. So the compiled
@@ -113,10 +114,13 @@ real-time stand-ins for the stepped-clock tests.
 - `google.adk.workflow`: `Workflow`, `BaseNode`, `FunctionNode`, `JoinNode`,
   `DEFAULT_ROUTE`, `RetryConfig`, `NodeTimeoutError`, `START`
   (`_base_node`), `Workflow.graph` (`nodes`, `edges`, `Edge.route`)
-- **Private, pinned by the `~=2.11.0` range**: `Context._run_node_internal`,
+- **Private, pinned by the `~=2.13.0` range**: `Context._run_node_internal`,
   `Context.resume_inputs`, `Context.event_author`, `Context._interrupt_ids`
   (through events' `long_running_tool_ids`), `InvocationContext._abort_signal`,
-  `BaseNode._requires_all_predecessors`, `FunctionNode._sig`.
+  `BaseNode._requires_all_predecessors`, `FunctionNode._sig`, (2.12)
+  `workflow._tool_node._ToolNode` and `_get_tool_auth_config`, and (2.13)
+  `BaseNode._iter_static_children`, which `NetNodeBase` overrides so that
+  `Runner.close()` closes the toolsets of the agents a net runs.
 
 ## Behaviour claims to re-check on every bump
 
@@ -128,10 +132,33 @@ compiled) and must be re-read in `workflow/_workflow.py` and `_graph.py`:
   route matched; an emitted list matches every edge sharing a value; no match
   ends the branch with a log warning;
 - one node's runs are serialized (triggers queue FIFO while it runs);
-- `JoinNode` waits for every predecessor's COMPLETED status, which is sticky;
+- `JoinNode` fires once every predecessor has completed a run since its last
+  firing, and each firing consumes those arrivals (2.13; before, a completed
+  status was sticky). ADK keeps the arrivals as a set with each predecessor's
+  latest output, which the net matches with a priority `Wf_J_Latest_P` per
+  predecessor, and drops arrivals still waiting when the run ends, which the
+  turn ends reset (`tests/workflow/test_adk_2_13_parity.py`);
+- a terminal node runs with `use_as_output`, and ADK (2.13) publishes a
+  delegated output event on the claimer's branch unless the claimer is a
+  `Workflow` (`_node_runner._explicit_output_claimer`). A compiled
+  workflow is not a `Workflow`, so a terminal run on a fan-out lane
+  publishes on the compiled node's branch, where `Workflow` keeps the lane's
+  (the compile report's "branches" approximation);
+- a run with no output clears the node's output (2.13), which the net's
+  reset arc on `wf/N/terminalOutput` already does;
+- `NodeTool` infers a `Workflow`'s missing `input_schema` from its start
+  nodes (2.13), but not a compiled workflow's: `PetriWorkflow` is not a
+  `Workflow`, and giving it the inferred schema would make ADK validate its
+  input where `Workflow` does not. Wrapped as a tool, it needs the
+  `Workflow`'s explicit `input_schema`, which `from_workflow` copies;
 - more than one terminal output raises at finalize;
 - `RetryConfig` defaults (5 attempts, 1 s, x2, 60 s cap, jitter 1) and
   exception matching by class name over the MRO;
+- a node interrupts by construction when it is a `FunctionNode` with
+  `auth_config` or (2.12) `require_confirmation`, a `_ToolNode` whose tool
+  requires confirmation or carries an auth config, or an `LlmAgent` with a
+  confirming tool; a `require_confirmation` predicate's parameters that are
+  not the node's own, its context or `node_input` come from `ctx.state`;
 - `RequestInput` becomes an `adk_request_input` function call with
   `long_running_tool_ids`, resumed by a function response whose id is the
   interrupt id;

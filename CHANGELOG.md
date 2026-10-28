@@ -14,6 +14,37 @@ existed.
 
 ## Unreleased
 
+### Python
+
+- **ADK 2.12.** The port follows google-adk 2.12 (ADR 0006's re-check):
+  - `from_workflow` compiles 2.12's new interrupts as interruptible: a
+    `FunctionNode` with `require_confirmation`, and a tool node whose tool
+    requires confirmation or carries an auth config. A
+    `require_confirmation` predicate's parameters that ADK fills from
+    `ctx.state` count as state reads.
+  - `adk-libpetri web` passes its host to ADK as `bind_host`, so ADK serves
+    the builder assistant on a loopback host, as `adk web` does. The
+    stand-ins for `GET builder` and `builder/save` keep ADK's new
+    loopback-only guard.
+  - Tests run ADK's own workflow samples at google/adk-python v2.12.0.
+- **ADK 2.13.** The port follows google-adk 2.13:
+  - A compiled workflow's terminal run on a fan-out lane publishes its
+    output event on the compiled node's branch, where `Workflow` keeps the
+    lane's: 2.13 moves a delegated output to its claimer's branch unless the
+    claimer is a `Workflow`. The compile report's "branches" approximation
+    says so.
+  - The vendored workflow samples move to google/adk-python v2.13.0;
+    `request_input_rerun` takes 2.13's per-run interrupt id.
+  - `adk-libpetri check` no longer filters ADK's experimental warning for
+    the YAML loader, which 2.13 marks stable.
+  - `Runner.close()` closes the toolsets of the agents inside a `PetriNet`
+    or a compiled workflow again. 2.13 finds them through a node's static
+    children, which a net now names.
+  - A compiled `JoinNode` follows 2.13's consumed arrivals: a predecessor's
+    repeat arrival replaces its earlier one (ADK keeps the latest output),
+    and a join still missing a predecessor when the run ends no longer
+    holds the turn open. Before, such a turn never ended.
+
 ### Java
 
 - **`SpecFixturesTest`** writes and golden-checks `spec/fixtures/nets/*.json`,

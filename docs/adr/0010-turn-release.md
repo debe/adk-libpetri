@@ -3,8 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-08
 - **Scope:** Python, `adk_libpetri.net` (`PetriNet`, `@experimental`).
-  google-adk `~=2.11.0`, libpetri-py `>=7.3,<8`. Java and `from_workflow`
-  are unchanged.
+  google-adk `~=2.13.0` (first written against `2.11.0`), libpetri-py
+  `>=7.3,<8`. Java and `from_workflow` are unchanged.
 
 ## Context
 

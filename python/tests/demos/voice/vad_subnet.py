@@ -6,7 +6,7 @@ subnet produces it from the Live API's speech-activity edges, structurally.
 
 **Where the edges come from (Python differs from Java here).** ADK Java's
 ``GeminiLlmConnection`` drops the server-side VAD edges, so the Java exemplar
-reads genai's Live session directly. ADK Python 2.11 does *not* drop them:
+reads genai's Live session directly. ADK Python 2.12 does *not* drop them:
 ``GeminiLlmConnection.receive`` yields ``LlmResponse(voice_activity=...)`` and
 the live flow copies it onto ``Event.voice_activity`` (locked by
 ``test_voice_vad_edge_adk_foil``). Either source works; the decode is the same::

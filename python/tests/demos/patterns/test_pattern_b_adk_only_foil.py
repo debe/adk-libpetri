@@ -1,9 +1,9 @@
-"""Pattern B foil: a K-of-N quorum (synthesize once K of N branches answer) in stock ADK 2.11.
+"""Pattern B foil: a K-of-N quorum (synthesize once K of N branches answer) in stock ADK 2.12.
 
 Port of ``PatternB_AdkOnlyFoilTest.java``. Each test green-locks a gap in ADK's own
 orchestration; if a future ADK release closes one, its assertion flips red.
 
-What ``google.adk.workflow.Workflow`` cannot express, and why (ADK Python 2.11 source):
+What ``google.adk.workflow.Workflow`` cannot express, and why (ADK Python 2.12 source):
 
 * **The only join is all-of-N.** ``JoinNode`` (``workflow/_join_node.py``) adds no
   configuration to ``BaseNode``; it only overrides ``_requires_all_predecessors`` to

@@ -10,7 +10,7 @@ verifier sees it, not in an action guard. Late results, from the branches that
 finish after the quorum closed, drain to ``DISCARDED`` through a
 ``read(QUORUM_MET)``-gated absorber, where a parent net could observe them.
 
-**Why this exists.** ADK Python 2.11's only join, ``JoinNode``, is all-of-N and has
+**Why this exists.** ADK Python 2.12's only join, ``JoinNode``, is all-of-N and has
 no cardinality field; a hand-rolled counter in a plain successor synthesizes at the
 K-th arrival, but the workflow still waits for all N; and the single-node
 ``take(K)`` escape ends the turn early by cancelling the late branches, so their

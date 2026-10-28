@@ -1,7 +1,7 @@
 """ADK-only foil for multi-agent transfer, the sibling of
 ``test_multi_agent_demo.test_hallucinated_agent_name_surfaces_as_typed_error_event_not_npe``.
 
-Re-derived from google-adk 2.11, where the Java foil holds only in part.
+Re-derived from google-adk 2.12, where the Java foil holds only in part.
 
 What carries over from Java:
 

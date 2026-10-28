@@ -16,7 +16,7 @@ from adk_libpetri.web import PetriAgentLoader, build_app, builder
 from adk_libpetri.web.builder import remember_verdicts
 from adk_libpetri.web.loader import net_nodes
 
-from .conftest import add_composed_app, add_workflow_app
+from .conftest import LOCAL, add_composed_app, add_workflow_app
 
 BUILDER = "/dev/apps/{app}/builder"
 SAVE = "/dev/apps/{app}/builder/save"
@@ -42,7 +42,7 @@ def served(agents: Path) -> Iterator[tuple[TestClient, PetriAgentLoader]]:
     plain.mkdir()
     (plain / "root_agent.yaml").write_text(PLAIN)
     loader = PetriAgentLoader(str(agents))
-    with TestClient(build_app(str(agents), loader=loader)) as client:
+    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as client:
         yield client, loader
     for root in list(loader._agent_cache.values()):
         for node in net_nodes(root):
@@ -197,7 +197,7 @@ def test_a_stock_subnets_agent_is_named_by_its_file(tmp_path: Path) -> None:
     agents.mkdir()
     add_composed_app(agents)
     loader = PetriAgentLoader(str(agents))
-    with TestClient(build_app(str(agents), loader=loader)) as client:
+    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as client:
         names = [t["name"] for t in _card(client, "composed")["tools"]]
     assert "yaml_composed/helper.yaml" in names  # the summarizer, where the net loads it
     assert "yaml_race.agent.fast" in names

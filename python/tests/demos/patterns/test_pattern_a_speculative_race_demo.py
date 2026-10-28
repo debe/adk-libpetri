@@ -10,7 +10,7 @@ discard path. The net does not cancel the losers (libpetri has no action
 cancellation): their actions run to completion and their results drain to
 ``RACE_DISCARDED``. They cannot commit.
 
-**Why this exists.** In ADK Python 2.11 a ``Workflow`` has no first-wins join, a
+**Why this exists.** In ADK Python 2.12 a ``Workflow`` has no first-wins join, a
 plain successor commits once per branch, and nothing cancels the slow branches
 (see the foil). The deprecated ``ParallelAgent`` *does* end at the first escalation
 and cancel the other branches; that is first-escalation-wins, which a branch has to

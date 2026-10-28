@@ -1,4 +1,4 @@
-"""ADK sample ``live/live_workflow``: three task-mode agents in sequence.
+"""ADK sample ``live/workflow`` (``live/live_workflow`` before v2.12.0): three task agents.
 
 ``greeter_agent -> dob_verifier_agent -> goals_agent``, each ``mode='task'``:
 an agent converses over as many user turns as it needs and completes by
@@ -131,9 +131,9 @@ async def test_native_run_walks_the_three_stages_turn_by_turn() -> None:
     assert turn_authors(r) == EXPECTED_AUTHORS
     outs = [(e.node_info.path, e.output) for e in r.events if e.output is not None]
     assert outs == [
-        ("live_workflow@1/greeter_agent@1", {"result": "John Doe"}),
-        ("live_workflow@1/dob_verifier_agent@1", {"result": "verified"}),
-        ("live_workflow@1/goals_agent@1", {"result": "Goodbye."}),
+        ("workflow@1/greeter_agent@1", {"result": "John Doe"}),
+        ("workflow@1/dob_verifier_agent@1", {"result": "verified"}),
+        ("workflow@1/goals_agent@1", {"result": "Goodbye."}),
     ]
     assert r.final_output == {"result": "Goodbye."}
     assert r.state == {"dob_verified": True}

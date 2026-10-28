@@ -12,8 +12,6 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
-import threading
-import warnings
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
@@ -97,29 +95,6 @@ def _validation_lines(path: str, err: Any) -> str:
     return "\nERROR ".join(shown)
 
 
-_QUIETED = False
-_QUIET_LOCK = threading.Lock()
-
-
-def _quiet_adk_yaml_loader() -> None:
-    """Silence ADK's announcement of its experimental YAML loader, which it makes on every load.
-
-    One targeted filter, installed once: ``warnings.catch_warnings`` is not
-    thread-safe (loads run on worker threads in ``adk-libpetri web``), and
-    interleaved ones can leave a broad "ignore" behind for the whole process.
-    """
-    global _QUIETED
-    with _QUIET_LOCK:
-        if _QUIETED:
-            return
-        warnings.filterwarnings(
-            "ignore",
-            message=r"\[EXPERIMENTAL\] feature FeatureName\.AGENT_CONFIG",
-            category=UserWarning,
-        )
-        _QUIETED = True
-
-
 def load_node(path: str) -> Any:
     """Build the node in ``path`` through ADK's loader (any class), or raise :class:`LoadError`."""
     from pydantic import ValidationError
@@ -130,7 +105,6 @@ def load_node(path: str) -> Any:
         raise LoadError(f"{path}: no such file")
     from google.adk.agents.config_agent_utils import from_config
 
-    _quiet_adk_yaml_loader()
     with agents_dir_on_path(path):
         try:
             return from_config(path)
