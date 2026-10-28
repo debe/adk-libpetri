@@ -57,7 +57,7 @@
         <mockito.version>5.23.0</mockito.version>
 
         <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
-        <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
+        <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
 
         <!-- Release-only plugins (active under the `release` profile). Mirrors libpetri. -->
         <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
