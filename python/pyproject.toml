@@ -20,7 +20,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "libpetri>=7.3,<8",
+    "libpetri>=7.3,<9",
     "google-adk~=2.13.0",
     "opentelemetry-api>=1.30",
 ]
