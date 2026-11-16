@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import re
 import sys
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass, field, replace
@@ -258,28 +257,7 @@ def check_file(path: str) -> CheckReport:
         node = load_net_node(path)
     except LoadError as err:
         return CheckReport(path, False, error=str(err), key_path=err.key_path, hint=err.hint)
-    return CheckReport(path, True, net=summary(node), warnings=tuple(_warnings(node)))
-
-
-def _libpetri_version() -> tuple[int, ...]:
-    from importlib.metadata import version
-
-    return tuple(int(p) for p in re.findall(r"\d+", version("libpetri"))[:3])
-
-
-def _warnings(node: Any) -> list[str]:
-    from .node import timeout_places
-
-    if not _is_net(node):
-        return []
-    timed = sorted(timeout_places(node.blueprint.spec))
-    if timed and _libpetri_version() <= (7, 3, 0):
-        return [
-            f"transitions {timed} have a timeout output: it builds and proves, but libpetri-py "
-            "<= 7.3.0 cannot decode the unit token a timeout branch deposits, so the run "
-            "fails when the timeout fires (ADR 0008)"
-        ]
-    return []
+    return CheckReport(path, True, net=summary(node))
 
 
 Verdict = Literal["proven", "violated", "unknown"]

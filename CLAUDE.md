@@ -50,7 +50,7 @@ ruff check . && ruff format --check . && pyright
 PUBLICAPI_WRITE=1 pytest tests/test_public_api.py   # regenerate spec/api/python.txt
 ```
 
-Python 3.11+, google-adk `~=2.13.0`, libpetri-py `>=7.3,<8`. `REQUIRE_Z3=1`
+Python 3.11+, google-adk `~=2.13.0`, libpetri-py `>=8.0,<9`. `REQUIRE_Z3=1`
 makes `tests/test_z3_gate.py` fail without the `z3` binary. Never name a test
 directory `docs/` (the TypeDoc rule in `.gitignore` would hide it).
 `tests/test_public_api.py` golden-checks the public API in

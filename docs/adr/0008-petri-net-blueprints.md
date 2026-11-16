@@ -288,12 +288,12 @@ with nodes unless `assume_atomic_nodes: true` records that judgement.
 - Node runs share the invocation's branch, as sequential `Workflow` nodes do,
   so two concurrent `LlmAgent` nodes in one net see each other's events. A
   per-transition sub-branch option may be needed.
-- **Open issue: timeout outputs do not run.** When a timeout output fires,
+- **Resolved in libpetri-py 7.3.1 (floor 8.0): timeout outputs did not run.** When a timeout output fires,
   libpetri-py writes a unit `()` token, and `MarkingView` fails to decode it
   ("Expected python.object token, found ()"). Parsing, fingerprints and
   proofs handle timeout outputs; running them waits on a libpetri fix.
-  Still present in libpetri-py 7.3.0: `tests/net/test_timeout_marking.py`
-  is a strict xfail on it, so it fails the suite once a fix lands.
+  Present up to libpetri-py 7.3.0; `tests/net/test_timeout_marking.py` now
+  pins the fix.
 
 ## Next steps
 

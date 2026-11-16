@@ -969,6 +969,7 @@ def _parse(
     # -- ports ---------------------------------------------------------------
     ports = _ports(data.get("ports"), spec, places)
     spec = NetSpec(spec.name, spec.transitions, spec.extra_places, ports, spec.membership)
+    _libpetri_builds(spec)
 
     if spec.has_place(C.TURN_PERMIT) and C.TURN_PERMIT.name not in seeds:
         seeds[C.TURN_PERMIT.name] = (None,)
@@ -1001,6 +1002,19 @@ def _parse(
         node_transitions=node_transitions,
         release=release,
     )
+
+
+def _libpetri_builds(spec: NetSpec) -> None:
+    """libpetri's build-time checks (an ambiguous xor, a timeout's child, an input
+    and a read arc on one place), at load rather than at the session's first turn.
+    A mounted subnet's transitions are in ``spec`` with host places already."""
+    import libpetri as lp
+
+    for t in spec.transitions:
+        try:
+            t.build(None)
+        except lp.StructureError as err:
+            raise BlueprintError(f"transitions.{t.name}", str(err)) from err
 
 
 def _version(v: Any) -> None:

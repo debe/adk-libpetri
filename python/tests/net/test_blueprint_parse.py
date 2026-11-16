@@ -447,6 +447,18 @@ ERRORS: list[tuple[str, dict[str, Any], str, str]] = [
         "subnets.x.from",
         "not an LlmAgent",
     ),
+    (
+        "input and read arc on one place",
+        _t({"in": ["a"], "read": ["a"], "out": "x"}),
+        "transitions.T_A",
+        "(EXEC-012)",
+    ),
+    (
+        "ambiguous xor",
+        _t({"in": ["a"], "out": {"xor": ["x", {"timeout": 50, "child": "x"}]}, "node": "f"}),
+        "transitions.T_A",
+        "(IO-012)",
+    ),
 ]
 
 

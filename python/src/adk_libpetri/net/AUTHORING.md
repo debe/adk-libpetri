@@ -406,8 +406,10 @@ prove:
     - place_bound: {place: eventOut, bound: 1}
 ```
 
-Prefer a timed transition to a `{timeout: ms, child: out}` output for now.
-Timeout outputs parse and prove, but libpetri-py cannot yet run them.
+A `{timeout: ms, child: out}` output has one timeout per transition, and its
+child holds no xor. No two xor branches may put tokens on the same set of
+places, and a transition may not take an input arc and a read arc on one
+place: `check` rejects all of these.
 
 ## Ports and subnets
 

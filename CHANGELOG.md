@@ -16,6 +16,15 @@ existed.
 
 ### Python
 
+- **libpetri 8.0.** The pin moves to `libpetri>=8.0,<9`. A timeout branch's
+  token now reads back from a marking snapshot, so the timeout-marking test
+  is no longer an expected failure, and `check` no longer warns about
+  timeout outputs.
+- **libpetri's build-time checks run at load.** A blueprint that libpetri 8.0
+  rejects (an ambiguous xor, a nested timeout or an xor in a timeout's child,
+  an input and a read arc on one place) is now a `BlueprintError` at its
+  transition's key path. Before, `check` passed it and the session's first
+  turn failed.
 - **ADK 2.12.** The port follows google-adk 2.12 (ADR 0006's re-check):
   - `from_workflow` compiles 2.12's new interrupts as interruptible: a
     `FunctionNode` with `require_confirmation`, and a tool node whose tool

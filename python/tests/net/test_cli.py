@@ -53,22 +53,6 @@ def test_check_prints_the_blueprint_error_with_its_key_path_and_hint() -> None:
     assert "Fix: did you mean 'won'?" in out
 
 
-def test_check_warns_about_a_timeout_output_libpetri_cannot_run_yet(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from adk_libpetri.net import report
-
-    monkeypatch.setattr(report, "_libpetri_version", lambda: (7, 3, 0))
-    code, out = run("check", str(BLUEPRINTS / "bp_timeout" / "root.yaml"))
-    assert code == 0
-    assert "WARNING transitions ['To_Slow'] have a timeout output" in out
-
-    monkeypatch.setattr(report, "_libpetri_version", lambda: (7, 3, 1))
-    code, out = run("check", str(BLUEPRINTS / "bp_timeout" / "root.yaml"))
-    assert code == 0
-    assert "WARNING" not in out
-
-
 def test_check_reports_a_ref_cycle() -> None:
     code, out = run("check", str(BLUEPRINTS / "bp_cycle" / "a.yaml"))
     assert code == 1
@@ -245,6 +229,29 @@ def test_the_module_runs_as_a_program() -> None:
     )
     assert bad.returncode == 1
     assert "unknown place 'wonn'" in bad.stdout
+
+
+def test_the_program_rejects_a_net_libpetri_does_not_build(tmp_path: Path) -> None:
+    f = tmp_path / "read_in.yaml"
+    f.write_text(
+        "agent_class: adk_libpetri.net.PetriNet\n"
+        "name: read_in\n"
+        "places:\n"
+        "  userIn: {type: str}\n"
+        "  a: {type: str}\n"
+        "transitions:\n"
+        "  T_In: {in: [userIn], out: a}\n"
+        "  T_Out: {in: [a], read: [a], out: eventOut, action: emit}\n"
+    )
+    bad = subprocess.run(
+        [sys.executable, "-m", "adk_libpetri.cli", "check", str(f)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert bad.returncode == 1, bad.stdout + bad.stderr
+    assert "transitions.T_Out:" in bad.stdout
+    assert "(EXEC-012)" in bad.stdout
 
 
 # -- --json -----------------------------------------------------------------------
