@@ -1,9 +1,10 @@
 """Every YAML block in ``AUTHORING.md`` is a file that loads, and its claims are proven.
 
 Each ``yaml`` block starts with ``# file: <name>.yaml``. The blocks are written
-into one agent folder with an ``agent.py`` that defines every ``.agent.<fn>``
-they name, then each goes through ``adk-libpetri check`` (and ``verify``), so
-the guide an agent copies from cannot drift from the loader.
+into one agent folder with an ``agent.py``: the guide's own ``python`` blocks
+(each starting ``# file: agent.py``), then a stub for every other
+``.agent.<fn>`` they name. Each net goes through ``adk-libpetri check`` (and
+``verify``), so the guide an agent copies from cannot drift from the loader.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import io
 import re
 from importlib import resources
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -21,6 +23,7 @@ from support.smt_proofs import requires_z3
 
 GUIDE = resources.files("adk_libpetri.net").joinpath("AUTHORING.md").read_text(encoding="utf-8")
 BLOCKS = re.findall(r"^```yaml\n(.*?)^```", GUIDE, flags=re.S | re.M)
+PYTHON = re.findall(r"^```python\n(.*?)^```", GUIDE, flags=re.S | re.M)
 FILE_LINE = re.compile(r"\A# file: (\S+\.yaml)\n")
 PACKAGE = "cli_authoring_snippets"
 
@@ -49,11 +52,18 @@ def folder(tmp_path_factory: pytest.TempPathFactory) -> Path:
     d = tmp_path_factory.mktemp("agents") / PACKAGE
     d.mkdir()
     (d / "__init__.py").write_text("")
+    for block in PYTHON:
+        assert block.startswith("# file: agent.py\n"), f"a python block must be agent.py:\n{block}"
+    own = "\n\n".join(PYTHON)
+    defined = set(re.findall(r"^(?:async def|def|class) (\w+)", own, flags=re.M))
     fns = sorted({fn for text in FILES.values() for fn in re.findall(r"\.agent\.(\w+)", text)})
     (d / "agent.py").write_text(
-        "from typing import Any\n\n"
+        own
+        + "\n\nfrom typing import Any\n"
         + "".join(
-            f"\n\ndef {fn}(node_input: Any = None) -> Any:\n    return node_input\n" for fn in fns
+            f"\n\ndef {fn}(node_input: Any = None) -> Any:\n    return node_input\n"
+            for fn in fns
+            if fn not in defined
         )
     )
     for name, text in FILES.items():
@@ -68,10 +78,25 @@ def run(*argv: str) -> tuple[int, str]:
 
 
 def test_the_guide_has_every_motif() -> None:
-    assert {"race.yaml", "quorum.yaml", "retry.yaml", "optimistic.yaml", "escalate.yaml"} <= set(
-        FILES
-    )
+    motifs = {"race.yaml", "quorum.yaml", "retry.yaml", "optimistic.yaml", "escalate.yaml"}
+    assert motifs | {"late_work.yaml"} <= set(FILES)
     assert len(NETS) >= 7
+
+
+def test_an_agent_py_block_defines_what_its_net_names() -> None:
+    # A motif that shows its agent.py shows the whole file: no stub may stand in
+    # for a ref the yaml block just before it names.
+    fences = re.findall(r"^```(yaml|python)\n(.*?)^```", GUIDE, flags=re.S | re.M)
+    pairs = [
+        (y, p)
+        for (lang_y, y), (lang_p, p) in pairwise(fences)
+        if lang_y == "yaml" and lang_p == "python"
+    ]
+    assert pairs, "no motif shows its agent.py"
+    for y, p in pairs:
+        defined = set(re.findall(r"^(?:async def|def|class) (\w+)", p, flags=re.M))
+        missing = sorted(set(re.findall(r"\.agent\.(\w+)", y)) - defined)
+        assert not missing, (FILE_LINE.match(y), missing)
 
 
 @pytest.mark.parametrize("name", NETS)

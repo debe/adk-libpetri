@@ -245,6 +245,9 @@ def test_skill_prints_an_agent_skill_with_valid_frontmatter() -> None:
         assert cmd in body, cmd
     for section in re.findall(r'adk-libpetri guide "([^"]+)"', body):
         assert run("guide", section)[0] == 0, section
+    motifs = body.split("Start from the closest motif:", 1)[1].split("Each is", 1)[0]
+    for section in re.findall(r'"([^"]+)"', motifs):
+        assert run("guide", section)[0] == 0, section
     assert "\u2014" not in out  # no em-dashes
 
 

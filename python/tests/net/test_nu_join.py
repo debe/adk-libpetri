@@ -139,6 +139,15 @@ def test_a_self_input_of_a_count_is_no_witness() -> None:
     assert value_of(decl, s="n1", t=["n1", "n1"]) == ["n1", "n1"]
 
 
+def test_when_only_self_inputs_match_the_first_in_in_stays() -> None:
+    decl = {"in": ["t", "s"], "match": {"s": "self", "t": "self"}, "out": "u", "node": "f"}
+    data = {"places": {"s": S, "t": S, "u": S}, "transitions": {"T_J": decl}}
+    plan = parse_blueprint("n", data, nodes=NODES).plans["T_J"]
+    # The order of in:, not of match:, picks the one that stays.
+    assert plan.witnesses == frozenset({"s"})
+    assert value_of(decl, s="n1", t="n1") == "n1"
+
+
 def test_a_join_picks_its_partner_by_name() -> None:
     work = "bp_nu_join.agent.Work"
     data: dict[str, Any] = {
@@ -466,9 +475,9 @@ def test_a_mint_that_leaves_a_key_without_a_fresh_name_proves_nothing() -> None:
 
 NO_MINT = (
     "Nu_Start has no mint:, yet its tokens reach the join keys reply, retired, waiting: they "
-    "hold no fresh name, so the joins cannot tell them apart and a quiescence claim stays "
-    "unknown (libpetri's reason may also name a node that only passes the name on, which "
-    "needs no mint:); add mint: [waiting, work.turn] to Nu_Start"
+    "hold no fresh name, so the joins cannot tell them apart and the claims stay unknown "
+    "(libpetri's reason may also name a node that only passes the name on, which needs no "
+    "mint:); add mint: [waiting, work.turn] to Nu_Start"
 )
 
 
@@ -482,6 +491,51 @@ def test_a_net_that_forgets_mint_names_the_transition_to_mint_in() -> None:
         proofs = verify_blueprint(bp, 1)
         assert [p.result.verdict for p in proofs] == ["unknown"] * 3
         assert all(p.notes == (NO_MINT,) for p in proofs)
+
+
+def test_a_missing_mint_is_asked_of_the_first_transition_whose_tokens_hold_a_name() -> None:
+    # Nu_In starts the tokens but puts a Content down, which cannot hold a name:
+    # the note asks the mint of Nu_Start, and that line loads.
+    unminted = {"in": ["msg"], "out": {"and": ["work", "waiting"]}, "node": "open_work"}
+    bp = nu_variant(
+        {"msg": {"type": "Content"}},
+        Nu_In={"in": ["userIn"], "out": "msg"},
+        Nu_Start=unminted,
+    )
+    nu = names(bp)
+    assert nu is not None
+    assert nu.notes == (
+        NO_MINT.replace("Nu_Start has no", "Nu_In has no").replace(
+            "add mint: [waiting, work.turn] to Nu_Start",
+            "Nu_In's tokens cannot hold a name, so add mint: [waiting, work.turn] to "
+            "Nu_Start, which takes them on toward the keys",
+        ),
+    )
+    fixed = nu_variant(
+        {"msg": {"type": "Content"}},
+        Nu_In={"in": ["userIn"], "out": "msg"},
+        Nu_Start={**unminted, "mint": ["waiting", "work.turn"]},
+    )
+    assert names(fixed) == Names(("Nu_Start",), ("work",), ("Nu_Ask",), (RELAY_NOTE,))
+
+
+def test_a_missing_mint_no_output_can_hold_is_not_given_a_line() -> None:
+    # Nu_Start puts a Content on msg and a str on waiting: msg cannot take a
+    # mint, and no one transition takes both on, so no mint: line would load.
+    bp = nu_variant(
+        {"msg": {"type": "Content"}},
+        Nu_Start={"in": ["userIn"], "out": {"and": ["msg", "waiting"]}, "node": "open_work"},
+        Nu_Open={"in": ["msg"], "out": "work", "node": "open_work"},
+    )
+    nu = names(bp)
+    assert nu is not None
+    assert nu.notes == (
+        NO_MINT.replace(
+            "add mint: [waiting, work.turn] to Nu_Start",
+            "add mint: to the first transition that writes the name into a str place "
+            "or a str field",
+        ),
+    )
 
 
 @requires_z3
@@ -726,8 +780,8 @@ def fork_join(keyed: bool, **j1: Any) -> Blueprint:
 
 JOIN_REMINT = (
     "T_J1 is a join and mints into z, which carries a name a join keys: libpetri gives a "
-    "join no mint role and reads that output as a re-mint (NU-010, NU-054), so a quiescence "
-    "claim stays unknown; mint the new name in a plain transition after the join"
+    "join no mint role and reads that output as a re-mint (NU-010, NU-054), so the claims "
+    "stay unknown; mint the new name in a plain transition after the join"
 )
 
 
@@ -935,12 +989,12 @@ def test_a_relayed_name_carried_on_to_the_next_join_is_proven() -> None:
 def test_a_join_that_does_not_relay_to_a_key_says_so() -> None:
     hop = (
         "T_J1 puts its token on r, which reaches T_J2's key r3, but does not relay the name "
-        "it joined there, so that name is not followed to the key and a quiescence claim stays "
+        "it joined there, so that name is not followed to the key and the claims stay "
         "unknown; add relay: {r: self} to T_J1"
     )
     direct = (
         "T_J1 puts its token on r, which is T_J2's key, but does not relay the name it joined "
-        "there, so that name is not followed to the key and a quiescence claim stays unknown; "
+        "there, so that name is not followed to the key and the claims stay unknown; "
         "add relay: {r: self} to T_J1"
     )
     for bp, note in ((relay_chain(False), hop), (relay_chain(False, 0), direct)):
@@ -1073,3 +1127,33 @@ def test_a_mounted_join_proves_on_its_prefixed_places() -> None:
         proofs = verify_blueprint(bp, k)
         assert all(p.proven for p in proofs), [p.result.reason or p.result.report for p in proofs]
         assert all("Route B" in p.result.report for p in proofs)
+
+
+ENV_NOTE = (
+    "job is an env: place, and a join keys on the name its tokens carry: verify cannot assume "
+    "a name from outside is fresh (VER-006), so every claim stays unknown; mint the name in "
+    "the net, and carry the outside value in another field"
+)
+
+
+def test_a_name_from_an_env_place_says_so_and_asks_for_no_mint() -> None:
+    # A mint: on J_Start would not help: job itself is keyed, and libpetri refuses it.
+    data: dict[str, Any] = {
+        "env": ["job"],
+        "places": {"job": S, "waiting": S, "done": S},
+        "transitions": {
+            "J_Start": {"in": ["job"], "out": "waiting"},
+            "J_Answer": {"in": ["userIn"], "out": "eventOut", "action": "emit"},
+            "J_Join": {"in": ["job", "waiting"], "match": {"job": "self", "waiting": "self"}},
+        },
+        "prove": {
+            "options": {"sinks": ["eventOut", "waiting"]},
+            "claims": ["deadlock_free", {"place_bound": {"place": "eventOut", "bound": 1}}],
+        },
+    }
+    bp = parse_blueprint("n", data)
+    nu = names(bp)
+    assert nu is not None and nu.notes == (ENV_NOTE,)
+    if lp.z3_available():
+        # Every claim, the safety one too: libpetri refuses a name from outside.
+        assert [p.result.verdict for p in verify_blueprint(bp)] == ["unknown", "unknown"]

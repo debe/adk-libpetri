@@ -67,7 +67,15 @@ from .._spec import (
     _out_places,
     one,
 )
-from .blueprint import Blueprint, Claim, ClaimKind, EnvMode, ProofOptions
+from .blueprint import (
+    Blueprint,
+    BlueprintError,
+    Claim,
+    ClaimKind,
+    EnvMode,
+    ProofOptions,
+    _field_path,
+)
 
 TURN_NEXT = "turn:next"
 TURNS_LEFT = "turn:remaining"
@@ -326,7 +334,9 @@ def names(bp: Blueprint) -> Names | None:
     fresh name may not reach a key: a note says so, and the join is not
     declared. A transition with no ``mint:`` that starts the tokens a key is
     reached by (it takes no token another transition puts down) gets a note
-    naming the ``mint:`` it lacks.
+    naming the ``mint:`` it lacks. When its outputs cannot take a mint (``check``'s
+    rule), the note names the one transition after it that takes them all on toward
+    the key and can, or else says only where a ``mint:`` goes.
     """
     spec = bp.spec
     joins = [t for t in spec.transitions if t.match is not None]
@@ -401,8 +411,8 @@ def names(bp: Blueprint) -> Names | None:
             where = f"which is {j}'s key" if q == o else f"which reaches {j}'s key {q}"
             notes.append(
                 f"{t.name} puts its token on {o}, {where}, but does not relay the name it "
-                "joined there, so that name is not followed to the key and a quiescence claim "
-                f"stays unknown; add relay: {{{o}: {field}}} to {t.name}"
+                "joined there, so that name is not followed to the key and the claims stay "
+                f"unknown; add relay: {{{o}: {field}}} to {t.name}"
             )
     mints: list[str] = []
     for t in spec.transitions:
@@ -415,7 +425,7 @@ def names(bp: Blueprint) -> Names | None:
             notes.append(
                 f"{t.name} is a join and mints into {shown}, which {verb} a name a join keys: "
                 "libpetri gives a join no mint role and reads that output as a re-mint "
-                "(NU-010, NU-054), so a quiescence claim stays unknown; mint the new name "
+                "(NU-010, NU-054), so the claims stay unknown; mint the new name "
                 "in a plain transition after the join"
             )
             continue
@@ -449,7 +459,7 @@ def names(bp: Blueprint) -> Names | None:
                 )
             notes.append(
                 f"{t.name} is not declared to mint, so the names it starts are not told "
-                "apart and a quiescence claim stays unknown: " + "; ".join(parts)
+                "apart and the claims stay unknown: " + "; ".join(parts)
             )
         else:
             mints.append(t.name)
@@ -458,6 +468,15 @@ def names(bp: Blueprint) -> Names | None:
     # its tokens hold no fresh name, and libpetri's reason names it with the
     # nodes that only pass the name on.
     producers = {p for t in spec.transitions for p in _outs(t)}
+    # A name from outside: libpetri refuses every claim (VER-006), and a mint: on
+    # the transition that takes it would not change that.
+    outside = sorted(p for p in bp.env if p in coloured)
+    for p in outside:
+        notes.append(
+            f"{p} is an env: place, and a join keys on the name its tokens carry: verify "
+            "cannot assume a name from outside is fresh (VER-006), so every claim stays "
+            "unknown; mint the name in the net, and carry the outside value in another field"
+        )
     starts: dict[str, set[str]] = {}
     for q in sorted(key_of):
         frontier, seen = {q}, {q}
@@ -466,23 +485,66 @@ def names(bp: Blueprint) -> Names | None:
             for s in plain:
                 if s.name in minted or not passed[s.name] & frontier:
                     continue
-                if s.name in flows and not ins[s.name] & producers:
+                if s.name in flows and not ins[s.name] & (producers | set(outside)):
                     starts.setdefault(s.name, set()).add(q)
                 nxt |= ins[s.name] & leads - seen
             seen |= nxt
             frontier = nxt
-    for start, qs in sorted(starts.items()):
+
+    def mint_line(s: str) -> list[str] | None:
+        """The ``mint:`` entries ``s`` needs, or ``None`` when one of its outputs
+        toward a key cannot take a mint (``check``'s rule for a ``mint:``)."""
         paths: list[str] = []
-        for o in sorted(passed[start] & leads):
+        for o in sorted(passed[s] & leads):
             q = _nearest_key(o, key_of, plain, ins, passed, leads)
             fj = flows.get(key_of[q])
             key = fj.keys.get(q) if fj is not None else None
-            paths.append(o if key == () else f"{o}.{_field(key) if key else '<field>'}")
+            if key is None:
+                paths.append(f"{o}.<field>")
+                continue
+            place = spec.place_named(o)
+            try:
+                if place is not None:
+                    _field_path(s, place, _field(key), "mint target", mint=True)
+            except BlueprintError:
+                return None
+            paths.append(o if key == () else f"{o}.{_field(key)}")
+        return paths
+
+    for start, qs in sorted(starts.items()):
+        at, line, seen_at = start, mint_line(start), {start}
+        while line is None:
+            # The tokens it starts cannot hold a name: the mint goes on the one
+            # transition that takes all of them on toward the key.
+            toward = passed[at] & leads
+            onward = [
+                s.name
+                for s in plain
+                if s.name in flows and s.name not in minted and s.name not in seen_at
+                if toward <= ins[s.name] and passed[s.name] & leads
+            ]
+            if len(onward) != 1:
+                break
+            at = onward[0]
+            seen_at.add(at)
+            line = mint_line(at)
+        if line is None:
+            fix = (
+                "add mint: to the first transition that writes the name into a str place "
+                "or a str field"
+            )
+        elif at != start:
+            fix = (
+                f"{start}'s tokens cannot hold a name, so add mint: [{', '.join(line)}] "
+                f"to {at}, which takes them on toward the keys"
+            )
+        else:
+            fix = f"add mint: [{', '.join(line)}] to {start}"
         notes.append(
             f"{start} has no mint:, yet its tokens reach the join keys {', '.join(sorted(qs))}: "
-            "they hold no fresh name, so the joins cannot tell them apart and a quiescence "
-            "claim stays unknown (libpetri's reason may also name a node that only passes "
-            f"the name on, which needs no mint:); add mint: [{', '.join(paths)}] to {start}"
+            "they hold no fresh name, so the joins cannot tell them apart and the claims "
+            "stay unknown (libpetri's reason may also name a node that only passes "
+            f"the name on, which needs no mint:); {fix}"
         )
     if broken:
         notes.extend(

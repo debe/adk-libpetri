@@ -30,12 +30,12 @@ Requirement -> the tests that cover it in each port. Paths are relative to
 | WF-010 | (Python only) | `workflow/adk_samples/loop_config/test_petri_yaml.py` |
 | WF-006 | (Python only) | `workflow/test_runtime_parity.py::test_request_input_interrupts_and_resumes_like_adk` |
 | NET-001 | (Python only) | `net/test_yaml_nets.py` |
-| NET-002..003 | (Python only) | `net/test_blueprint_parse.py`, `net/test_composition.py` (leading-dot types per file) |
+| NET-002..003 | (Python only) | `net/test_blueprint_parse.py`, `net/test_composition.py` (leading-dot types per file), `net/test_nu_join.py` (`match` and `relay` keys) |
 | NET-004 | (Python only) | `net/test_yaml_nets.py`, `demos/patterns/yaml/*` |
-| NET-005..007 | (Python only) | `net/test_yaml_nets.py`, `net/test_blueprint_parse.py` (action plans), `net/test_turns.py` (turns, inputs, node outputs) |
+| NET-005..007 | (Python only) | `net/test_yaml_nets.py`, `net/test_blueprint_parse.py` (action plans), `net/test_turns.py` (turns, inputs, node outputs), `net/test_nu_join.py` (`mint:`, the witness rule, late replies dropped by name) |
 | NET-008 | (Python only) | `net/test_blueprint_parse.py`, `net/test_yaml_nets.py`, `net/test_loader_edges.py` |
 | NET-009..010 | (Python only) | `net/test_composition.py`, `net/test_turns.py` (turnAbort, runner keys and teardown) |
-| NET-011 | (Python only) | `net/test_prove.py`, `net/test_prove_scope.py`, `demos/patterns/yaml/*` |
+| NET-011 | (Python only) | `net/test_prove.py`, `net/test_prove_scope.py`, `net/test_nu_join.py` (`joined_or_dead_lettered`, nets that join by name), `demos/patterns/yaml/*` |
 | NET-012 | (Python only) | `net/test_cli.py` |
 | NET-013 | (Python only) | `net/test_schema.py`, `net/test_authoring.py` |
 | NET-014 | (Python only) | `demos/patterns/yaml/*` |

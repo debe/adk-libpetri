@@ -19,7 +19,7 @@ The format, in short (the full rules are in the docstrings below):
   ``turnAbort`` and the other catalog colours are implicit with their
   catalog types.
 * ``transitions: {Name: {in, out, read, inhibit, reset, priority, timing,
-  node | action}}``.
+  match, relay, mint, node | action}}``.
 * ``env: [place, ...]``, ``ports: {name: {place, direction}}``,
   ``subnets: {inst: {net | stock, from, bind}}``, ``prove: {options, claims}``.
 * ``turn: {release: place}`` -- where a turn's admission ends (ADR 0010).

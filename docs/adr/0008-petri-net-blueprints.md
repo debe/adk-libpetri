@@ -93,6 +93,18 @@ load error.
   `{xor: {label: out, ...}}` (route-labelled, `default` and `error` reserved)
   or `{timeout: ms, child: out}`. Also `read`, `inhibit`, `reset`, `priority`,
   and `timing` (`{delayed|deadline|exact: ms}` or `{window: [a, b]}`).
+- **Names.** `match: {place: field | self}` joins two or more inputs by a
+  `str` name (libpetri's `match_spec`, NU-020), `relay: {output: field}`
+  names the outputs the joined name goes to (NU-054), and `mint: [place,
+  place.field]` writes one `fresh_name()` per firing into the listed outputs
+  after the action (NU-010). A node never sees libpetri's transition
+  context, where `fresh_name()` lives, hence a declared `mint:` rather
+  than a call inside the node. A `self`-keyed input of one token holds only
+  the name, so it is left out of the action's value (for `move`, `emit` and
+  a node's input) when another matched input carries the name (in a field,
+  or as the tokens of a `count:` of two or more, an `at_least:` or an `all:`
+  input); when every matched input is a one-token `self` input, the first of
+  them in `in:` stays and the rest are left out.
 - **Actions**, at most one per transition:
   - none, or `action: move`: consume the inputs, put the one coloured value on
     every coloured output, signal the unit outputs (with no coloured output,
@@ -194,7 +206,8 @@ signalled by the runner. Toolsets and instruction providers are rejected.
 ### `prove:`
 
 `prove: {options, claims, on_load}`. Claims are `deadlock_free`,
-`place_bound`, `unreachable` and `mutual_exclusion`, each one libpetri
+`place_bound`, `unreachable`, `mutual_exclusion` and
+`joined_or_dead_lettered`, each one libpetri
 `verify()` call, each with an optional `label` and `options` laid over the
 shared ones key by key. Options are `initial_marking`, `environment`
 (`always`, `arrivals`, `bounded`; one mode for all places), `sinks`,
@@ -207,8 +220,14 @@ libpetri's own completion step, which VER-004 never splits again; each start
 holds a `turn:quiet:T` token of its own, so the runs of different nodes stay
 independent for VER-024's partial-order reduction). A safety
 claim covers one turn,
-`deadlock_free` two, and `k` sets the number for both. The `env:` places get
-at most `k` arrivals (exactly `k` for `deadlock_free`), and a safety claim
+`deadlock_free` and `joined_or_dead_lettered` two, and `k` sets the number
+for both. On a net with `match:`, the mint transitions, the places that
+carry a name to a key and libpetri's extended fragment are derived from
+`match:`, `relay:` and `mint:` (NU-051); a net that breaks the contract
+libpetri's name-aware route rests on declares no names and stays unknown,
+with a note. The `env:` places get
+at most `k` arrivals (exactly `k` for `deadlock_free` and
+`joined_or_dead_lettered`, which also get no `turnAbort`), and a safety claim
 also lets `turnAbort` arrive. An `initial_marking` keeps this, except that an
 environment place it seeds is closed. An explicit `environment` drops the
 turn order and must list every `env:` place. `assume_atomic_firing` on a net
@@ -221,28 +240,34 @@ validates without Z3), or at load with `on_load: true`, where a claim not
 proven fails the load.
 
 **Soundness.** The proofs are about the net's structure; no action runs.
-Colours are abstracted to counts, and every xor is a free choice, so a
-`node:` transition's route is covered whichever branch the node picks. A
+Colours are abstracted to counts, except the names a `match:` joins, which
+the proofs follow from their `mint:` (NU-051). Every xor is a free choice, so
+a `node:` transition's route is covered whichever branch the node picks. A
 claim proven on the blueprint therefore holds for every value and route the
-nodes produce. `move` and `emit` are synchronous, so `assume_atomic_firing`
-is exact for a claim that only needs them to be atomic (the race permit); a
-`node:` action is asynchronous, so the loader refuses the option on a net
-with nodes unless `assume_atomic_nodes: true` records that judgement.
+nodes produce, with one assumption on a net with `match:`: a node that takes
+a name puts it, in the same field, into every output that carries one (the
+relay contract, NU-051). Nothing checks this when the node runs; a note
+under the verdict names each node it is assumed for. `move` and `emit` are
+synchronous, so `assume_atomic_firing` is exact for a claim that only needs
+them to be atomic (the race permit); a `node:` action is asynchronous, so the
+loader refuses the option on a net with nodes unless
+`assume_atomic_nodes: true` records that judgement.
 
 **Limits.**
 
 - The verifier is untimed: `timing:` and timeout outputs are proof structure,
   not proved latencies. A `delayed` transition is verified as immediate (the
   same untimed claim, which state-space enumeration can then decide).
-- A safety claim covers one turn by default, `deadlock_free` two; `--k N`
-  covers N. `place_bound: {place: eventOut, bound: 1}` is a per-turn
+- A safety claim covers one turn by default, `deadlock_free` and
+  `joined_or_dead_lettered` two; `--k N` covers N.
+  `place_bound: {place: eventOut, bound: 1}` is a per-turn
   statement: `turn:next` takes each answer when the next turn starts, while
   at run time `eventOut` keeps every turn's answer (hence no arc may test
   it). The turn model lets the next input arrive once the node runs are
   done, even if other transitions are still enabled, which over-approximates
   the runtime.
-- `deadlock_free` covers runs where no action fails: it never lets
-  `turnAbort` arrive. Safety claims do, at any time.
+- `deadlock_free` and `joined_or_dead_lettered` cover runs where no action
+  fails: they never let `turnAbort` arrive. Safety claims do, at any time.
 - A turn ends on `eventOut` only, so a turn that ends elsewhere (a stock
   `llm_agent`'s `transfer`) hangs; `deadlock_free` over two turns reports it.
 - A mounted child's own `prove:` does not run with the parent; `verify

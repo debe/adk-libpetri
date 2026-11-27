@@ -268,6 +268,15 @@ The format, in short:
     the branch its route picks (`default` when none matches); a failure takes
     the `error` branch as a `NodeError`, or, with no `error` branch, fails
     the turn as it fails a `Workflow`. An xor with no node is rejected.
+- **Names.** `match: {p: field, q: self}` joins a transition's inputs by name
+  (a `str` field, or a `str` token itself), `relay: {r: field}` says output
+  r carries the joined name in that field (the action puts it there; a
+  firing that does not fails), and `mint: [p, q.field]` puts one fresh name
+  per firing on the outputs. They go with any action. A `self` input of one
+  token is left out of the action's value when another matched input
+  carries the name, so `action: emit` on a join emits the other token: a
+  late reply joins its own turn's name and is dropped, never another
+  turn's.
 - **The turn** is `PetriAgent`'s: the input lands on `userIn`, the first
   non-partial `eventOut` token ends the turn (an `Event` is yielded, any other
   value becomes the node's output), and `env:` adds environment places, filled
@@ -284,8 +293,10 @@ The format, in short:
   `LlmAgent` named in `from:`. A mounted child's `turnAbort` fuses with the
   net's own, which the runner signals on a failure.
 - **`prove:`** `{options, claims, on_load}`: `deadlock_free`, `place_bound`,
-  `unreachable` and `mutual_exclusion`, one `verify()` each, on the composed
-  net. `on_load: true` fails the load when a claim is not proven.
+  `unreachable`, `mutual_exclusion` and `joined_or_dead_lettered` (no token
+  left on a place at rest), one `verify()` each, on the composed net. On a
+  net with `match:` the proofs follow each name from its `mint:`.
+  `on_load: true` fails the load when a claim is not proven.
 
 Every load error names the file, the YAML key path and a fix:
 
@@ -295,7 +306,8 @@ root_agent.yaml: transitions.Triage_Answer.out.xor.default: unknown place 'answe
 
 The JSON Schema is `adk_libpetri/net/schema.json`, and
 `adk_libpetri/net/AUTHORING.md` is a short guide with the motifs (permit race,
-quorum, inhibitor fallback, budget) as YAML.
+quorum, budget with an inhibitor fallback, optimistic commit, timed
+escalation, late work) as YAML.
 
 ```bash
 adk-libpetri check root_agent.yaml                     # parse and build, no Z3
@@ -311,12 +323,14 @@ too: `check` compiles it, `verify` runs `verify_workflow`.
 versions.
 `PetriNet.verify(k=2)` returns the same verdicts in Python. The proofs are on the net's
 structure, untimed, with every xor a free choice, so a claim holds whatever
-the nodes return. By default the user's inputs come turn by turn, the next
+the nodes return, except that on a net with `match:` a node that takes a name
+is assumed to copy it into its output (a note under the verdict says so). By
+default the user's inputs come turn by turn, the next
 after the previous answer: a safety claim covers one turn, `deadlock_free`
-two, and `--k` sets the number for both. Safety claims also let `turnAbort`
-and every `env:` place arrive; `deadlock_free` covers runs where nothing
-fails. Running a `{timeout: ...}` output is broken in libpetri-py
-for now (ADR 0008).
+and `joined_or_dead_lettered` two, and `--k` sets the number for all of them.
+Safety claims also let `turnAbort` and every `env:` place arrive;
+`deadlock_free` and `joined_or_dead_lettered` cover runs where nothing
+fails.
 
 ### In ADK's web UI
 

@@ -15,8 +15,9 @@ before the net runs.
 
 Write a net when the flow needs what ADK's workflow agents cannot state: a
 race where only the first result counts, a quorum (answer at k of n), a
-permit or a budget, an inhibitor fallback, or a timeout. For a plain
-sequence, loop or fan-out, keep ADK's own agents.
+permit or a budget, an inhibitor fallback, a timeout, or work joined back by
+name so that a late reply is dropped, never mistaken for another turn's. For
+a plain sequence, loop or fan-out, keep ADK's own agents.
 
 ## Read first
 
@@ -24,7 +25,8 @@ sequence, loop or fan-out, keep ADK's own agents.
   and `adk-libpetri guide "the turn"`.
 - Start from the closest motif: `adk-libpetri guide "permit race"`,
   `"quorum"`, `"budget"`, `"optimistic commit"`, `"timed escalation"`,
-  `"ports and subnets"`, `"stock subnets"`. Each is a complete, proven file.
+  `"late work"`, `"ports and subnets"`, `"stock subnets"`. Each is a
+  complete, proven file.
 - `adk-libpetri guide "prove:"` for the claims, and
   `adk-libpetri guide "reading a counterexample"` before fixing one.
 - `adk-libpetri schema` prints the exact YAML shape (JSON Schema).
@@ -51,9 +53,12 @@ unknown.
    where the bad marking first appears; that transition's arcs are the bug.
    Fix the net, or ask the user when the claim itself may be wrong, then run
    `verify` again.
-5. An unknown claim is not a proof. The usual cause is a state space too
-   large to close: bound the environment (`prove: options: environment:`) or
-   prove a smaller net. Check that `z3` is installed.
+5. An unknown claim is not a proof. Read the `note:` lines under its verdict
+   first: on a net with `match:` they say where a name is lost (a transition,
+   or an `env:` place), and for a missing `mint:` or `relay:` they suggest a
+   line to add; run `check` after adding it. Otherwise the usual cause is a
+   state space too large to close: bound the environment (`prove: options:
+   environment:`) or prove a smaller net. Check that `z3` is installed.
 
 ## Report
 

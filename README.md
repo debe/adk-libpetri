@@ -160,8 +160,14 @@ same nets as the hand-written demos and pass the same tests and proofs.
   ([ADR 0009](docs/adr/0009-web-ui-and-builder-assistant.md)).
 
 The proofs are structural and untimed, and they treat every xor as a free
-choice, so a claim holds for any value a node returns. By default inputs arrive turn by turn:
-a safety claim covers one turn, `deadlock_free` two. The design is
+choice, so a claim holds for any value a node returns, except on a net that
+joins tokens by name (`match:` joins tokens that carry the same name, and
+`mint:` gives each turn a fresh one, so a late reply is dropped rather than
+taken for the next turn's). There a node that takes a name is assumed to
+copy it into its output, and a note under the verdict says so. By default
+inputs arrive turn by turn: a safety claim covers one turn, and
+`deadlock_free` and `joined_or_dead_lettered` (no token is left on the named
+place once the net is quiet) cover two. The design is
 [ADR 0008](docs/adr/0008-petri-net-blueprints.md); the format is in
 [`python/README.md`](python/README.md#3-write-the-net-in-yaml-petrinet).
 

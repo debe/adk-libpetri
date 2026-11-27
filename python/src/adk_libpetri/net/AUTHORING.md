@@ -31,10 +31,11 @@ quorum`). Under `adk-libpetri web`, ADK's graph panel draws the net.
 `check --json` and `verify --json` print the results as data.
 
 `verify --k 3` checks every claim over three turns instead of the default
-(one turn for a safety claim, two for `deadlock_free`). `verify --recursive`
-also proves each mounted child blueprint's own `prove:` on the child alone.
-`check` needs no Z3. `verify` needs the `z3` binary for claims that
-state-space enumeration cannot close.
+(one turn for a safety claim, two for `deadlock_free` and
+`joined_or_dead_lettered`). `verify --recursive` also proves each mounted
+child blueprint's own `prove:` on the child alone. `check` needs no Z3.
+`verify` needs the `z3` binary for claims that state-space enumeration
+cannot close.
 
 ## The format
 
@@ -70,6 +71,22 @@ state-space enumeration cannot close.
     the same time. The motifs use +10 for commits and -10 for discards.
   - `timing`: `{delayed: ms}`, `{deadline: ms}`, `{exact: ms}` or
     `{window: [a, b]}`.
+  - `match: {p: field, q: self}` fires only on tokens that hold the same
+    name: the `field` of p's token (a dotted path to a `str` or
+    `str | None` field of a dataclass or pydantic model; a step on the
+    path may be `| None` too) and q's token itself (`self`, a `str`
+    place). It keys two or more `in` places, never a read. A token whose
+    path reaches a `None` has no name and joins nothing. See the late-work
+    motif.
+  - `relay: {r: field}` says the join puts its name on output r, in that
+    field; a firing that does not fails. It needs a `match:`. `verify`
+    follows a name past a join only through its `relay:`, so relay the name
+    on any output that reaches a later join's key.
+  - `mint: [p, q.field]` puts one fresh name per firing on its output
+    places: as p's token itself (a `str` place), or into q's token's field
+    (a `str` field). Mint in the net, where a turn starts: `verify` cannot
+    assume a name from an `env:` place is fresh, so every claim on the net
+    stays unknown.
 - **`env: [p]`** adds environment places: an approval, a webhook, a
   sensor. Fill one with `PetriNet.inject(session, place, value)` while a
   turn runs. A turn blocks until `eventOut`, so the value comes from another
@@ -148,6 +165,20 @@ Each transition has at most one action.
   - If the node fails, the `error` branch is taken with a `NodeError`
     token. Declare its coloured places `type: NodeError`. With no `error`
     branch, the turn fails as a Workflow node fails.
+- **`mint:`** goes with any action, or none. It writes the firing's fresh
+  name after the action, into each listed place and field the firing marks
+  (on an xor, only those on the branch the node takes). A node never sees
+  the name: it is written into the node's output on the way out. A node
+  that takes a name must copy it into each token it puts down that carries
+  the name on to a key, in the same field (the late-work motif's `ask`
+  keeps `turn`). `verify` follows a name by its field, so a name copied
+  into another field is lost and every claim is unknown.
+- **On a `match:`**, a `self`-keyed `str` input of one token holds only the
+  name, so it is left out of the action's value when another matched input
+  carries the name (in a field, or as the tokens of a `count:` of two or
+  more, an `at_least:` or an `all:` input). That is why `action: emit` on a
+  join emits the other token. When every matched input is a one-token
+  `self` input, the first of them in `in:` stays and the rest are left out.
 - A transition takes `node:` or `action:`, not both. To emit a node's
   output, put it on a place and add `{in: [p], out: eventOut, action: emit}`.
 - An xor with no node is an error, because nothing would choose the branch.
@@ -409,6 +440,98 @@ child holds no xor. No two xor branches may put tokens on the same set of
 places, and a transition may not take an input arc and a read arc on one
 place: `check` rejects all of these.
 
+### Late work: discard it by name
+
+This is the timed escalation motif (`adk-libpetri guide "timed escalation"`)
+with names in place of its `reset:` and `inhibit:`. `Late_Start` mints one
+fresh name per turn (`mint:`) into the work's `turn` field and onto
+`waiting`. A reply joins the `waiting` token that holds its own name
+(`match:`), so a reply from an earlier turn can never answer this one. If
+the escalation fires first, it moves the name to `retired`, and the late
+reply joins it there and is dropped. `joined_or_dead_lettered` proves that
+no reply and no retired name is left behind.
+
+```yaml
+# file: late_work.yaml
+agent_class: adk_libpetri.net.PetriNet
+name: late_work
+nodes:
+  - [.agent.open_work, .agent.ask, .agent.canned_reply]
+places:
+  work: {type: .agent.Work}
+  waiting: {type: str}
+  reply: {type: .agent.Work}
+  retired: {type: str}
+  due: {}
+  fallback: {type: str}
+transitions:
+  Late_Start:
+    in: [userIn]
+    out: {and: [work, waiting]}
+    node: open_work
+    mint: [work.turn, waiting]
+  Late_Ask: {in: [work], out: reply, node: ask}
+  Late_Reply:
+    in: [reply, waiting]
+    match: {reply: turn, waiting: self}
+    out: eventOut
+    priority: 10
+    action: emit
+  Late_Escalate:
+    in: [waiting]
+    out: {and: [retired, due]}
+    timing: {delayed: 5000}
+  Late_Fallback: {in: [due], out: fallback, node: canned_reply}
+  Late_FallbackEmit: {in: [fallback], out: eventOut, action: emit}
+  Late_Drop:
+    in: [reply, retired]
+    match: {reply: turn, retired: self}
+prove:
+  claims:
+    - deadlock_free
+    - place_bound: {place: eventOut, bound: 1}
+    - joined_or_dead_lettered: reply
+    - joined_or_dead_lettered: retired
+```
+
+`ask` must put the name it was given back on its reply: the join reads
+`reply.turn`, and `verify` cannot see into a node, so each proof notes that
+it assumes this. It must not raise either. A raised error fails the turn and
+leaves its name on `waiting`, whose escalation then answers the next turn.
+So `ask` catches the failure and replies with it. An `error:` branch does
+not help: its `NodeError` holds no turn name, so the retired name would
+never be joined, and `verify` reports `joined_or_dead_lettered(retired)`
+violated.
+
+```python
+# file: agent.py
+from dataclasses import dataclass, replace
+
+from google.genai import types
+
+
+@dataclass(frozen=True)
+class Work:
+    text: str
+    turn: str = ""  # the turn's name: mint: writes it
+
+
+def open_work(node_input: types.Content) -> Work:
+    return Work("".join(p.text or "" for p in node_input.parts or []))
+
+
+async def ask(node_input: Work) -> Work:
+    try:
+        answer = f"answer to {node_input.text}"  # the specialist's call goes here
+    except Exception as err:  # a raise would fail the turn and strand its name
+        answer = f"the specialist failed: {err}"
+    return replace(node_input, text=answer)  # keeps turn, so the reply joins
+
+
+def canned_reply(node_input: None = None) -> str:  # due has no type: no input
+    return "a specialist will follow up"
+```
+
 ## Ports and subnets
 
 A blueprint can be mounted inside another. The child declares its
@@ -556,6 +679,7 @@ prove:
     - place_bound: {place: p, bound: n}
     - unreachable: [p, q]                   # never all marked at once
     - mutual_exclusion: [p, q]              # never two marked at once
+    - joined_or_dead_lettered: p            # no token left on p at rest
     - place_bound: {place: p, bound: 1}
       label: my name for the verdict line
       options: {...}                        # laid over the shared options
@@ -565,13 +689,15 @@ prove:
 - **Turns.** With no `environment`, the user's inputs come as a session's
   turns do: the next one on `userIn` only once an answer is on `eventOut`
   and the turn's node runs are done. A safety claim covers one turn,
-  `deadlock_free` two (a first turn that leaves the net unable to answer
-  the next is a deadlock); `--k N` sets N turns for every claim.
+  `deadlock_free` and `joined_or_dead_lettered` two (a first turn can
+  leave the net unable to answer the next, or leave a late reply that
+  arrives in the next); `--k N` sets N turns for every claim.
   `place_bound: {place: eventOut, bound: 1}` then means one answer a turn.
 - **Environment places.** Every `env:` place gets at most k arrivals
-  (exactly k for `deadlock_free`). A safety claim also lets `turnAbort`
-  arrive, since the runner signals it on any failure or ADK abort;
-  `deadlock_free` covers runs where nothing fails.
+  (exactly k for `deadlock_free` and `joined_or_dead_lettered`). A safety
+  claim also lets `turnAbort` arrive, since the runner signals it on any
+  failure or ADK abort; `deadlock_free` and `joined_or_dead_lettered`
+  cover runs where nothing fails.
 - `initial_marking` keeps all of that. An environment place it seeds is
   closed: `initial_marking: {userIn: 1}` covers that one input and no
   further turn.
@@ -588,6 +714,27 @@ prove:
   `sinks` is given.
 - `sinks_when` excuses a place only while a marker is marked: for example
   a loser's trigger that the winner's `won` inhibits.
+- **Names.** On a net with `match:`, `verify` follows each name from its
+  `mint:` to the joins that key it and proves name by name: a reply that
+  joins one turn's name is never counted against another's.
+  `joined_or_dead_lettered: p` says no run leaves a token on p at rest:
+  every name that reaches p is joined, or dropped by a join that discards
+  it (the late-work motif's `Late_Drop`). A node that takes a name is
+  assumed to copy it, in the same field (a note says so under the verdict).
+  When the names cannot be followed, every claim is unknown, safety claims
+  too, and a note names the transition where the name is lost and why. That
+  happens, for example, when a key reads a different field from the one the
+  name was minted into, when an emit or a node's error branch sits between a
+  mint and a key, when a join passes its token on toward a later join's key
+  without a `relay:` for that output, when a join mints into a place that
+  carries a name a later join keys (mint in a plain transition after the
+  join instead), or when a `mint:` is missing. For a missing `mint:` or
+  `relay:` the note also suggests a line to add; run `check` after adding
+  it, and if the place it names cannot hold a name, put the `mint:` on the
+  first transition that writes a `str` place or a `str` field instead.
+  `verify` also cannot assume a name from an `env:` place is fresh, so such
+  a name makes every claim unknown: mint the name in the net and carry the
+  outside value in another field.
 - Proofs check the structure only and never run an action. A node with an
   xor may take any branch. They are untimed: a `delayed` transition may
   fire as soon as it is enabled, so state what a delay ensures with an arc
@@ -597,8 +744,11 @@ prove:
   unless `assume_atomic_nodes: true` says that the claim's counterexample
   needs only move and emit transitions to be atomic. `verify` prints the
   assumption under the verdict.
-- `unknown` is not a proof. The usual cause is a state space too large to
-  close. Bound the environment, or check a smaller net.
+- `unknown` is not a proof. Read the notes under the verdict first: on a net
+  with `match:` they say where a name is lost, and for a missing `mint:` or
+  `relay:` they suggest a line to add (run `check` after adding it).
+  Otherwise the usual cause is a state space too large to close. Bound the
+  environment, or check a smaller net.
 
 ## Reading a counterexample
 

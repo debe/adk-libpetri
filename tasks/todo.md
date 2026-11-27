@@ -75,20 +75,21 @@ Plan: ~/.claude/plans/serialized-sniffing-key-of-501cc5b7-904e-4d93-9dc7-225288b
 - [x] The late-reply fixture's prove section: `sinks: [eventOut, dropped]`.
 
 ### 3. Schema, docs, guide
-- [ ] `schema.json` `$defs.transition` (L443-514): add `match`, `relay` and `mint`, plus
-  `BROKEN` entries in `test_schema.py` (L80-128). The keys-parity test at L153 must stay green.
-- [ ] `AUTHORING.md`:
-  - `## The format`: match/relay/mint.
-  - `## Actions`: what mint writes.
-  - A new motif `### Late work: discard it by name` as a complete `# file:` block,
-    checked and proven by `test_authoring.py` (motif list L70).
-  - `## prove:`: the new claim, plus why env-borne names give `Unknown`.
-- [ ] `SKILL.md:25-27`: list the motif (`test_cli.py:246` runs it through `adk-libpetri guide`).
-- [x] Regenerate `spec/api/python.txt` if `ClaimKind`/`ActionPlan` show (`PUBLICAPI_WRITE=1`) and
-  review the diff (ActionPlan gained `keys`/`relays`; ClaimKind does not show).
-- [ ] `CHANGELOG.md` Unreleased: add `### Python` (there is none yet; L15).
-- [ ] Every other surface that lists transition keys or claim kinds: `python/README.md:287`,
-  `spec/08-blueprints.md:60`, ADR 0008 (`:197`, if ADRs are kept current), the CLI help.
+- [x] `schema.json`: `match`, `relay`, `mint` (slice 1) and the claim (slice 2).
+- [x] `AUTHORING.md`: the format (match/relay/mint), Actions (what mint writes, the
+  witness rule, a node copies the name), the `### Late work: discard it by name` motif
+  with its `agent.py` (`test_authoring.py` now writes the guide's `# file: agent.py`
+  python blocks and stubs only the refs they leave out), `prove:` (the claim, names,
+  env-borne names), the default turns in the loop.
+- [x] `SKILL.md`: the motif (`adk-libpetri guide "late work"`, run by `test_cli.py`).
+- [x] Regenerate `spec/api/python.txt` (ActionPlan gained `keys`/`relays`; ClaimKind
+  does not show).
+- [x] `CHANGELOG.md` Unreleased `### Python`.
+- [x] Other surfaces: `python/README.md` (format, `prove:`), `README.md` (turn defaults),
+  `spec/08-blueprints.md` (NET-002, NET-005, NET-011), ADR 0008 (names, `prove:`).
+  The CLI help names no claim kinds.
+- [x] A name from an `env:` place: every claim is unknown (safety too, VER-006). The
+  "add mint:" note no longer advises a mint there; a note of its own says so (test).
 
 ### 4. Release and reply (only on the engineer's word)
 - [ ] Release 0.2.1 by the Python ritual in CLAUDE.md (dating commit, `--dry-run`, then the real run).

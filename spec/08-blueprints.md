@@ -13,7 +13,8 @@ config; ADK's loader builds it and the node serves it under the stock
   `NetSpec` element: `in` (`one`, `exactly`, `at_least`, `all`), `read`,
   `inhibit`, `reset`, `priority`; `out` as a place, `and`, `xor`,
   route-labelled `xor` and `timeout`; `timing` as `delayed`, `deadline`,
-  `exact` and `window`.
+  `exact` and `window`; `match` and `relay` as the transition's `Match`, each
+  place keyed by a `str` field path or by its `str` token (`self`).
 - **NET-003** A place's type is an alias, a dotted name, or a leading-dot name
   relative to the YAML file's package; a place with no type is a unit place.
   Catalog places may be used undeclared with their catalog types; any other
@@ -25,7 +26,13 @@ config; ADK's loader builds it and the node serves it under the stock
   the coloured outputs and signals the unit ones; `emit` turns it into an
   `Event`; `node:` runs the ADK node inside the turn's invocation, its route
   picking a labelled xor branch (`default` the fallback). An xor with more
-  than one choosable branch and no node is rejected.
+  than one choosable branch and no node is rejected. `mint:` writes one
+  `fresh_name()` per firing into each listed output place or `str` field
+  after the action. On a `match:`, a `self`-keyed `str` input of one token is
+  left out of the action's value when another matched input carries the name
+  (in a field, or as the tokens of a `count:` of two or more, an `at_least:`
+  or an `all:` input); when every matched input is a one-token `self` input,
+  the first of them in `in:` stays and the rest are left out.
 - **NET-006** A failing node takes its transition's `error` branch with a
   `NodeError` token; with no `error` branch the turn fails as a failing node
   fails a `Workflow`: ADK's error event is recorded and `run_async` raises the
@@ -57,16 +64,16 @@ config; ADK's loader builds it and the node serves it under the stock
 - **NET-010** An unknown port, an unbound in-port, a type conflict across a
   binding and a ref cycle are load errors; a cycle error names its chain.
 - **NET-011** `prove:` runs one `verify()` per claim (`deadlock_free`,
-  `place_bound`, `unreachable`, `mutual_exclusion`) on the composed net, with
-  shared options and per-claim options laid over them. `verify(k=N)` replaces
-  the `arrivals` bounds and the number of turns. With no `environment` the
-  inputs come turn by turn (the next after an answer and the turn's node
-  runs): one turn for a safety claim, two for `deadlock_free`. Every `env:`
-  place, and for a safety claim `turnAbort`, arrives; an explicit
-  `environment` that leaves out an `env:` place is a load error, as is
-  `assume_atomic_firing` on a net with nodes without `assume_atomic_nodes`.
-  `on_load: true` fails the load on a claim not proven. A violated claim is
-  reported as violated, not as an error.
+  `place_bound`, `unreachable`, `mutual_exclusion`, `joined_or_dead_lettered`)
+  on the composed net, with shared options and per-claim options laid over
+  them. `verify(k=N)` replaces the `arrivals` bounds and the number of turns.
+  With no `environment` the inputs come turn by turn (the next after an answer
+  and the turn's node runs): one turn for a safety claim, two for
+  `deadlock_free` and `joined_or_dead_lettered`. Every `env:` place, and for a
+  safety claim `turnAbort`, arrives; an explicit `environment` that leaves out
+  an `env:` place is a load error, as is `assume_atomic_firing` on a net with
+  nodes without `assume_atomic_nodes`. `on_load: true` fails the load on a
+  claim not proven. A violated claim is reported as violated, not as an error.
 - **NET-012** The CLI: `adk-libpetri check FILE` validates and builds a
   blueprint without Z3; `adk-libpetri verify FILE [--k N] [--recursive]`
   prints each claim's verdict, exits nonzero on a violated claim, and with

@@ -321,6 +321,32 @@ existed.
   `StreamingLlmAgentSubnet.Config` drops `chunkBudget` too. Remove the
   `.chunkBudget(n)` call; nothing replaces it.
 
+### Python
+
+- **Joins by name in blueprints.** A transition joins its inputs by name with
+  `match: {place: field}` (`self` for a `str` token), declares with `relay:`
+  which outputs carry the joined name (the action puts it there; a firing
+  that does not fails), and writes one fresh name per firing into the places
+  or `str` fields `mint:` lists. The loader checks each key against
+  the place's type (dataclass and pydantic fields, `str` subclasses,
+  `StrEnum`, `Literal`, `NewType`, and `| None` for a key), and the schema
+  follows it. A mounted subnet's names work under its prefix.
+- **`verify` proves nets that join by name.** It follows each name from its
+  `mint:` to the joins that key it, reading `match:`, `relay:` and `mint:`,
+  so a `prove:` block needs no new option. When it cannot follow a name
+  (for example a key on a different field from the one minted, an emit or a
+  node's error branch between a mint and a key, a join that passes its
+  token on toward a later key without `relay:`, a join that mints into a
+  place carrying a name, a missing `mint:`, a name from an `env:` place),
+  every claim stays unknown, and a note says where the name is lost (for a
+  missing `mint:` or `relay:`, with a suggested line to add). A node that
+  takes a name is assumed to copy it, and the verdict says so.
+- **`joined_or_dead_lettered: place`**, a new claim: no run leaves a token
+  on the place at rest. Like `deadlock_free` it covers two turns by
+  default, with exact arrivals and no `turnAbort`.
+- **Late-work motif** in the authoring guide (`adk-libpetri guide "late
+  work"`): the timed escalation with names, a late reply dropped by name.
+
 ### Docs
 
 - **The root README covers both ports.** It gains a Java and Python names
