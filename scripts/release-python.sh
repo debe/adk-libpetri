@@ -101,7 +101,7 @@ if [[ "$DRY_RUN" == false ]]; then
     # active one may lack push rights to this repository.
     git -C "$PROJECT_ROOT" push --dry-run --quiet origin HEAD 2>/dev/null \
         || error "git cannot push to origin. Check the credentials git uses (with several gh accounts: 'gh auth switch')."
-    [[ "$(gh repo view --json viewerPermission --jq .viewerPermission 2>/dev/null)" =~ ^(ADMIN|MAINTAIN|WRITE)$ ]] \
+    [[ "$(cd "$PROJECT_ROOT" && gh repo view --json viewerPermission --jq .viewerPermission 2>/dev/null)" =~ ^(ADMIN|MAINTAIN|WRITE)$ ]] \
         || error "The active gh account cannot create releases here. Run 'gh auth switch'."
 fi
 if [[ -z "$(changelog_section "$VERSION" | tr -d '[:space:]')" ]]; then
