@@ -96,6 +96,13 @@ if [[ "$DRY_RUN" == false ]]; then
     git -C "$PROJECT_ROOT" fetch --quiet origin main
     BEHIND="$(git -C "$PROJECT_ROOT" rev-list --count HEAD..origin/main)"
     [[ "$BEHIND" == "0" ]] || error "main is ${BEHIND} commit(s) behind origin/main. Pull first."
+    # The PyPI upload cannot be undone, so prove the steps after it (push,
+    # GitHub release) are allowed before it runs. With several gh accounts the
+    # active one may lack push rights to this repository.
+    git -C "$PROJECT_ROOT" push --dry-run --quiet origin HEAD 2>/dev/null \
+        || error "git cannot push to origin. Check the credentials git uses (with several gh accounts: 'gh auth switch')."
+    [[ "$(gh repo view --json viewerPermission --jq .viewerPermission 2>/dev/null)" =~ ^(ADMIN|MAINTAIN|WRITE)$ ]] \
+        || error "The active gh account cannot create releases here. Run 'gh auth switch'."
 fi
 if [[ -z "$(changelog_section "$VERSION" | tr -d '[:space:]')" ]]; then
     error "No CHANGELOG.md section for Python ${VERSION}. Date its heading first ('## Python ${VERSION} - YYYY-MM-DD')."

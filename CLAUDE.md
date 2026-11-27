@@ -379,8 +379,10 @@ commit and tag, and creates the GitHub release from the CHANGELOG section
 Prerequisites, all checked by the script's preflight: clean tree, on `main`
 and not behind `origin/main`, `build` and `twine` importable by `python3`,
 `z3` on `PATH` (or `LIBPETRI_Z3`), a `[pypi]` section in `~/.pypirc` (or
-`TWINE_USERNAME`/`TWINE_PASSWORD`), `gh` authenticated, a CHANGELOG section
-for the version, and a tag that does not yet exist. The project's first
+`TWINE_USERNAME`/`TWINE_PASSWORD`), `gh` authenticated, git able to push to
+`origin` and the active `gh` account allowed to create releases (both proven
+before the upload, which cannot be undone), a CHANGELOG section for the
+version, and a tag that does not yet exist. The project's first
 upload needs an account-wide PyPI token; switch to a token scoped to
 `adk-libpetri` after it.
 
