@@ -76,7 +76,7 @@ def _bad(claim: Any, marking: Mapping[str, int], last: bool) -> frozenset[str]:
         case "place_bound":
             bound = getattr(claim, "bound", 0)
             return frozenset(p for p in places if marking.get(p, 0) > bound)
-        case "unreachable" | "mutual_exclusion" if last:
+        case "unreachable" | "mutual_exclusion" | "joined_or_dead_lettered" if last:
             return frozenset(p for p in places if marking.get(p, 0))
         case _:
             return frozenset()
@@ -149,6 +149,8 @@ def violation(claim: Any, last: Step | None) -> str:
             return "marked together: " + ", ".join(places)
         case "unreachable":
             return "reached: " + ", ".join(p for p in places if m.get(p, 0))
+        case "joined_or_dead_lettered":
+            return "at rest with a token left on " + ", ".join(places)
         case _:
             return "the claim fails here"
 

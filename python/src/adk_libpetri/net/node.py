@@ -549,7 +549,7 @@ class PetriNet(NetNodeBase):
 
         ``k`` replaces the number of turns and every ``arrivals`` bound; ``None``
         keeps the claims' own (one turn for a safety claim, two for
-        ``deadlock_free``).
+        ``deadlock_free`` and ``joined_or_dead_lettered``).
         """
         return verify_blueprint(self._blueprint, k, **verify_options)
 

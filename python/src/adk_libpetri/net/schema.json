@@ -693,7 +693,7 @@
     "proofOptions": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Options for the claims. With no environment, the user's inputs come turn by turn (the next on userIn only after an answer is on eventOut and the turn's node runs are done): one turn for a safety claim, two for deadlock_free (--k N: N for both); the env: places, and for a safety claim turnAbort, get at most k arrivals each (exactly k for deadlock_free). An initial_marking leaves that in place, except that an environment place it seeds is closed (its tokens are the seeded ones).",
+      "description": "Options for the claims. With no environment, the user's inputs come turn by turn (the next on userIn only after an answer is on eventOut and the turn's node runs are done): one turn for a safety claim, two for deadlock_free and joined_or_dead_lettered (the claims about the net at rest) (--k N: N for both); the env: places, and for a safety claim turnAbort, get at most k arrivals each (exactly k for the claims about the net at rest). An initial_marking leaves that in place, except that an environment place it seeds is closed (its tokens are the seeded ones).",
       "properties": {
         "initial_marking": {
           "type": "object",
@@ -705,7 +705,7 @@
         },
         "environment": {
           "type": "object",
-          "description": "Environment places and their mode (one mode for all). It replaces the turn-by-turn default: userIn, when listed, arrives in any order. It must list every env: place the initial_marking does not seed; turnAbort is added for safety claims.",
+          "description": "Environment places and their mode (one mode for all). It replaces the turn-by-turn default: userIn, when listed, arrives in any order. It must list every env: place the initial_marking does not seed; turnAbort is added for safety claims (not for deadlock_free or joined_or_dead_lettered).",
           "additionalProperties": {
             "$ref": "#/$defs/envMode"
           }
@@ -732,7 +732,7 @@
       }
     },
     "claim": {
-      "description": "One property to prove: deadlock_free, {place_bound: {place, bound}}, {unreachable: [places]} (never all marked at once), {mutual_exclusion: [two or more places]} (never two marked at once). A mapping claim may add label and options (laid over prove.options key by key).",
+      "description": "One property to prove: deadlock_free, {place_bound: {place, bound}}, {unreachable: [places]} (never all marked at once), {mutual_exclusion: [two or more places]} (never two marked at once), {joined_or_dead_lettered: place} (no token left there at rest). A mapping claim may add label and options (laid over prove.options key by key).",
       "oneOf": [
         {
           "const": "deadlock_free"
@@ -841,6 +841,25 @@
               "items": {
                 "$ref": "#/$defs/placeRef"
               }
+            },
+            "label": {
+              "type": "string"
+            },
+            "options": {
+              "$ref": "#/$defs/proofOptions"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "joined_or_dead_lettered"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "joined_or_dead_lettered": {
+              "description": "A place no run leaves a token on at rest: every name that reaches it is joined or dead-lettered. Turns and environment as for deadlock_free.",
+              "$ref": "#/$defs/placeRef"
             },
             "label": {
               "type": "string"

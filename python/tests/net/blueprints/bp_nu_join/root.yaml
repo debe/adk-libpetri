@@ -38,3 +38,12 @@ transitions:
     in: [reply, retired]
     match: {reply: turn, retired: self}
     out: dropped
+prove:
+  options:
+    sinks: [eventOut, dropped]
+  claims:
+    - deadlock_free
+    - label: no reply is stranded
+      joined_or_dead_lettered: reply
+    - label: no retired name is stranded
+      joined_or_dead_lettered: retired

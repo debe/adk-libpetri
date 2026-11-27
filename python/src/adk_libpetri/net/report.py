@@ -280,7 +280,7 @@ class ClaimResult:
     report: str = ""
     reason: str = ""
     places: tuple[str, ...] = ()
-    """The places the claim names (``place_bound``, ``unreachable``, ``mutual_exclusion``)."""
+    """The places the claim names (all kinds but ``deadlock_free``)."""
     bound: int = 0
     """A ``place_bound`` claim's bound."""
 

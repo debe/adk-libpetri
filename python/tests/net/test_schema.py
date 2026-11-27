@@ -132,6 +132,9 @@ BROKEN = [
     ),
     pytest.param(broken(prove={"claims": [{"mutual_exclusion": ["p"]}]}), id="mutex of one place"),
     pytest.param(
+        broken(prove={"claims": [{"joined_or_dead_lettered": ["p"]}]}), id="jodl of a list"
+    ),
+    pytest.param(
         broken(prove={"claims": [{"deadlock_free": None, "place_bound": {}}]}),
         id="two claim kinds",
     ),

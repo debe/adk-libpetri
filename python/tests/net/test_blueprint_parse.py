@@ -407,6 +407,18 @@ ERRORS: list[tuple[str, dict[str, Any], str, str]] = [
         "two places",
     ),
     (
+        "joined_or_dead_lettered, a list",
+        _t({"in": ["a"]}, prove={"claims": [{"joined_or_dead_lettered": ["a"]}]}),
+        "prove.claims[0].joined_or_dead_lettered",
+        "names one place",
+    ),
+    (
+        "joined_or_dead_lettered, unknown place",
+        _t({"in": ["a"]}, prove={"claims": [{"joined_or_dead_lettered": "nope"}]}),
+        "prove.claims[0].joined_or_dead_lettered",
+        "unknown place 'nope'",
+    ),
+    (
         "modes differ",
         _t(
             {"in": ["a"]},
@@ -753,3 +765,12 @@ def test_a_petri_net_node_reads_its_blueprint_version() -> None:
     assert PetriNet(name="n", **data).blueprint_version == 1
     with pytest.raises(BlueprintError, match=r"blueprint_version: unsupported"):
         PetriNet(name="n", blueprint_version=2, **data)
+
+
+def test_an_unlabelled_joined_or_dead_lettered_claim_is_named_after_its_place() -> None:
+    from adk_libpetri.net.blueprint import Claim
+
+    data = _t({"in": ["a"]}, prove={"claims": [{"joined_or_dead_lettered": "s"}]})
+    assert bp(data).proof.claims == (
+        Claim("joined_or_dead_lettered", "joined_or_dead_lettered(s)", ("s",), 0),
+    )

@@ -48,21 +48,31 @@ Plan: ~/.claude/plans/serialized-sniffing-key-of-501cc5b7-904e-4d93-9dc7-225288b
   (a `threading.Event`), instead of racing a sleep against the timer.
 
 ### 2. Proofs
-- [ ] `net/proofs.py` `_run`/`verify_blueprint`: when any transition has a match or a mint,
-  pass `mint_transitions`. With relays or carriers, also pass `fragment_mode="extended"`
-  and `carrier_places`, and add a `NetProof.notes` line saying so.
-  - Under `turn_spec`, a node transition's deposit moves to `complete:T:run`, so the
-    mint name must follow it. Settle that, and whether the verifier's in-flight split
-    needs `assume_atomic_firing`, against libpetri's own tests
-    (`libpetri/python/tests/test_nu_verification.py:431-464`, `test_nu_mint_contract.py`).
-  - Derive the carriers (mint targets, relay targets, the places names flow through by a
-    one-in drain) and check the derivation against those tests. If it can't be derived
-    soundly, add a `prove.options.carriers` override.
-- [ ] A new claim kind `joined_or_dead_lettered: place` (`ClaimKind`, `_claim` L1923,
-  `_property`). Check `report.py`/`counterexample.py` for exhaustive kind matches.
-- [ ] Tests in the style of `test_prove.py:27` (`@requires_z3`):
-  - the fixture proves deadlock_free and joined_or_dead_lettered(result);
-  - a variant without the drop transition is `Violated`, so the proof is not vacuous.
+- [x] `net/proofs.py`: `names(bp)` derives the ν declarations for a net with a `match:`:
+  - `mint_transitions`: each `mint:` transition that mints into every name-carrying place
+    it marks (else a note says why it is not declared, and the verdict stays unknown);
+    under two ordered turns a split node's mint is its `complete:T:run`.
+  - `carrier_places`: places a name flows into (from a mint target, key or relay target)
+    from which a key can be reached; `fragment_mode="extended"` always.
+  - Relay nodes (a node taking a name-carrying place) are not split by `turn_spec`:
+    libpetri refuses to split a run that carries a name (VER-004). A whole run is a split
+    run whose completion follows its start at once, and `turn:next` tests none of a
+    relay's outputs, so the turn order and reachable markings are unchanged. NU-051 keeps
+    inhibitors and resets off its coloured outputs; for another output libpetri's own
+    split (VER-004) refuses, so the verdict is Unknown. A note names the relay contract the
+    node must keep (NU-051).
+  - A transition with no `mint:` that starts the tokens a join keys gets a note naming
+    the `mint:` to add (libpetri's own reason names the relay nodes too).
+  - `assume_atomic_firing` is not needed (checked against the fixture).
+  - No `prove.options.carriers` override: the derivation covered every case tried.
+- [x] Claim kind `joined_or_dead_lettered: place` (loader, schema, `_property`,
+  counterexample text). It is a quiescence claim: turns and environment as `deadlock_free`
+  (two turns, exact arrivals, no `turnAbort`), no sinks.
+- [x] Tests (`test_nu_join.py`, `@requires_z3`): the fixture proves all three claims over
+  one turn and two, by Route B; without `Nu_DropLate` the reply claim is `Violated` with a
+  counterexample; a mint that skips a key proves nothing; a net without `match:` passes no
+  names. Parse and schema refusals for the claim.
+- [x] The late-reply fixture's prove section: `sinks: [eventOut, dropped]`.
 
 ### 3. Schema, docs, guide
 - [ ] `schema.json` `$defs.transition` (L443-514): add `match`, `relay` and `mint`, plus
@@ -74,9 +84,11 @@ Plan: ~/.claude/plans/serialized-sniffing-key-of-501cc5b7-904e-4d93-9dc7-225288b
     checked and proven by `test_authoring.py` (motif list L70).
   - `## prove:`: the new claim, plus why env-borne names give `Unknown`.
 - [ ] `SKILL.md:25-27`: list the motif (`test_cli.py:246` runs it through `adk-libpetri guide`).
-- [ ] Regenerate `spec/api/python.txt` if `ClaimKind`/`ActionPlan` show (`PUBLICAPI_WRITE=1`) and
-  review the diff.
+- [x] Regenerate `spec/api/python.txt` if `ClaimKind`/`ActionPlan` show (`PUBLICAPI_WRITE=1`) and
+  review the diff (ActionPlan gained `keys`/`relays`; ClaimKind does not show).
 - [ ] `CHANGELOG.md` Unreleased: add `### Python` (there is none yet; L15).
+- [ ] Every other surface that lists transition keys or claim kinds: `python/README.md:287`,
+  `spec/08-blueprints.md:60`, ADR 0008 (`:197`, if ADRs are kept current), the CLI help.
 
 ### 4. Release and reply (only on the engineer's word)
 - [ ] Release 0.2.1 by the Python ritual in CLAUDE.md (dating commit, `--dry-run`, then the real run).

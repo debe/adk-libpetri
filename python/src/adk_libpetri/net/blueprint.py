@@ -569,6 +569,10 @@ class ActionPlan:
     mints: tuple[tuple[str, tuple[str, ...]], ...] = ()
     """``mint:``: per output place, the field path the firing's fresh name goes
     into (``()``: the token is the name)."""
+    keys: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    """``match:``: per matched input, the field path its token holds the name at."""
+    relays: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    """``relay:``: per relay target, the field path its token holds the joined name at."""
 
     def action(self, scope: NetScope, prefix: str = "") -> Action:
         """The action, for a blueprint mounted at ``prefix`` (``""``: the root)."""
@@ -634,7 +638,9 @@ class ProofOptions:
         )
 
 
-ClaimKind = Literal["deadlock_free", "place_bound", "unreachable", "mutual_exclusion"]
+ClaimKind = Literal[
+    "deadlock_free", "place_bound", "unreachable", "mutual_exclusion", "joined_or_dead_lettered"
+]
 
 
 @dataclass(frozen=True)
@@ -1807,6 +1813,8 @@ def _plan(
             author=net,
             witnesses=witnesses,
             mints=mints,
+            keys=tuple(join.keys.items()),
+            relays=tuple(join.relays.items()),
         )
 
     # A node: its route picks a labelled branch; a failure takes `error`.
@@ -1862,6 +1870,8 @@ def _plan(
         net,
         witnesses,
         mints,
+        tuple(join.keys.items()),
+        tuple(join.relays.items()),
     )
 
 
@@ -2249,6 +2259,7 @@ _CLAIMS: tuple[ClaimKind, ...] = (
     "place_bound",
     "unreachable",
     "mutual_exclusion",
+    "joined_or_dead_lettered",
 )
 
 
@@ -2404,6 +2415,15 @@ def _claim(path: str, raw: Any, names: _Names) -> Claim:
         p = names.known(f"{kp}.place", b["place"])
         n = _int(f"{kp}.bound", b["bound"], minimum=0)
         return Claim(kind, label or f"place_bound({p}, {n})", (p,), n, options)
+    if kind == "joined_or_dead_lettered":
+        if not isinstance(body, str):
+            raise BlueprintError(
+                kp,
+                f"joined_or_dead_lettered names one place, got {body!r}",
+                "write joined_or_dead_lettered: reply",
+            )
+        p = names.known(kp, body)
+        return Claim(kind, label or f"joined_or_dead_lettered({p})", (p,), 0, options)
     ps = tuple(names.known(f"{kp}[{i}]", p) for i, p in enumerate(_str_list(kp, body)))
     if not ps or (kind == "mutual_exclusion" and len(ps) < 2):
         need = "two places" if kind == "mutual_exclusion" else "a place"
