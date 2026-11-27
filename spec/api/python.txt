@@ -71,7 +71,7 @@ class TransitionSpec(name: str, inputs: tuple[In, ...] = (), output: Out | None 
     def places(self) -> list[Place[Any]]
 VOID: <_Unit>
 class Xor(children: tuple[Out, ...]) -> None
-__version__: '0.1.0'
+__version__: str
 def all_tokens(p: Place[Any]) -> In
 def and_(*children: OutLike) -> And
 def at_least(n: int, p: Place[Any]) -> In

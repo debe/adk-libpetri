@@ -205,6 +205,10 @@ def _describe(name: str, obj: Any) -> list[str]:
         return [f"def {name}{_signature(obj)}{_flag(obj)}"]
     if type(obj).__module__ in ("typing", "types", "collections.abc"):
         return [f"alias {name} = {_type(obj)}"]
+    if name == "__version__":
+        # Its value changes at every release (scripts/release-python.sh stamps
+        # it before testing the wheel); that it exists and is a str is the API.
+        return [f"{name}: {type(obj).__name__}"]
     return [f"{name}: {_value(obj)}"]
 
 

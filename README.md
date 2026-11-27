@@ -3,7 +3,7 @@
 [![CI](https://github.com/debe/adk-libpetri/actions/workflows/ci.yml/badge.svg)](https://github.com/debe/adk-libpetri/actions/workflows/ci.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/org.libpetri/adk-libpetri)](https://central.sonatype.com/artifact/org.libpetri/adk-libpetri)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
-<!-- add PyPI badge at python/v0.1.0 -->
+[![PyPI](https://img.shields.io/pypi/v/adk-libpetri)](https://pypi.org/project/adk-libpetri/)
 
 adk-libpetri compiles Google ADK agents into Coloured Time Petri nets, proves
 properties of them with Z3 before they run, and runs them under ADK's own
@@ -55,7 +55,7 @@ same `PetriAgent`. Neither port forks ADK or genai.
 ## Quick start (Python)
 
 ```bash
-pip install --pre adk-libpetri   # 0.1.0a1, a preliminary release
+pip install adk-libpetri
 ```
 
 Python 3.11+, `google-adk~=2.15.1`, `libpetri>=8.1,<9`. Proofs need a `z3`
@@ -823,7 +823,7 @@ blueprints.
 
 | Port | ADK | libpetri | Release |
 |---|---|---|---|
-| **Python** ([`python/`](python/)) | ADK Python 2.15 (`google-adk~=2.15.1`) | `libpetri>=8.1,<9` (PyPI, over the Rust runtime) | 0.1.0a1, preliminary |
+| **Python** ([`python/`](python/)) | ADK Python 2.15 (`google-adk~=2.15.1`) | `libpetri>=8.1,<9` (PyPI, over the Rust runtime) | 0.2.0 |
 | **Java** ([`java/`](java/)) | ADK Java 1.15.0 | `org.libpetri:libpetri:11.1.0` | 0.4.0, unreleased |
 | TypeScript, Rust | reserved | | |
 

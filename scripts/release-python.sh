@@ -14,15 +14,18 @@ Usage: $(basename "$0") [--dry-run] <version>
 
 Release adk-libpetri Python to PyPI (package adk-libpetri).
 
-Builds the sdist and wheel, checks them, installs the wheel into a fresh venv
-and runs the test suite against the installed copy (from outside python/, so
-the source tree cannot shadow it), then uploads with twine. Publishing is
-local, from a developer machine; there is no publish-on-tag workflow and no
-token in GitHub secrets.
+Stamps __version__ (the package's one version source), builds the sdist and
+wheel, checks them with twine, tests the installed wheel with
+scripts/test-python-wheel.sh (the check CI runs on every push), then uploads
+with twine, tags python/v<version>, pushes and creates the GitHub release from
+the CHANGELOG section. Publishing is local, from a developer machine; there is
+no publish-on-tag workflow and no token in GitHub secrets.
 
 Prerequisites:
   - python3 with the 'build' and 'twine' modules
-  - PyPI credentials: ~/.pypirc or TWINE_USERNAME/TWINE_PASSWORD
+  - PyPI credentials: a [pypi] section in ~/.pypirc, or TWINE_USERNAME and
+    TWINE_PASSWORD. The first upload of the project needs an account-wide
+    token; after it, switch to a token scoped to adk-libpetri.
   - gh CLI authenticated (for the GitHub release)
   - z3 on PATH (the suite's Z3 gate runs with REQUIRE_Z3=1)
 
@@ -69,15 +72,21 @@ changelog_section() {
     ' "$PROJECT_ROOT/CHANGELOG.md"
 }
 
+have_pypi_auth() {
+    if [[ -n "${TWINE_USERNAME:-}" && -n "${TWINE_PASSWORD:-}" ]]; then
+        return 0
+    fi
+    [[ -f ~/.pypirc ]] && grep -q '^\[pypi\]' ~/.pypirc
+}
+
 info "Validating prerequisites"
 if ! git -C "$PROJECT_ROOT" diff --quiet || ! git -C "$PROJECT_ROOT" diff --cached --quiet; then
     error "Working tree has uncommitted changes. Commit or stash first."
 fi
 python3 -c "import build, twine" 2>/dev/null || error "python3 needs the 'build' and 'twine' modules"
+command -v z3 >/dev/null 2>&1 || [[ -n "${LIBPETRI_Z3:-}" ]] || error "z3 not found on PATH (the wheel test runs with REQUIRE_Z3=1)"
 if [[ "$DRY_RUN" == false ]]; then
-    if [[ ! -f ~/.pypirc && -z "${TWINE_PASSWORD:-}" ]]; then
-        error "No PyPI credentials: ~/.pypirc or TWINE_USERNAME/TWINE_PASSWORD"
-    fi
+    have_pypi_auth || error "No PyPI credentials: a [pypi] section in ~/.pypirc, or TWINE_USERNAME/TWINE_PASSWORD"
     gh auth status >/dev/null 2>&1 || error "GitHub CLI not authenticated. Run 'gh auth login' first."
     if git -C "$PROJECT_ROOT" rev-parse "python/v${VERSION}" >/dev/null 2>&1; then
         error "Tag python/v${VERSION} already exists."
@@ -93,11 +102,11 @@ if [[ -z "$(changelog_section "$VERSION" | tr -d '[:space:]')" ]]; then
 fi
 
 info "Setting Python version to ${VERSION}"
-sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"${VERSION}\"/" "$PY_DIR/pyproject.toml"
+# pyproject.toml reads the version from __version__ ([tool.hatch.version]).
 sed -i.bak -E "s/^__version__ = \"[^\"]+\"/__version__ = \"${VERSION}\"/" "$PY_DIR/src/adk_libpetri/__init__.py"
-rm -f "$PY_DIR/pyproject.toml.bak" "$PY_DIR/src/adk_libpetri/__init__.py.bak"
+rm -f "$PY_DIR/src/adk_libpetri/__init__.py.bak"
 cd "$PROJECT_ROOT"
-git add python/pyproject.toml python/src/adk_libpetri/__init__.py
+git add python/src/adk_libpetri/__init__.py
 git diff --cached --quiet || git commit -m "release: python ${VERSION}"
 
 info "Building sdist and wheel"
@@ -105,22 +114,12 @@ cd "$PY_DIR"
 rm -rf dist
 python3 -m build
 python3 -m twine check dist/*
+WHEEL="dist/adk_libpetri-${VERSION}-py3-none-any.whl"
+[[ -f "$WHEEL" && -f "dist/adk_libpetri-${VERSION}.tar.gz" ]] \
+    || error "dist/ does not hold ${VERSION}'s wheel and sdist: $(ls dist)"
 
-info "Testing the built wheel in a fresh venv"
-WORK="$(mktemp -d)"
-python3 -m venv "$WORK/venv"
-"$WORK/venv/bin/pip" install -q "$(ls dist/*.whl)[dev]"
-# Outside python/, so the source tree cannot shadow the installed copy; the
-# conformance suite finds spec/ (and readme_diagrams docs/) relative to the
-# tests' parent's parent.
-mkdir -p "$WORK/python"
-cp -R "$PY_DIR/tests" "$WORK/python/tests"
-cp "$PY_DIR/pyproject.toml" "$WORK/python/pyproject.toml"
-cp -R "$PROJECT_ROOT/spec" "$WORK/spec"
-# The README diagram goldens (tests/readme_diagrams) live in docs/diagrams.
-mkdir -p "$WORK/docs/diagrams"
-cp -R "$PROJECT_ROOT/docs/diagrams/dot" "$PROJECT_ROOT/docs/diagrams/hero" "$WORK/docs/diagrams/"
-if ! (cd "$WORK/python" && REQUIRE_Z3=1 "$WORK/venv/bin/pytest" -q tests -p no:cacheprovider); then
+info "Testing the built wheel"
+if ! "$SCRIPT_DIR/test-python-wheel.sh" "$WHEEL"; then
     info "Tests failed against the built wheel; version commit remains"
     exit 1
 fi

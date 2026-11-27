@@ -17,10 +17,11 @@ The design, the commitments and the Java port live in the
 ## Install
 
 ```bash
-pip install --pre adk-libpetri
+pip install adk-libpetri
 ```
 
-0.1.0a1 is a preliminary release (`--pre`): the API may change before 0.1.0.
+Versioning is 0.x: a minor release may break the API (see the
+[CHANGELOG](https://github.com/debe/adk-libpetri/blob/main/CHANGELOG.md)).
 
 Python 3.11+. Pulls `google-adk~=2.15.1` and `libpetri`. Proofs need a `z3`
 binary (4.8+) on `PATH` or named by `LIBPETRI_Z3`; the runtime does not.

@@ -344,15 +344,45 @@ top-level subdir, calls into the matching libpetri port, and golden-checks
 ## Versioning and release
 
 Each language has its own version, tagged with the language prefix
-(`java/v0.4.0`, `python/v0.1.0`).
+(`java/v0.4.0`, `python/v0.2.0`).
 
 **Python**: PyPI `adk-libpetri`, published by `scripts/release-python.sh
-[--dry-run] <version>` (stamps `pyproject.toml` and `__version__`, commits
-`release: python <version>`, builds, `twine check`s, tests the installed wheel
-from outside `python/`, uploads, tags `python/v<version>`, creates the GitHub
-release from the `## Python <version> - YYYY-MM-DD` CHANGELOG section). Local
-publishing only, as for Java. Bump google-adk with ADR 0006's re-check
-procedure.
+[--dry-run] <version>`. Local publishing only, as for Java: no
+publish-on-tag workflow, no token in GitHub secrets. Bump google-adk with
+ADR 0006's re-check procedure.
+
+- **One version source.** `adk_libpetri.__version__`; `pyproject.toml` reads
+  it (`[tool.hatch.version]`), and `main` carries the bare version of the
+  next release between releases, as `java/pom.xml` does. The public-API
+  golden records `__version__` as a `str`, never its value.
+- **The release check runs on every push.** CI's `python-wheel` job builds
+  the sdist and wheel, `twine check`s them and runs
+  `scripts/test-python-wheel.sh` on the wheel (fresh venv, suite run from a
+  copy outside `python/` so the source tree cannot shadow the package). The
+  release script runs the same script before uploading.
+
+The Python release ritual, in order:
+
+1. Commit the CHANGELOG dating: move the Unreleased `### Python` notes into
+   `## Python <version> - YYYY-MM-DD`, and set `__version__` and the README
+   install lines and port table to it.
+2. `scripts/release-python.sh --dry-run <version>` to rehearse (stamps,
+   builds, checks, tests the wheel). It commits only if the stamp changed
+   anything; drop such a commit with `git reset HEAD~1`.
+3. `scripts/release-python.sh <version>`.
+
+It commits `release: python <version>` if the stamp changed anything, builds,
+checks, tests the wheel, uploads with twine, tags `python/v<version>`, pushes
+commit and tag, and creates the GitHub release from the CHANGELOG section
+(`--prerelease` for an `a`/`b`/`rc` version).
+
+Prerequisites, all checked by the script's preflight: clean tree, on `main`
+and not behind `origin/main`, `build` and `twine` importable by `python3`,
+`z3` on `PATH` (or `LIBPETRI_Z3`), a `[pypi]` section in `~/.pypirc` (or
+`TWINE_USERNAME`/`TWINE_PASSWORD`), `gh` authenticated, a CHANGELOG section
+for the version, and a tag that does not yet exist. The project's first
+upload needs an account-wide PyPI token; switch to a token scoped to
+`adk-libpetri` after it.
 
 **Versioning is 0.x.** A minor may break API. The turn-based path is the
 settled part; `@Experimental` surfaces (SSE, BIDI/live) may change in any

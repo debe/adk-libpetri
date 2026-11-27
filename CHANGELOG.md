@@ -14,135 +14,6 @@ existed.
 
 ## Unreleased
 
-### Python
-
-- **libpetri 8.0.** The pin moves to `libpetri>=8.0,<9`. A timeout branch's
-  token now reads back from a marking snapshot, so the timeout-marking test
-  is no longer an expected failure, and `check` no longer warns about
-  timeout outputs.
-- **libpetri's build-time checks run at load.** A blueprint that libpetri 8.0
-  rejects (an ambiguous xor, a nested timeout or an xor in a timeout's child,
-  an input and a read arc on one place) is now a `BlueprintError` at its
-  transition's key path. Before, `check` passed it and the session's first
-  turn failed.
-- **ADK 2.12.** The port follows google-adk 2.12 (ADR 0006's re-check):
-  - `from_workflow` compiles 2.12's new interrupts as interruptible: a
-    `FunctionNode` with `require_confirmation`, and a tool node whose tool
-    requires confirmation or carries an auth config. A
-    `require_confirmation` predicate's parameters that ADK fills from
-    `ctx.state` count as state reads.
-  - `adk-libpetri web` passes its host to ADK as `bind_host`, as `adk web`
-    does.
-  - Tests run ADK's own workflow samples at google/adk-python v2.12.0.
-- **ADK 2.13.** The port follows google-adk 2.13:
-  - A compiled workflow's terminal run on a fan-out lane publishes its
-    output event on the compiled node's branch, where `Workflow` keeps the
-    lane's: 2.13 moves a delegated output to its claimer's branch unless the
-    claimer is a `Workflow`. The compile report's "branches" approximation
-    says so.
-  - The vendored workflow samples move to google/adk-python v2.13.0;
-    `request_input_rerun` takes 2.13's per-run interrupt id.
-  - `adk-libpetri check` no longer filters ADK's experimental warning for
-    the YAML loader, which 2.13 marks stable.
-  - `Runner.close()` closes the toolsets of the agents inside a `PetriNet`
-    or a compiled workflow again. 2.13 finds them through a node's static
-    children, which a net now names.
-  - A compiled `JoinNode` follows 2.13's consumed arrivals: a predecessor's
-    repeat arrival replaces its earlier one (ADK keeps the latest output),
-    and a join still missing a predecessor when the run ends no longer
-    holds the turn open. Before, such a turn never ended.
-  - `tests/test_adk_seams.py` checks every private ADK name the port
-    uses. The port no longer reads `InvocationContext._abort_signal` or
-    `FunctionNode._sig` through `getattr` with a default, which would have
-    silently stopped aborting turns, or checking state reads, after a rename.
-- **libpetri 8.1.** The pin moves to `libpetri>=8.1,<9`. No code change:
-  the port's event consumers dispatch on the event type and skip the new
-  `MarkingSnapshot` events, and no action flushes after its firing ends.
-- **ADK 2.15.** The pin moves to `google-adk~=2.15.1` (ADR 0006's re-check,
-  spanning 2.14.0 and 2.14.1):
-  - **Breaking: ADK 2.15 removed its Visual Agent Builder, and so does
-    `adk-libpetri web`.** google-adk 2.15.0 dropped the
-    `/dev/apps/{app}/builder*` routes, `google.adk.cli.built_in_agents` and
-    `__`-prefixed agents. The Petri builder assistant, the canvas guard and
-    card, the draft staging and the counterexample-picture route
-    (`/dev/petri/counterexamples/{id}.svg`) are removed, and so is
-    `adk_libpetri.web.create_petri_builder_assistant`. `serve()` no longer
-    changes into the agents folder. The graph panel, its drill-down and its
-    highlighting are unchanged. `build_app` still passes `host` as ADK's
-    `bind_host`, which since 2.15 turns on ADK's DNS-rebinding guard on a
-    loopback bind (ADR 0009).
-  - **`adk-libpetri skill`** replaces the assistant with a coding-agent
-    skill: it prints `net/SKILL.md` (Agent Skills format), the write, check,
-    verify, fix loop the assistant taught, run with the CLI.
-    `adk-libpetri guide SECTION` prints one section of `AUTHORING.md`
-    (`guide quorum`).
-  - A compiled `JoinNode` on a cycle keeps the arrival of a predecessor the
-    loop cannot run again (a setup step before the loop), as ADK 2.14 does,
-    and START's arrival counts for the whole run. Before, such a join fired
-    once and the loop stopped.
-  - A compiled parallel worker keeps its per-item `retry_config`. ADK 2.14
-    moves a worker's policy onto its item node, and the compiler's copy
-    cleared it, so a failed item failed the run; a `Node` with
-    `parallel_worker=True` was retried as a whole instead of per item. Its
-    retries now stay with ADK, inside its transition.
-  - A list route that matches two edges between the same two nodes runs the
-    target once under ADK 2.15 too, so native and compiled runs now agree
-    there (the net always ran it once).
-  - The vendored workflow samples move to google/adk-python v2.15.1.
-- **Hardening.**
-  - `build_app` refuses to serve when ADK's builder save route moved and
-    the guard cannot install: the canvas could then overwrite a net. A
-    moved canvas or graph route is logged.
-  - Event stores ask libpetri for the tokens of the places they read
-    (`EVENT_OUT`) plus their delegate's, instead of every token of every
-    place.
-  - `adk-libpetri check` warns about a `timeout:` output while libpetri-py
-    is 7.3.0 or older, which cannot run one yet.
-- **Breaking:** `TurnScope` and `TurnResult` are no longer exported from
-  `adk_libpetri.workflow` (they are compiler internals), and
-  `CompiledWorkflow` no longer takes `_plans`/`_multi_route` as
-  constructor arguments.
-- **Breaking:** `verify_workflow(cw, k=None)`: `k` defaults to `None` (one
-  user input), matching `verify_blueprint`/`PetriNet.verify`, where `None`
-  keeps the claims' own turns; `k < 1` raises `ValueError`.
-- **Breaking:** `PetriWorkflow` YAML nodes no longer start
-  `OrchestratorLoop.shared()` at load; they take it on their first turn
-  unless `serve_on(...)` gives them a loop.
-- **Blueprint format versioning:** optional `blueprint_version: 1`
-  (`adk_libpetri.net.BLUEPRINT_VERSION`); any other value is a
-  `BlueprintError` naming the supported version. The schema's `$id` is a
-  URL that resolves (the `main` branch's raw copy); `AUTHORING.md` shows
-  how to point `yaml-language-server` at it or at `adk-libpetri schema`.
-- **CLI:** `adk-libpetri --version` prints the adk-libpetri, google-adk and
-  libpetri versions; every `--json` payload carries `"format": 1`; `check`
-  and `verify` accept a `PetriWorkflow` YAML (`check` compiles it, `verify`
-  runs `verify_workflow`).
-- `WorkflowProof` has `NetProof`'s surface (`proven`, `violated`, `scope`,
-  `notes`), and `PetriWorkflow.verify(k=...)` runs `verify_workflow` on a
-  node.
-- `serve_on(orchestrator, registry=None, event_store=None)` is public on
-  `PetriNet` and `PetriWorkflow`, and `from_config` uses it (it no longer
-  skips registry ownership); `event_store` / `set_event_store()` replace
-  writing `node._event_store`.
-- Event stores are typed with `libpetri.EventStoreProtocol`; new
-  `bridge.PerSessionEventStore` protocol and `bridge.NodeEventStore` union.
-- `PetriAgentBuilder.session_scope(...)`, `PetriAgent.session_key(session)`
-  and `PetriAgent.session_scope()`: two `PetriAgent`s on one registry
-  serving one session no longer share a runner.
-- Fixed: a `PetriAgent` after another node in a `Workflow` crashed, and
-  `PetriAgentBuilder.input_mapper(...)` was ignored (pydantic bound the
-  default mapper as a descriptor).
-- The root package exports `Action`, `SyncAction`, `AsyncAction`, `Match`,
-  `IMMEDIATE`, `And`, `Xor`, `Timeout`, `OutPlace`, `PortDirection` and
-  `await_on`; every stock subnet module has an `__all__`; `runner` exports
-  `PetriRunnerBuilder`, `LiveConnection` and the BIDI `bridge`;
-  `transfer_router.spec_for` aliases `def_`.
-- `OrchestratorLoop` is a context manager (`with OrchestratorLoop() as
-  loop:`), and the shared loop is closed at interpreter exit.
-- The public API is golden-checked in `spec/api/python.txt`
-  (`PUBLICAPI_WRITE=1 pytest tests/test_public_api.py` regenerates it).
-- pyright strict mode for `runner/`, `subnet/` and `_spec.py`.
-
 ### Java
 
 - **`SpecFixturesTest`** writes and golden-checks `spec/fixtures/nets/*.json`,
@@ -463,9 +334,151 @@ existed.
   `python/tests/readme_diagrams`.
 
 
-## Python 0.1.0a1 - 2026-10-09
+## Python 0.2.0 - 2026-11-27
 
-First Python port, a preliminary release: `pip install --pre adk-libpetri`.
+The first release published to PyPI (`pip install adk-libpetri`).
+Changes since the unpublished 0.1.0a1 snapshot below.
+
+- **libpetri 8.0.** The pin moves to `libpetri>=8.0,<9`. A timeout branch's
+  token now reads back from a marking snapshot, so the timeout-marking test
+  is no longer an expected failure, and `check` no longer warns about
+  timeout outputs.
+- **libpetri's build-time checks run at load.** A blueprint that libpetri 8.0
+  rejects (an ambiguous xor, a nested timeout or an xor in a timeout's child,
+  an input and a read arc on one place) is now a `BlueprintError` at its
+  transition's key path. Before, `check` passed it and the session's first
+  turn failed.
+- **ADK 2.12.** The port follows google-adk 2.12 (ADR 0006's re-check):
+  - `from_workflow` compiles 2.12's new interrupts as interruptible: a
+    `FunctionNode` with `require_confirmation`, and a tool node whose tool
+    requires confirmation or carries an auth config. A
+    `require_confirmation` predicate's parameters that ADK fills from
+    `ctx.state` count as state reads.
+  - `adk-libpetri web` passes its host to ADK as `bind_host`, as `adk web`
+    does.
+  - Tests run ADK's own workflow samples at google/adk-python v2.12.0.
+- **ADK 2.13.** The port follows google-adk 2.13:
+  - A compiled workflow's terminal run on a fan-out lane publishes its
+    output event on the compiled node's branch, where `Workflow` keeps the
+    lane's: 2.13 moves a delegated output to its claimer's branch unless the
+    claimer is a `Workflow`. The compile report's "branches" approximation
+    says so.
+  - The vendored workflow samples move to google/adk-python v2.13.0;
+    `request_input_rerun` takes 2.13's per-run interrupt id.
+  - `adk-libpetri check` no longer filters ADK's experimental warning for
+    the YAML loader, which 2.13 marks stable.
+  - `Runner.close()` closes the toolsets of the agents inside a `PetriNet`
+    or a compiled workflow again. 2.13 finds them through a node's static
+    children, which a net now names.
+  - A compiled `JoinNode` follows 2.13's consumed arrivals: a predecessor's
+    repeat arrival replaces its earlier one (ADK keeps the latest output),
+    and a join still missing a predecessor when the run ends no longer
+    holds the turn open. Before, such a turn never ended.
+  - `tests/test_adk_seams.py` checks every private ADK name the port
+    uses. The port no longer reads `InvocationContext._abort_signal` or
+    `FunctionNode._sig` through `getattr` with a default, which would have
+    silently stopped aborting turns, or checking state reads, after a rename.
+- **libpetri 8.1.** The pin moves to `libpetri>=8.1,<9`. No code change:
+  the port's event consumers dispatch on the event type and skip the new
+  `MarkingSnapshot` events, and no action flushes after its firing ends.
+- **ADK 2.15.** The pin moves to `google-adk~=2.15.1` (ADR 0006's re-check,
+  spanning 2.14.0 and 2.14.1):
+  - **Breaking: ADK 2.15 removed its Visual Agent Builder, and so does
+    `adk-libpetri web`.** google-adk 2.15.0 dropped the
+    `/dev/apps/{app}/builder*` routes, `google.adk.cli.built_in_agents` and
+    `__`-prefixed agents. The Petri builder assistant, the canvas guard and
+    card, the draft staging and the counterexample-picture route
+    (`/dev/petri/counterexamples/{id}.svg`) are removed, and so is
+    `adk_libpetri.web.create_petri_builder_assistant`. `serve()` no longer
+    changes into the agents folder. The graph panel, its drill-down and its
+    highlighting are unchanged. `build_app` still passes `host` as ADK's
+    `bind_host`, which since 2.15 turns on ADK's DNS-rebinding guard on a
+    loopback bind (ADR 0009).
+  - **`adk-libpetri skill`** replaces the assistant with a coding-agent
+    skill: it prints `net/SKILL.md` (Agent Skills format), the write, check,
+    verify, fix loop the assistant taught, run with the CLI.
+    `adk-libpetri guide SECTION` prints one section of `AUTHORING.md`
+    (`guide quorum`).
+  - A compiled `JoinNode` on a cycle keeps the arrival of a predecessor the
+    loop cannot run again (a setup step before the loop), as ADK 2.14 does,
+    and START's arrival counts for the whole run. Before, such a join fired
+    once and the loop stopped.
+  - A compiled parallel worker keeps its per-item `retry_config`. ADK 2.14
+    moves a worker's policy onto its item node, and the compiler's copy
+    cleared it, so a failed item failed the run; a `Node` with
+    `parallel_worker=True` was retried as a whole instead of per item. Its
+    retries now stay with ADK, inside its transition.
+  - A list route that matches two edges between the same two nodes runs the
+    target once under ADK 2.15 too, so native and compiled runs now agree
+    there (the net always ran it once).
+  - The vendored workflow samples move to google/adk-python v2.15.1.
+- **Hardening.**
+  - `build_app` refuses to serve when ADK's builder save route moved and
+    the guard cannot install: the canvas could then overwrite a net. A
+    moved canvas or graph route is logged.
+  - Event stores ask libpetri for the tokens of the places they read
+    (`EVENT_OUT`) plus their delegate's, instead of every token of every
+    place.
+  - `adk-libpetri check` warns about a `timeout:` output while libpetri-py
+    is 7.3.0 or older, which cannot run one yet.
+- **Breaking:** `TurnScope` and `TurnResult` are no longer exported from
+  `adk_libpetri.workflow` (they are compiler internals), and
+  `CompiledWorkflow` no longer takes `_plans`/`_multi_route` as
+  constructor arguments.
+- **Breaking:** `verify_workflow(cw, k=None)`: `k` defaults to `None` (one
+  user input), matching `verify_blueprint`/`PetriNet.verify`, where `None`
+  keeps the claims' own turns; `k < 1` raises `ValueError`.
+- **Breaking:** `PetriWorkflow` YAML nodes no longer start
+  `OrchestratorLoop.shared()` at load; they take it on their first turn
+  unless `serve_on(...)` gives them a loop.
+- **Blueprint format versioning:** optional `blueprint_version: 1`
+  (`adk_libpetri.net.BLUEPRINT_VERSION`); any other value is a
+  `BlueprintError` naming the supported version. The schema's `$id` is a
+  URL that resolves (the `main` branch's raw copy); `AUTHORING.md` shows
+  how to point `yaml-language-server` at it or at `adk-libpetri schema`.
+- **CLI:** `adk-libpetri --version` prints the adk-libpetri, google-adk and
+  libpetri versions; every `--json` payload carries `"format": 1`; `check`
+  and `verify` accept a `PetriWorkflow` YAML (`check` compiles it, `verify`
+  runs `verify_workflow`).
+- `WorkflowProof` has `NetProof`'s surface (`proven`, `violated`, `scope`,
+  `notes`), and `PetriWorkflow.verify(k=...)` runs `verify_workflow` on a
+  node.
+- `serve_on(orchestrator, registry=None, event_store=None)` is public on
+  `PetriNet` and `PetriWorkflow`, and `from_config` uses it (it no longer
+  skips registry ownership); `event_store` / `set_event_store()` replace
+  writing `node._event_store`.
+- Event stores are typed with `libpetri.EventStoreProtocol`; new
+  `bridge.PerSessionEventStore` protocol and `bridge.NodeEventStore` union.
+- `PetriAgentBuilder.session_scope(...)`, `PetriAgent.session_key(session)`
+  and `PetriAgent.session_scope()`: two `PetriAgent`s on one registry
+  serving one session no longer share a runner.
+- Fixed: a `PetriAgent` after another node in a `Workflow` crashed, and
+  `PetriAgentBuilder.input_mapper(...)` was ignored (pydantic bound the
+  default mapper as a descriptor).
+- The root package exports `Action`, `SyncAction`, `AsyncAction`, `Match`,
+  `IMMEDIATE`, `And`, `Xor`, `Timeout`, `OutPlace`, `PortDirection` and
+  `await_on`; every stock subnet module has an `__all__`; `runner` exports
+  `PetriRunnerBuilder`, `LiveConnection` and the BIDI `bridge`;
+  `transfer_router.spec_for` aliases `def_`.
+- `OrchestratorLoop` is a context manager (`with OrchestratorLoop() as
+  loop:`), and the shared loop is closed at interpreter exit.
+- The public API is golden-checked in `spec/api/python.txt`
+  (`PUBLICAPI_WRITE=1 pytest tests/test_public_api.py` regenerates it).
+- pyright strict mode for `runner/`, `subnet/` and `_spec.py`.
+- **The release is checked on every push.** CI's new `python-wheel` job
+  builds the sdist and wheel, `twine check`s them and runs the suite against
+  the installed wheel from outside `python/` (`scripts/test-python-wheel.sh`,
+  which `scripts/release-python.sh` runs before it uploads).
+- **One version source.** `pyproject.toml` reads the version from
+  `adk_libpetri.__version__` (`[tool.hatch.version]`), the one place the
+  release script stamps. The public-API golden records `__version__` as a
+  `str`, so stamping a release no longer fails its own wheel test.
+
+
+## Python 0.1.0a1 - unpublished
+
+First Python port, prepared as a preliminary release but never uploaded to
+PyPI; 0.2.0 is the first published version.
 For google-adk `~=2.11.0` and libpetri `>=7.3,<8`. See [ADR 0006](docs/adr/0006-python-port-and-adk-python-compat.md).
 
 - **Parity with Java.** Colours, the 9 stock subnets (as `NetSpec`s under

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "adk-libpetri"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Coloured Time Petri Net orchestration core for Google ADK (Python), built on libpetri"
 readme = "README.md"
 license = "Apache-2.0"
@@ -42,6 +42,13 @@ adk-libpetri = "adk_libpetri.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/debe/adk-libpetri"
+Repository = "https://github.com/debe/adk-libpetri"
+Changelog = "https://github.com/debe/adk-libpetri/blob/main/CHANGELOG.md"
+Issues = "https://github.com/debe/adk-libpetri/issues"
+
+# One version source: hatch reads __version__, which the release script stamps.
+[tool.hatch.version]
+path = "src/adk_libpetri/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/adk_libpetri"]
