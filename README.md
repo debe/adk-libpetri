@@ -20,7 +20,7 @@ either lands, so two answers leave. Right, the fix: each commit consumes the
 one `permit`, and both claims are proven. Every panel is generated from the
 two YAML files.*
 
-In Python (ADK 2.13) there are three ways in:
+In Python (ADK 2.15) there are three ways in:
 
 - **Compile an ADK 2 `Workflow`.** `from_workflow` turns the graph into a net
   and proves it, and `PetriWorkflow` serves the net wherever
@@ -58,7 +58,7 @@ same `PetriAgent`. Neither port forks ADK or genai.
 pip install --pre adk-libpetri   # 0.1.0a1, a preliminary release
 ```
 
-Python 3.11+, `google-adk~=2.13.0`, `libpetri>=8.0,<9`. Proofs need a `z3`
+Python 3.11+, `google-adk~=2.15.1`, `libpetri>=8.1,<9`. Proofs need a `z3`
 binary (4.8+) on `PATH`; the runtime does not.
 [`python/README.md`](python/README.md) has the full reference.
 
@@ -106,7 +106,7 @@ with `LoopBudgetExhausted` once they are spent. It is the
 <p align="center"><img src="docs/diagrams/svg/workflow-back-edge-budget.svg" alt="Compiled looping workflow: Wf_Edge_counter_counter spends one budget permit to re-trigger counter, and Wf_Edge_counter_counter_Exhausted, inhibited by the budget place, fails the turn when the permits are spent" width="640"></p>
 
 **Parity.** The 24 runnable samples under `contributing/samples` in
-google/adk-python v2.13.0, vendored in `python/tests/workflow/adk_samples`,
+google/adk-python v2.15.1, vendored in `python/tests/workflow/adk_samples`,
 run natively and compiled with a scripted model, compared event by event
 (outputs, authors, node paths, texts, session state, the exception
 `run_async` raises). 22 compile and match, 10 of them with
@@ -128,8 +128,8 @@ the two turn endings and omits the abort, empty, failed and two-output ones.*
 
 A `Workflow` has no way to express a race with one winner, a quorum, a permit
 or an inhibitor fallback. A `PetriNet` blueprint writes the net itself, in
-the agent config format that people and ADK's Agent Builder Assistant already
-write; the figure at the top is a complete one. The YAML twins of Patterns A,
+the agent config format that people and coding agents already write for
+ADK; the figure at the top is a complete one. The YAML twins of Patterns A,
 B and C ([`demos/patterns/yaml`](python/tests/demos/patterns/yaml)) build the
 same nets as the hand-written demos and pass the same tests and proofs.
 
@@ -150,14 +150,14 @@ same nets as the hand-written demos and pass the same tests and proofs.
   nonzero on a violation, with the counterexample. The schema is
   [`net/schema.json`](python/src/adk_libpetri/net/schema.json) and the guide
   for agents is [`net/AUTHORING.md`](python/src/adk_libpetri/net/AUTHORING.md).
+  `adk-libpetri skill` prints a coding-agent skill
+  ([`net/SKILL.md`](python/src/adk_libpetri/net/SKILL.md), Agent Skills
+  format) for the write, check, verify, fix loop.
 - **In ADK's web UI.** `adk-libpetri web AGENTS_DIR` is ADK's own dev UI,
   unpatched, with nets made first-class. Its graph panel draws the Petri net
-  (light or dark) and lights up each transition as its node runs. Its builder
-  assistant writes, checks and proves blueprints, writes nothing that fails
-  to load, and shows a violated claim's counterexample as a picture. Its
-  canvas lists what the net runs, and Save ships the net instead of
-  overwriting it. Stock `adk web` serves the same blueprints with a plainer
-  graph ([ADR 0009](docs/adr/0009-web-ui-and-builder-assistant.md)).
+  (light or dark) and lights up each transition as its node runs. Stock
+  `adk web` serves the same blueprints with a plainer graph
+  ([ADR 0009](docs/adr/0009-web-ui-and-builder-assistant.md)).
 
 The proofs are structural and untimed, and they treat every xor as a free
 choice, so a claim holds for any value a node returns. By default inputs arrive turn by turn:
@@ -397,7 +397,7 @@ and in Python a workflow back edge the caller budgets
 name and `transferToAgent` records it unvalidated; the failure surfaces later,
 untyped or as a silent no-op
 ([`TransferUnknownTargetAdkFoilTest`](java/src/test/java/org/libpetri/adk/demos/TransferUnknownTargetAdkFoilTest.java)).
-ADK Python 2.13 raises a bare `ValueError` and ends the invocation with no
+ADK Python 2.15 raises a bare `ValueError` and ends the invocation with no
 error `Event`
 ([foil](python/tests/demos/test_transfer_unknown_target_adk_foil.py)).
 
@@ -422,8 +422,8 @@ error through `InMemoryRunner`.
 **ADK side.** ADK Java 1.15.0's `ParallelAgent` is
 `Flowable.merge(branches).takeUntil(escalate)`: first escalation wins, with no
 preference order, no K-of-N and no provable at-most-once commit
-ADK Python 2.13's `Workflow`: `JoinNode` waits for every predecessor, a plain
 ([detail](java/README.md#adk-java-1150-behaviour-the-argument-relies-on)).
+ADK Python 2.15's `Workflow`: `JoinNode` waits for every predecessor, a plain
 successor fires once per branch, and losers are not cancelled
 ([foils](python/tests/demos/patterns/)).
 
@@ -509,7 +509,7 @@ rest).
 **ADK side.** ADK Java 1.15.0's `GeminiLlmConnection` maps a VAD-only frame to
 an "Unknown server message" error
 ([`VoiceVadEdgeAdkFoilTest`](java/src/test/java/org/libpetri/adk/demos/VoiceVadEdgeAdkFoilTest.java)).
-ADK Python 2.13 keeps the edges on `Event.voice_activity`.
+ADK Python 2.15 keeps the edges on `Event.voice_activity`.
 
 **Net.** Each failure mode is a small motif:
 
@@ -663,7 +663,7 @@ One adapter per entry point; nothing in ADK is patched or forked.
   serves the next turn. In Python it also runs as a `Workflow` node, with
   input, output and route mappers.
 - **`PetriWorkflow`** and **`PetriNet`** (Python) are `BaseNode`s, because
-  ADK 2.13 runs a `BaseAgent` root on its legacy path, which cannot run child
+  ADK 2.15 runs a `BaseAgent` root on its legacy path, which cannot run child
   nodes. Both nest inside another `Workflow`.
 - **`BidiPetriAgent.bridge`** *(experimental)* pumps Live/BIDI frames into a
   `LiveConnection` and hands each server message to your callback, which
@@ -679,7 +679,7 @@ One adapter per entry point; nothing in ADK is patched or forked.
 
 ADK Java 1.15.0 drops the voice-activity edges, so Java recovers them with
 `VadTapGemini` (wraps ADK's live transport through the `connectLiveTransport`
-seam) or `SyncGeminiLiveConnection` (reads genai directly). ADK Python 2.13
+seam) or `SyncGeminiLiveConnection` (reads genai directly). ADK Python 2.15
 keeps them. Never shadow ADK's classes on the classpath to fix this: that is a
 fork. Details are in [java/README.md](java/README.md#live-bidi).
 
@@ -823,7 +823,7 @@ blueprints.
 
 | Port | ADK | libpetri | Release |
 |---|---|---|---|
-| **Python** ([`python/`](python/)) | ADK Python 2.13 (`google-adk~=2.13.0`) | `libpetri>=8.0,<9` (PyPI, over the Rust runtime) | 0.1.0a1, preliminary |
+| **Python** ([`python/`](python/)) | ADK Python 2.15 (`google-adk~=2.15.1`) | `libpetri>=8.1,<9` (PyPI, over the Rust runtime) | 0.1.0a1, preliminary |
 | **Java** ([`java/`](java/)) | ADK Java 1.15.0 | `org.libpetri:libpetri:11.1.0` | 0.4.0, unreleased |
 | TypeScript, Rust | reserved | | |
 

@@ -16,7 +16,7 @@ from google.adk.agents.context import Context
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.cli.utils._nested_agent_loader import NestedAgentLoader
 from google.adk.tools.function_tool import FunctionTool
-from google.adk.workflow import BaseNode, FunctionNode
+from google.adk.workflow import BaseNode, FunctionNode, Node
 
 # (module, name): private modules or names imported by src/adk_libpetri.
 IMPORTED = [
@@ -26,6 +26,7 @@ IMPORTED = [
     ("google.adk.workflow._errors", "WorkflowConfigurationError"),  # compiler.py
     ("google.adk.workflow._node_state", "NodeState"),  # compiler.py, retries
     ("google.adk.workflow.utils._retry_utils", "_should_retry_node"),
+    ("google.adk.workflow.utils._retry_utils", "_delegates_item_retry"),  # parallel workers
     ("google.adk.workflow._tool_node", "_ToolNode"),  # compiler.py, interrupts
     ("google.adk.workflow._tool_node", "_get_tool_auth_config"),
     ("google.adk.workflow._parallel_worker", "_ParallelWorker"),  # compiler.py
@@ -47,9 +48,8 @@ MEMBERS = [
     (BaseNode, "_requires_all_predecessors"),  # compiler.py: JoinNode
     (BaseNode, "_iter_static_children"),  # NetNodeBase override: Runner.close() toolsets
     (BaseNode, "_run_impl"),  # compiler.py: retry attempts
-    (NestedAgentLoader, "_perform_load"),  # web/loader.py override: assistant, traces
+    (NestedAgentLoader, "_perform_load"),  # web/loader.py override: traces
     (NestedAgentLoader, "_is_valid_agent_dir"),
-    (NestedAgentLoader, "_validate_agent_name"),
 ]
 
 
@@ -92,6 +92,7 @@ INSTANCE_ATTRIBUTES = [
     (FunctionNode, "_func"),
     (FunctionNode, "_unwrapped_func"),
     (FunctionTool, "_require_confirmation"),  # compiler.py: interrupts
+    (Node, "_inner_node"),  # compiler.py: a parallel-worker Node's item retries
     (NestedAgentLoader, "_is_single_agent"),  # web/loader.py: list_agents
 ]
 

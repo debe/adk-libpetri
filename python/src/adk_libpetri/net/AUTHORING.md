@@ -25,12 +25,10 @@ release.
    That transition's arcs are the bug. Re-run `verify`. Exit code 0 means
    every claim is proven.
 
-In ADK's dev UI under `adk-libpetri web`, the builder assistant runs the
-same loop through its tools (`write_petri_blueprints`,
-`verify_petri_blueprint`); a violated claim's result has `steps` (what each
-firing changed) and a `picture` line to copy into the reply as given. After
-Save, the graph panel draws the net. `check --json` and `verify --json`
-print the results as data.
+`adk-libpetri skill` prints this loop as a coding-agent skill (`SKILL.md`).
+`adk-libpetri guide SECTION` prints one section of this guide (`guide
+quorum`). Under `adk-libpetri web`, ADK's graph panel draws the net.
+`check --json` and `verify --json` print the results as data.
 
 `verify --k 3` checks every claim over three turns instead of the default
 (one turn for a safety claim, two for `deadlock_free`). `verify --recursive`

@@ -307,7 +307,6 @@ def transfer_demux_has_unknown_fallback(net: NetSpec) -> list[Violation]
 class PetriAgentLoader(agents_dir: str, traces: MarkingTraces | None = None) -> None  @experimental
     def list_agents(self) -> list[str]
 def build_app(agents_dir: str, *, loader: PetriAgentLoader | None = None, **adk_options: Any) -> FastAPI  @experimental
-def create_petri_builder_assistant(model: Any = None) -> Any  @experimental
 def serve(agents_dir: str = '.', *, host: str = '127.0.0.1', port: int = 8000, reload_agents: bool = False) -> None  @experimental
 
 [adk_libpetri.workflow]

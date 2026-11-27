@@ -1,8 +1,7 @@
 """Load, check and verify a blueprint file, as data (``@experimental``).
 
-What ``adk-libpetri check``/``verify`` print, the ``adk-libpetri web`` routes
-return and the Petri builder assistant's tools hand the model all come from
-here: :func:`load_net` builds the node the way ``adk web`` does,
+What ``adk-libpetri check``/``verify`` print comes from here:
+:func:`load_net` builds the node the way ``adk web`` does,
 :func:`check_file` and :func:`verify_file` turn the outcome into plain
 dataclasses (``to_dict()`` for JSON, tagged ``"format":`` :data:`JSON_FORMAT`).
 Both also take a compiled workflow's YAML

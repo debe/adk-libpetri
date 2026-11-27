@@ -1,9 +1,7 @@
-"""ADK's ``AgentLoader`` for ``adk-libpetri web``: the Petri builder, and optionally traced nets.
+"""ADK's ``AgentLoader`` for ``adk-libpetri web``: helper packages hidden, nets optionally traced.
 
-Three changes to what ADK's loader returns, nothing else:
+Two changes to what ADK's loader returns, nothing else:
 
-* the dev UI's builder assistant (``__adk_agent_builder_assistant``) is
-  :func:`~adk_libpetri.web.builder.create_petri_builder_assistant`;
 * given ``traces``, every ``PetriNet`` and ``PetriWorkflow`` in a loaded app
   (the root, and each one mounted under it) records its sessions' firings
   and markings in that :class:`~adk_libpetri.bridge.marking_trace.MarkingTraces`,
@@ -29,7 +27,6 @@ from google.adk.cli.utils._nested_agent_loader import NestedAgentLoader
 from .._experimental import experimental
 from .._net_node import NetNodeBase
 from ..bridge.marking_trace import MarkingTraces
-from .builder import ADK_ASSISTANT, create_petri_builder_assistant
 
 
 def net_nodes(root: Any) -> list[NetNodeBase]:
@@ -109,7 +106,7 @@ def defines_agent(folder: Path) -> bool:
 
 @experimental
 class PetriAgentLoader(NestedAgentLoader):
-    """ADK's dev-UI loader, with the Petri builder assistant and traced nets."""
+    """ADK's dev-UI loader, without helper packages, and with traced nets when given ``traces``."""
 
     @staticmethod
     def _is_valid_agent_dir(path: Path) -> bool:
@@ -139,9 +136,6 @@ class PetriAgentLoader(NestedAgentLoader):
         self.traces = traces
 
     def _perform_load(self, agent_path: str) -> Any:
-        if agent_path == ADK_ASSISTANT:
-            self._validate_agent_name(agent_path)
-            return create_petri_builder_assistant()
         loaded = super()._perform_load(agent_path)
         if self.traces is not None:
             trace(loaded, self.traces)

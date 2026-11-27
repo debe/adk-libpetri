@@ -15,9 +15,12 @@ terminal; :func:`counterexample_svg` is one self-contained SVG:
   tokens in blue, the tokens that break the claim in red.
 
 The SVG carries ADK's light and dark palettes and picks one with
-``prefers-color-scheme``: in an ``<img>`` that follows the embedding page's
-``color-scheme``, which ADK's dev UI sets from its theme toggle. Without
-``dot`` the picture is the header and the filmstrip, with a line saying so.
+``prefers-color-scheme`` (in an ``<img>``, the embedding page's
+``color-scheme``). Without ``dot`` the picture is the header and the
+filmstrip, with a line saying so. Nothing in the package serves the picture
+since google-adk 2.15 removed the builder whose replies showed it: call
+:func:`counterexample_svg` with a claim of
+:func:`~adk_libpetri.net.report.verify_file` and its ``graphs[claim.net]``.
 """
 
 from __future__ import annotations
@@ -471,25 +474,12 @@ def counterexample_svg(
     )
 
 
-@experimental
-def missing_svg(message: str) -> str:
-    """A small picture saying ``message`` (a counterexample the server no longer holds)."""
-    w = max(_MIN_W, int(_w(message, 12)) + 2 * _PAD)
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="48" '
-        f'viewBox="0 0 {w} 48" role="img" aria-label="{_x(message)}">{_style()}'
-        f'<rect class="bg" width="100%" height="100%" rx="10"/>'
-        f'<text class="mu" x="{_PAD}" y="29" font-size="12">{_x(message)}</text></svg>'
-    )
-
-
 __all__ = [
     "DOT_ENV",
     "Step",
     "counterexample_svg",
     "dot_binary",
     "dot_svg",
-    "missing_svg",
     "step_lines",
     "steps",
     "violation",

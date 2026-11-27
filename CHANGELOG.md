@@ -31,10 +31,8 @@ existed.
     requires confirmation or carries an auth config. A
     `require_confirmation` predicate's parameters that ADK fills from
     `ctx.state` count as state reads.
-  - `adk-libpetri web` passes its host to ADK as `bind_host`, so ADK serves
-    the builder assistant on a loopback host, as `adk web` does. The
-    stand-ins for `GET builder` and `builder/save` keep ADK's new
-    loopback-only guard.
+  - `adk-libpetri web` passes its host to ADK as `bind_host`, as `adk web`
+    does.
   - Tests run ADK's own workflow samples at google/adk-python v2.12.0.
 - **ADK 2.13.** The port follows google-adk 2.13:
   - A compiled workflow's terminal run on a fan-out lane publishes its
@@ -57,6 +55,40 @@ existed.
     uses. The port no longer reads `InvocationContext._abort_signal` or
     `FunctionNode._sig` through `getattr` with a default, which would have
     silently stopped aborting turns, or checking state reads, after a rename.
+- **libpetri 8.1.** The pin moves to `libpetri>=8.1,<9`. No code change:
+  the port's event consumers dispatch on the event type and skip the new
+  `MarkingSnapshot` events, and no action flushes after its firing ends.
+- **ADK 2.15.** The pin moves to `google-adk~=2.15.1` (ADR 0006's re-check,
+  spanning 2.14.0 and 2.14.1):
+  - **Breaking: ADK 2.15 removed its Visual Agent Builder, and so does
+    `adk-libpetri web`.** google-adk 2.15.0 dropped the
+    `/dev/apps/{app}/builder*` routes, `google.adk.cli.built_in_agents` and
+    `__`-prefixed agents. The Petri builder assistant, the canvas guard and
+    card, the draft staging and the counterexample-picture route
+    (`/dev/petri/counterexamples/{id}.svg`) are removed, and so is
+    `adk_libpetri.web.create_petri_builder_assistant`. `serve()` no longer
+    changes into the agents folder. The graph panel, its drill-down and its
+    highlighting are unchanged. `build_app` still passes `host` as ADK's
+    `bind_host`, which since 2.15 turns on ADK's DNS-rebinding guard on a
+    loopback bind (ADR 0009).
+  - **`adk-libpetri skill`** replaces the assistant with a coding-agent
+    skill: it prints `net/SKILL.md` (Agent Skills format), the write, check,
+    verify, fix loop the assistant taught, run with the CLI.
+    `adk-libpetri guide SECTION` prints one section of `AUTHORING.md`
+    (`guide quorum`).
+  - A compiled `JoinNode` on a cycle keeps the arrival of a predecessor the
+    loop cannot run again (a setup step before the loop), as ADK 2.14 does,
+    and START's arrival counts for the whole run. Before, such a join fired
+    once and the loop stopped.
+  - A compiled parallel worker keeps its per-item `retry_config`. ADK 2.14
+    moves a worker's policy onto its item node, and the compiler's copy
+    cleared it, so a failed item failed the run; a `Node` with
+    `parallel_worker=True` was retried as a whole instead of per item. Its
+    retries now stay with ADK, inside its transition.
+  - A list route that matches two edges between the same two nodes runs the
+    target once under ADK 2.15 too, so native and compiled runs now agree
+    there (the net always ran it once).
+  - The vendored workflow samples move to google/adk-python v2.15.1.
 - **Hardening.**
   - `build_app` refuses to serve when ADK's builder save route moved and
     the guard cannot install: the canvas could then overwrite a net. A

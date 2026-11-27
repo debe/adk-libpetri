@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
-- **Scope:** Python `0.1.0`. google-adk `2.13.0` (pinned `~=2.13.0`; first
+- **Scope:** Python `0.1.0`. google-adk `2.15.1` (pinned `~=2.15.1`; first
   written against `2.11.0`), google-genai
   `>=2.19` (resolved transitively, `2.28.0` at the time of writing), libpetri-py
   `>=7.3,<8` (7.2 was the first release with the Python event-store protocol, token
@@ -114,7 +114,7 @@ real-time stand-ins for the stepped-clock tests.
 - `google.adk.workflow`: `Workflow`, `BaseNode`, `FunctionNode`, `JoinNode`,
   `DEFAULT_ROUTE`, `RetryConfig`, `NodeTimeoutError`, `START`
   (`_base_node`), `Workflow.graph` (`nodes`, `edges`, `Edge.route`)
-- **Private, pinned by the `~=2.13.0` range**, each listed and checked by
+- **Private, pinned by the `~=2.15.1` range**, each listed and checked by
   `python/tests/test_adk_seams.py` (the authoritative list; the port reads
   them directly, never through `getattr` with a default, so a rename fails
   loudly): `Context._run_node_internal`,
@@ -132,15 +132,31 @@ The compiler reproduces `Workflow` scheduling, so these are pinned by tests
 compiled) and must be re-read in `workflow/_workflow.py` and `_graph.py`:
 
 - unrouted edges always fire; `DEFAULT_ROUTE` fires only when no specific
-  route matched; an emitted list matches every edge sharing a value; no match
-  ends the branch with a log warning;
+  route matched; an emitted list matches every edge sharing a value, and
+  (2.15) a target that several matched edges share is triggered once, as the
+  net always did (`tests/workflow/test_adk_2_15_parity.py`); no match ends
+  the branch with a log warning;
 - one node's runs are serialized (triggers queue FIFO while it runs);
 - `JoinNode` fires once every predecessor has completed a run since its last
   firing, and each firing consumes those arrivals (2.13; before, a completed
-  status was sticky). ADK keeps the arrivals as a set with each predecessor's
-  latest output, which the net matches with a priority `Wf_J_Latest_P` per
-  predecessor, and drops arrivals still waiting when the run ends, which the
-  turn ends reset (`tests/workflow/test_adk_2_13_parity.py`);
+  status was sticky), except two that ADK keeps: START's, which counts as
+  arrived for the whole run, and, for a join on a cycle (2.14), the arrival
+  of a predecessor the join cannot reach, such as a setup step before the
+  loop, which the loop does not run again (`Workflow._buffer_barrier_trigger`,
+  `_descendants`). The net reads those kept arrivals instead of consuming
+  them, unless START is the join's only predecessor. ADK keeps the arrivals
+  as a set with each predecessor's latest output, which the net matches with
+  a priority `Wf_J_Latest_P` per predecessor, and drops arrivals still
+  waiting when the run ends, which the turn ends reset
+  (`tests/workflow/test_adk_2_13_parity.py`, `test_adk_2_14_parity.py`);
+- a parallel worker's `retry_config` applies to each item (2.14):
+  `_ParallelWorker` moves it onto the item node (in `__init__` and in
+  `model_copy`, even for a `None` update), a `Node` with
+  `parallel_worker=True` keeps it and rebuilds its item node from it on every
+  copy, and the node runner never retries such a node for an item's failure
+  (`_delegates_item_retry`). The compiler leaves these retries to ADK inside
+  the node's transition and compiles no retry loop for it
+  (`tests/workflow/test_adk_2_14_parity.py`);
 - a terminal node runs with `use_as_output`, and ADK (2.13) publishes a
   delegated output event on the claimer's branch unless the claimer is a
   `Workflow` (`_node_runner._explicit_output_claimer`). A compiled
@@ -156,7 +172,9 @@ compiled) and must be re-read in `workflow/_workflow.py` and `_graph.py`:
   `Workflow`'s explicit `input_schema`, which `from_workflow` copies;
 - more than one terminal output raises at finalize;
 - `RetryConfig` defaults (5 attempts, 1 s, x2, 60 s cap, jitter 1) and
-  exception matching by class name over the MRO;
+  exception matching by class name over the MRO; since 2.14
+  `WorkflowConfigurationError` and `WorkflowInvariantError` are never
+  retried, which the net inherits by calling `_should_retry_node`;
 - a node interrupts by construction when it is a `FunctionNode` with
   `auth_config` or (2.12) `require_confirmation`, a `_ToolNode` whose tool
   requires confirmation or carries an auth config, or an `LlmAgent` with a
@@ -170,9 +188,12 @@ compiled) and must be re-read in `workflow/_workflow.py` and `_graph.py`:
 - `Runner.run` (sync) creates a loop per call;
 - `GeminiLlmConnection.receive` forwards voice activity;
 - ADK's transfer resolution falls back to `root_agent.find_agent`;
-- the web UI seams `adk-libpetri web` uses (the duck-typed `graph` field, the
-  builder assistant's name and tools, `get_fast_api_app(agent_loader=)`): see
+- the web UI seams `adk-libpetri web` uses (the duck-typed `graph` field,
+  `NestedAgentLoader`'s listing and load hooks,
+  `get_fast_api_app(agent_loader=, bind_host=)`, the `build_graph_image`
+  route): see
   [ADR 0009](0009-web-ui-and-builder-assistant.md#re-check-on-an-adk-bump).
+  Since 2.15 ADK has no builder, and the builder assistant's seams are gone.
 
 ## Re-check procedure
 

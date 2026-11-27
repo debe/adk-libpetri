@@ -8,7 +8,9 @@
     adk-libpetri verify FILE --json                         # verdicts as JSON
     adk-libpetri web agents/                                # ADK's dev UI, Petri-aware
     adk-libpetri guide                                      # print AUTHORING.md
+    adk-libpetri guide "permit race"                        # one section of it
     adk-libpetri schema                                     # print the JSON Schema
+    adk-libpetri skill                                      # print the agent skill (SKILL.md)
     adk-libpetri --version                                  # this, google-adk, libpetri
 
 ``check`` and ``verify`` also take a compiled workflow's YAML
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Sequence
 from importlib import resources
@@ -168,6 +171,41 @@ def _packaged(name: str) -> str:
     return resources.files("adk_libpetri.net").joinpath(name).read_text(encoding="utf-8")
 
 
+def _sections(text: str) -> dict[str, str]:
+    """``AUTHORING.md`` by ``##``/``###`` heading (lower-cased, no backticks), with its body."""
+    parts: dict[str, str] = {}
+    current, lines = "", []
+    for line in text.splitlines():
+        m = re.match(r"#{2,3} (.+)", line)
+        if m:
+            if current:
+                parts[current] = "\n".join(lines).strip()
+            current, lines = m.group(1).strip("` ").lower(), [line]
+        else:
+            lines.append(line)
+    if current:
+        parts[current] = "\n".join(lines).strip()
+    return parts
+
+
+def _guide(section: str | None, out: TextIO) -> int:
+    """The whole guide, or every section whose heading contains ``section``."""
+    text = _packaged("AUTHORING.md")
+    if not section:
+        out.write(text)
+        return _EXIT_OK
+    sections = _sections(text)
+    want = section.strip().strip("`").lower()
+    hits = [k for k in sections if want in k]
+    if not hits:
+        print(f"ERROR no section matching {section!r}; sections:", file=out)
+        for k in sections:
+            print(f"  {k}", file=out)
+        return _EXIT_FAIL
+    out.write("\n\n".join(sections[k] for k in hits) + "\n")
+    return _EXIT_OK
+
+
 def _positive(text: str) -> int:
     n = int(text)
     if n < 1:
@@ -210,15 +248,25 @@ def _parser() -> argparse.ArgumentParser:
     )
     w = sub.add_parser(
         "web",
-        help="serve ADK's dev UI for Petri nets: the net in its graph panel, "
-        "and a builder assistant that writes and proves blueprints",
+        help="serve ADK's dev UI for Petri nets: the net drawn in its graph panel",
     )
     w.add_argument("agents_dir", nargs="?", default=".", help="the folder holding the agents")
     w.add_argument("--host", default="127.0.0.1")
     w.add_argument("--port", type=int, default=8000)
     w.add_argument("--reload", action="store_true", help="reload agents when their files change")
-    sub.add_parser("guide", help="print the authoring guide (AUTHORING.md)")
+    g = sub.add_parser("guide", help="print the authoring guide (AUTHORING.md), or one section")
+    g.add_argument(
+        "section",
+        nargs="?",
+        default=None,
+        help="print only the sections whose heading contains this "
+        "(e.g. 'the loop', 'motifs', 'quorum', 'prove:', 'reading a counterexample')",
+    )
     sub.add_parser("schema", help="print the JSON Schema of the YAML format")
+    sub.add_parser(
+        "skill",
+        help="print the coding-agent skill for writing and proving blueprints (SKILL.md)",
+    )
     return p
 
 
@@ -241,10 +289,12 @@ def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int
         case "web":
             return _web(args)
         case "guide":
-            stream.write(_packaged("AUTHORING.md"))
-            return _EXIT_OK
+            return _guide(args.section, stream)
         case "schema":
             stream.write(_packaged("schema.json"))
+            return _EXIT_OK
+        case "skill":
+            stream.write(_packaged("SKILL.md"))
             return _EXIT_OK
     return 2  # pragma: no cover - argparse rejects any other command
 

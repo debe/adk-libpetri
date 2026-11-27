@@ -22,7 +22,7 @@ pip install --pre adk-libpetri
 
 0.1.0a1 is a preliminary release (`--pre`): the API may change before 0.1.0.
 
-Python 3.11+. Pulls `google-adk~=2.13.0` and `libpetri`. Proofs need a `z3`
+Python 3.11+. Pulls `google-adk~=2.15.1` and `libpetri`. Proofs need a `z3`
 binary (4.8+) on `PATH` or named by `LIBPETRI_Z3`; the runtime does not.
 
 ## Three ways in
@@ -109,7 +109,10 @@ blueprint.
 Translation, in short:
 
 - **Routes** become XOR branches, with `DEFAULT_ROUTE` as the no-match branch.
-- **`JoinNode`** becomes one place per predecessor.
+- **`JoinNode`** becomes one place per predecessor. Each firing consumes the
+  arrivals, except START's and, for a join on a cycle, the arrival of a
+  predecessor the loop cannot reach again, which it reads, as ADK 2.14 keeps
+  them.
 - **Terminal nodes** run with `use_as_output`; each keeps its last output on
   its own place, and two with output fail the run as ADK does.
 - **`retry_config`** becomes a retry loop in the net: a failed attempt `i`
@@ -124,7 +127,10 @@ Translation, in short:
   (`CompiledWorkflow.verification_spec`): a retry token stands for the run
   still in flight, and the loop never strands a token, so the verdicts hold
   on the executed net (`test_folding_the_retry_loop_keeps_the_verdicts`
-  checks one against the other).
+  checks one against the other). A parallel worker is the exception: ADK
+  retries each of its items in place and never the worker for an item's
+  failure, so its retries stay inside its transition, with no retry loop in
+  the net.
 - **`timeout`** stays on the node: ADK's node runner enforces it per attempt.
 - **`max_concurrency`** becomes a permit place.
 - **`RequestInput`** parks the node until the next turn's function response
@@ -163,7 +169,7 @@ event replay, a node that takes `ctx` (children it runs through
 turns.
 
 `tests/workflow/adk_samples` runs ADK's own workflow samples (google/adk-python
-v2.13.0, `contributing/samples`) natively and compiled, with scripted models,
+v2.15.1, `contributing/samples`) natively and compiled, with scripted models,
 and compares outputs, authors, node paths, texts, state and raised
 exceptions. Of the 24 runnable samples, 22 match (10 need `state="legacy_read"`)
 and 2 are rejected for their `mode='task'` agents; the Antigravity sample needs
@@ -318,7 +324,8 @@ adk-libpetri web agents/        # ADK dev UI: http://127.0.0.1:8000/dev-ui/
 ```
 
 This is ADK's own dev UI, used as you use it today; nothing in it is
-patched. The server answers the UI's own requests with Petri-aware data:
+patched. The server answers the UI's own request for an app's drawing
+with Petri-aware data:
 
 - **The graph panel** (Info, and the fullscreen "Agent Structure") draws
   the net as a Petri net in the UI's light or dark theme: places with their
@@ -333,38 +340,21 @@ patched. The server answers the UI's own requests with Petri-aware data:
   message, not as JSON); a failed turn lights the transition or subnet that
   failed. A place nothing in the net produces is dotted. A function node in a mounted blueprint runs as
   `<mount>·<node>` (`second·fast`), so each mount lights for its own runs.
-- **The builder assistant** (the pencil button) is ADK's own, with tools to
-  read `AUTHORING.md` and the schema, to write blueprints (nothing is
-  written unless every blueprint loads), and to check and verify them. It
-  fixes a net from the counterexample until every claim is proven, and its
-  replies end with the net's size and each claim's verdict. When the builder
-  opens on a net it proves the claims and greets you with the net's size and
-  verdicts, and `verify` or `check` answers any time, all without a model
-  call; with no `GOOGLE_API_KEY` it says where to put one. `verify` lists
-  each claim, the step where a violated one breaks and the steps before it,
-  and its counterexample as a picture of what each step changed; click it
-  for full size, with the net drawn at the bad step. The net drawing needs
-  Graphviz `dot` on `PATH` (or `ADK_LIBPETRI_DOT`); without it the full
-  picture has the steps only.
-- **The builder canvas** shows the net's root (a `PetriNet` or a
-  `PetriWorkflow`) with the functions and agents it runs, updated after each
-  reply. It is read-only for a net: the YAML it saves before each message is
-  ignored for a net (even one with a syntax error), what was added there is
-  dropped and the assistant says so (Save with a sub-agent added there
-  writes nothing and keeps the builder open), and Save ships the
-  assistant's latest net to the graph panel and to chat. (In ADK alone, Save on a net app fails
-  with 400.) A file you edit in an editor while the builder is open survives
-  Save; one changed both there and by the assistant stops it, and the
-  assistant tells you which.
 
 Stock `adk web` serves the same blueprints; its graph view draws the net's
 places and transitions as plain boxes, each `node:` transition beside the
-ADK node it runs. To get the assistant there, serve it as an app:
-`root_agent = create_petri_builder_assistant()` from
-`adk_libpetri.web.builder`.
+ADK node it runs.
 
-ADK's dev UI is the only UI; edit a net's YAML by hand in your editor and
-check it with `adk-libpetri check`/`verify`. See
+ADK's dev UI is the only UI. google-adk 2.15 removed its Visual Agent
+Builder, and with it the Petri builder assistant `adk-libpetri web` used to
+serve there. Write a net in your editor, or have a coding agent write it,
+and check it with `adk-libpetri check`/`verify`. `adk-libpetri skill`
+prints a coding-agent skill ([Agent Skills](https://agentskills.io) format)
+that teaches that loop and points at `adk-libpetri guide [section]` and
+`adk-libpetri schema`; install it where your agent reads skills, for
+example
+`mkdir -p .claude/skills/adk-libpetri-blueprint && adk-libpetri skill > .claude/skills/adk-libpetri-blueprint/SKILL.md`.
+See
 [ADR 0009](https://github.com/debe/adk-libpetri/blob/main/docs/adr/0009-web-ui-and-builder-assistant.md).
 
 ## What is different from Java
@@ -386,9 +376,9 @@ check it with `adk-libpetri check`/`verify`. See
 See [ADR 0006](https://github.com/debe/adk-libpetri/blob/main/docs/adr/0006-python-port-and-adk-python-compat.md) for
 the spikes behind these points, and for the procedure for bumping ADK.
 
-## ADK Python 2.13 behaviour the foils lock in
+## ADK Python 2.15 behaviour the foils lock in
 
-The ADK-only foils (`pytest -k foil`) run stock google-adk 2.13 with no net
+The ADK-only foils (`pytest -k foil`) run stock google-adk 2.15 with no net
 and assert what it does today. If an ADK release changes one of these, its
 foil goes red and the claim here gets updated. Where the Java foil does not
 carry over, the Python foil says so and asserts the Python behaviour.
@@ -426,8 +416,8 @@ the same input into a typed error `Event` and ends the turn normally.
 
 **Voice-activity edges**
 (`tests/demos/test_voice_vad_edge_adk_foil.py`). The verdict is the reverse of
-Java's. ADK Java 1.10.1's `GeminiLlmConnection` drops the VAD speech-activity
-edges; ADK Python 2.13's `GeminiLlmConnection.receive` yields
+Java's. ADK Java 1.15.0's `GeminiLlmConnection` drops the VAD speech-activity
+edges; ADK Python 2.15's `GeminiLlmConnection.receive` yields
 `LlmResponse(voice_activity=...)` for a VAD frame, and the live flow copies it
 onto `Event.voice_activity` for the `Runner.run_live` caller. The foil runs
 ADK's real `GeminiLlmConnection` over a fake genai session. Python therefore

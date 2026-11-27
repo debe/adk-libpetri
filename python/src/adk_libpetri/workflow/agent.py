@@ -5,7 +5,7 @@ Drop-in for ``Runner(node=workflow)``::
     node = PetriWorkflow.from_workflow(workflow, orchestrator=OrchestratorLoop.shared())
     runner = InMemoryRunner(node=node, app_name="app")
 
-It is a ``BaseNode``, not a ``BaseAgent``, on purpose: ADK 2.13 still runs a
+It is a ``BaseNode``, not a ``BaseAgent``, on purpose: ADK 2.15 still runs a
 ``BaseAgent`` root on its legacy path, which has no node ``Context`` to run
 child nodes with. As a node it also nests inside another ``Workflow``.
 

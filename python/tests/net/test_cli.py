@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -204,12 +205,56 @@ def test_guide_and_schema_print_the_packaged_files() -> None:
     assert json.loads(out)["title"] == "adk-libpetri net blueprint"
 
 
+def test_guide_prints_one_section_by_its_heading() -> None:
+    code, out = run("guide", "Quorum")
+    assert code == 0 and out.startswith("### Quorum: answer at exactly k of n")
+    assert "## " not in out.split("\n", 1)[1].replace("### ", "")  # no other section
+    code, out = run("guide", "`prove:`")
+    assert code == 0 and out.startswith("## `prove:`")
+
+
+def test_guide_names_the_sections_when_none_matches() -> None:
+    code, out = run("guide", "no such heading")
+    assert code == 1
+    assert out.startswith("ERROR no section matching 'no such heading'; sections:")
+    assert "  the loop\n" in out and "  reading a counterexample\n" in out
+
+
+def test_skill_prints_an_agent_skill_with_valid_frontmatter() -> None:
+    """Agent Skills format (agentskills.io): YAML frontmatter with ``name`` and
+    ``description``; ``name`` is 1-64 lower-case letters, digits and single hyphens."""
+    import yaml
+
+    code, out = run("skill")
+    assert code == 0
+    assert out.startswith("---\n")
+    head, body = out[4:].split("\n---\n", 1)
+    meta = yaml.safe_load(head)
+    assert set(meta) <= {"name", "description", "license", "compatibility", "metadata"}
+    name = meta["name"]
+    assert re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", name) and len(name) <= 64
+    assert 0 < len(meta["description"]) <= 1024
+    assert len(meta.get("compatibility", "")) <= 500
+    # The loop it teaches runs on the CLI, and it points at the guide, not a copy of it.
+    for cmd in (
+        "adk-libpetri check",
+        "adk-libpetri verify",
+        "adk-libpetri guide",
+        "adk-libpetri schema",
+    ):
+        assert cmd in body, cmd
+    for section in re.findall(r'adk-libpetri guide "([^"]+)"', body):
+        assert run("guide", section)[0] == 0, section
+    assert "\u2014" not in out  # no em-dashes
+
+
 def test_pyproject_declares_the_console_script_and_ships_the_package_data() -> None:
     pyproject = tomllib.loads((Path(__file__).parents[2] / "pyproject.toml").read_text())
     assert pyproject["project"]["scripts"]["adk-libpetri"] == "adk_libpetri.cli:main"
     artifacts = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["artifacts"]
     assert "src/adk_libpetri/net/schema.json" in artifacts
     assert "src/adk_libpetri/net/AUTHORING.md" in artifacts
+    assert "src/adk_libpetri/net/SKILL.md" in artifacts
 
 
 def test_the_module_runs_as_a_program() -> None:

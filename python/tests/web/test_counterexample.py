@@ -1,4 +1,4 @@
-"""A violated claim's counterexample as compact steps and as a picture in ADK's dev UI.
+"""A violated claim's counterexample as compact steps and as a picture.
 
 The claim here is the README hero's naive race, written out by hand (the
 verifier's own trace, ``complete:``/``inflight:`` split included), so no Z3
@@ -9,11 +9,9 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from adk_libpetri.net.counterexample import (
     counterexample_svg,
@@ -25,11 +23,7 @@ from adk_libpetri.net.counterexample import (
 )
 from adk_libpetri.net.graph import NetGraph
 from adk_libpetri.net.report import ClaimResult, VerifyReport, load_net, verify_file
-from adk_libpetri.web import PetriAgentLoader, build_app, proof_view
-from adk_libpetri.web.loader import net_nodes
 from support.smt_proofs import requires_z3
-
-from .conftest import LOCAL
 
 FIRES = (
     "Race_Start",
@@ -70,16 +64,6 @@ def naive_claim(**changes: object) -> ClaimResult:
 @pytest.fixture
 def graph(agents: Path) -> NetGraph:
     return load_net(str(agents / "race_naive" / "root_agent.yaml")).graph
-
-
-@pytest.fixture
-def keep_base() -> Iterator[None]:
-    """``build_app`` records where the pictures are served: undo it after the test."""
-    saved = list(proof_view._BASE)
-    proof_view.forget_counterexamples()
-    yield
-    proof_view._BASE[:] = saved
-    proof_view.forget_counterexamples()
 
 
 def _xml(svg: str) -> ET.Element:
@@ -209,63 +193,6 @@ def test_graphviz_draws_the_net_into_the_picture(graph: NetGraph) -> None:
     _xml(svg)
     assert "No Graphviz" not in svg
     assert svg.count("<title>eventOut</title>") == 2  # one drawing per theme
-
-
-# ----------------------------------------------------------------------------
-#  The route, and what the builder hands the model
-# ----------------------------------------------------------------------------
-
-
-@pytest.fixture
-def client(agents: Path, keep_base: None) -> Iterator[TestClient]:
-    loader = PetriAgentLoader(str(agents))
-    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as c:
-        yield c
-    for root in list(loader._agent_cache.values()):
-        for node in net_nodes(root):
-            node.registry.close_all()
-
-
-def test_the_server_serves_a_kept_counterexample(client: TestClient, graph: NetGraph) -> None:
-    line = proof_view.picture(graph, naive_claim())
-    assert line is not None
-    m = re.fullmatch(
-        r'<a href="([^"]+)\?full=1" target="_blank"><img src="([^"]+)" '
-        r'alt="Counterexample: one answer per turn" width="100%"></a>',
-        line,
-    )
-    assert m is not None and m.group(1) == m.group(2)
-    url = m.group(2)
-    assert url.startswith("/dev/petri/counterexamples/") and url.endswith(".svg")
-    r = client.get(url)
-    assert r.status_code == 200
-    assert r.headers["content-type"].startswith("image/svg+xml")
-    assert r.headers["cache-control"] == "no-cache"
-    assert "eventOut=2 exceeds the bound 1" in r.text
-    # In the panel, the steps only: a whole net shrinks past reading there.
-    assert "<svg" not in r.text.split("<svg", 1)[1] and "Open the picture full size" in r.text
-    full = client.get(url, params={"full": 1, "step": 2})
-    assert full.status_code == 200 and "step 2 of 7: Race_RunA fires" in full.text
-    assert "Open the picture full size" not in full.text
-    # Same counterexample on the same net, same picture.
-    assert proof_view.picture(graph, naive_claim()) == line
-
-
-def test_an_unknown_counterexample_answers_with_a_picture_saying_so(client: TestClient) -> None:
-    r = client.get("/dev/petri/counterexamples/0123456789abcdef.svg")
-    assert r.status_code == 404
-    assert r.headers["content-type"].startswith("image/svg+xml")
-    assert "verify again" in r.text
-
-
-def test_no_picture_without_a_server_to_show_it(graph: NetGraph, keep_base: None) -> None:
-    proof_view._BASE.clear()  # stock `adk web`: nothing serves the route
-    assert proof_view.picture(graph, naive_claim()) is None
-
-
-def test_pictures_follow_the_servers_url_prefix(agents: Path, keep_base: None) -> None:
-    build_app(str(agents), loader=PetriAgentLoader(str(agents)), url_prefix="/adk")
-    assert proof_view.picture_url("abc").startswith("/adk/dev/petri/counterexamples/abc.svg")
 
 
 def test_a_report_carries_its_graphs_but_not_into_json(graph: NetGraph) -> None:

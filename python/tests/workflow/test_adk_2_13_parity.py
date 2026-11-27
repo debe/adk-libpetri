@@ -4,7 +4,8 @@
   ``node_outputs`` is popped); the net's reset arc on ``wf/N/terminalOutput``
   does the same.
 - A ``JoinNode`` consumes its arrivals per firing (#7498): in a loop it waits
-  for every predecessor's next run instead of firing on a stale one.
+  for every predecessor's next run instead of firing on a stale one. ADK 2.14
+  keeps the arrivals a loop cannot repeat (``test_adk_2_14_parity``).
 """
 
 from __future__ import annotations

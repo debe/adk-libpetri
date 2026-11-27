@@ -17,15 +17,22 @@ Translation (``N`` a node, places named ``wf/N/...``):
   XOR branch; ``DEFAULT_ROUTE`` is the branch for no specific match; a node
   with routed edges and no match lands on ``wf/N/unmatched``, making ADK's
   silent branch end a place a proof can name.
-* **JoinNode** -- one ``wf/J/from/P`` place per predecessor, consumed together
-  (consume semantics, as ADK 2.13). A predecessor's repeat arrival replaces its
-  earlier one (``Wf_J_Latest_P``), as ADK keeps the latest output, and a join
-  still missing a predecessor when the run ends does not hold the turn open.
+* **JoinNode** -- one ``wf/J/from/P`` place per predecessor; ``Wf_J_Run``
+  consumes the arrivals together (consume semantics, ADK's since 2.13). It
+  reads, and so keeps, the arrivals ADK keeps since 2.14: START's, which ADK
+  counts as arrived for the whole run, and, for a join on a cycle, that of a
+  predecessor the join cannot reach (a setup step before the loop), which the
+  loop never runs again. A predecessor's repeat arrival replaces its earlier
+  one (``Wf_J_Latest_P``), as ADK keeps the latest output, and a join still
+  missing a predecessor when the run ends does not hold the turn open.
 * **terminal output** -- one ``wf/N/terminalOutput`` per terminal node, holding
   its last output as ADK's ``node_outputs`` does. The node runs with
   ``use_as_output``, so its own event is the workflow's output event. Two
   terminal nodes with output end the turn on ``wf/terminalConflict`` (ADK's
   "multiple terminal outputs" error), which a proof can show unreachable.
+* **parallel worker** -- one transition, retry policy included: ADK retries
+  each failed item in place, and never the worker for an item's failure (ADK
+  2.14), so the net compiles no retry loop for it.
 * **retry_config** -- a retry loop: a failed attempt ``i`` lands on
   ``wf/N/retryI``, whose timed ``Wf_N_BackoffI`` (ADK's delay for attempt
   ``i``, without its random jitter) moves it to ``wf/N/again``, where
@@ -208,6 +215,9 @@ class _NodePlan:
     is_join: bool
     preds: list[str]
     interruptible: bool
+    kept: tuple[str, ...] = ()
+    """Join only: the predecessors whose arrival a firing reads instead of
+    consuming (:func:`_kept_arrivals`)."""
     attempts: int = 1
     backoff_ms: list[int] = field(default_factory=list)
     """Per retry, the delay of its backoff."""
@@ -329,6 +339,7 @@ def compile_workflow(
     for e in graph.edges:
         out_edges[e.from_node.name].append(e)
         preds[e.to_node.name].append(e.from_node.name)
+    succ = {n: [e.to_node.name for e in es] for n, es in out_edges.items()}
     for a, b in budgets:
         if not any(e.from_node.name == a and e.to_node.name == b for e in graph.edges):
             report.add("rejected", f"{a}->{b}", "back_edge_budget names no edge of the graph")
@@ -344,7 +355,9 @@ def compile_workflow(
 
     plans: dict[str, _NodePlan] = {}
     for node in nodes:
-        plans[node.name] = _plan_node(node, out_edges[node.name], preds[node.name], hitl, report)
+        plans[node.name] = _plan_node(
+            node, out_edges[node.name], preds[node.name], succ, hitl, report
+        )
         _check_node(node, state, report)
     _check_cycles(graph.edges, budgets, report)
     if report.rejected:
@@ -409,12 +422,19 @@ def compile_workflow(
     return compiled
 
 
+def _attempts(rc: Any) -> int:
+    return max(1, rc.max_attempts if rc.max_attempts is not None else 5)
+
+
 def _retry_plan(node: BaseNode, report: TranslationReport) -> tuple[int, list[int]]:
     """ADK's attempts and backoff (``_get_retry_delay`` without the random draw)."""
     rc = node.retry_config
+    if _delegates_item_retry(node):
+        _item_retries(node, report)
+        return 1, []
     if rc is None:
         return 1, []
-    attempts = max(1, rc.max_attempts if rc.max_attempts is not None else 5)
+    attempts = _attempts(rc)
     initial = rc.initial_delay if rc.initial_delay is not None else 1.0
     factor = rc.backoff_factor if rc.backoff_factor is not None else 2.0
     cap = rc.max_delay if rc.max_delay is not None else 60.0
@@ -442,16 +462,62 @@ def _retry_plan(node: BaseNode, report: TranslationReport) -> tuple[int, list[in
     return attempts, delays
 
 
+def _delegates_item_retry(node: BaseNode) -> bool:
+    """A parallel worker, whose items apply their own retry policy (ADK 2.14).
+
+    ADK's node runner never retries such a node for an item's failure, which
+    would cancel the items still running and give the failed one a fresh
+    budget. Its retries stay with ADK, inside the node's transition: the net
+    could not tell an item's failure from the node's own, and a ``Node`` with
+    ``parallel_worker=True`` rebuilds its item node, policy included, from its
+    own ``retry_config`` on every copy (ADK's scheduler copies each dynamic
+    node), so that policy cannot be taken off the node without the items
+    losing theirs.
+    """
+    from google.adk.workflow.utils._retry_utils import _delegates_item_retry
+
+    return _delegates_item_retry(node)
+
+
+def _item_retries(node: BaseNode, report: TranslationReport) -> None:
+    from google.adk.workflow import Node
+    from google.adk.workflow._parallel_worker import _ParallelWorker
+
+    worker = node._inner_node if isinstance(node, Node) else node
+    item = worker._node if isinstance(worker, _ParallelWorker) else None
+    retries: list[str] = []
+    if item is not None and item.retry_config is not None:
+        retries.append(f"each failed item in place ({_attempts(item.retry_config)} attempts)")
+    if node.retry_config is not None:
+        retries.append(
+            f"the node for a failure of its own ({_attempts(node.retry_config)} attempts), "
+            "never for an item's"
+        )
+    if retries:
+        report.add(
+            "opaque",
+            node.name,
+            f"retry_config left on the parallel worker: ADK retries {' and '.join(retries)}, "
+            "inside this transition",
+        )
+
+
 def _with_attempt(node: BaseNode, attempt: int) -> BaseNode:
     """A copy of ``node`` that runs as attempt ``attempt`` of its run.
 
     ADK's dynamic node runner always starts a run at attempt 1; the net owns
     the retry, so the copy sets the attempt on its context before the node's
-    own body runs (``ctx.attempt_count``, as under ADK's own retry loop).
+    own body runs (``ctx.attempt_count``, as under ADK's own retry loop). A
+    parallel worker keeps its retry policy (:func:`_delegates_item_retry`):
+    since ADK 2.14 even a ``retry_config=None`` update moves onto its item
+    node and clears the per-item policy.
     """
     from google.adk.utils.context_utils import Aclosing
 
-    copy = node.model_copy(update={"retry_config": None})
+    if node.retry_config is None or _delegates_item_retry(node):
+        copy = node.model_copy()
+    else:
+        copy = node.model_copy(update={"retry_config": None})
     if attempt == 1:
         return copy
     body = copy._run_impl
@@ -478,8 +544,41 @@ def _routes_of(edge: Any) -> list[Any]:
     return list(r) if isinstance(r, list) else [r]
 
 
+def _descendants(n: str, succ: Mapping[str, list[str]]) -> set[str]:
+    """The nodes reachable from ``n`` through one or more edges, routed or not
+    (ADK's ``Workflow._descendants``)."""
+    reached: set[str] = set()
+    frontier = [n]
+    while frontier:
+        for m in succ.get(frontier.pop(), []):
+            if m not in reached:
+                reached.add(m)
+                frontier.append(m)
+    return reached
+
+
+def _kept_arrivals(join: str, preds: list[str], succ: Mapping[str, list[str]]) -> tuple[str, ...]:
+    """The predecessors whose arrival a firing of ``join`` keeps
+    (``Workflow._buffer_barrier_trigger``, ADK 2.14).
+
+    START never runs, and ADK counts it as arrived for the whole run. A join on
+    a cycle also keeps the arrival of a predecessor it cannot reach: the loop
+    does not run that predecessor again. A join whose only predecessor is
+    START keeps nothing: ADK buffers its trigger once, at the start of the run,
+    and a read arc alone would fire it forever.
+    """
+    reach = _descendants(join, succ)
+    kept = [q for q in preds if q == START.name or (join in reach and q not in reach)]
+    return () if len(kept) == len(preds) else tuple(kept)
+
+
 def _plan_node(
-    node: BaseNode, edges: list[Any], preds: list[str], hitl: set[str], report: TranslationReport
+    node: BaseNode,
+    edges: list[Any],
+    preds: list[str],
+    succ: Mapping[str, list[str]],
+    hitl: set[str],
+    report: TranslationReport,
 ) -> _NodePlan:
     attempts, backoff = _retry_plan(node, report)
     if node.timeout is not None:
@@ -488,21 +587,24 @@ def _plan_node(
             node.name,
             f"timeout {node.timeout}s kept on the node: ADK's node runner enforces it",
         )
+    is_join = bool(node._requires_all_predecessors)
     plan = _NodePlan(
         name=node.name,
         node=node,
-        is_join=bool(node._requires_all_predecessors),
+        is_join=is_join,
         preds=preds,
         interruptible=node.name in hitl,
+        kept=_kept_arrivals(node.name, preds, succ) if is_join else (),
         attempts=attempts,
         backoff_ms=backoff,
         wait_for_output=bool(node.wait_for_output),
     )
     if plan.is_join:
+        kept = f" except {list(plan.kept)}, whose arrival it keeps;" if plan.kept else ","
         report.add(
             "exact",
             node.name,
-            f"join over {preds} (consume semantics, latest arrival per predecessor); its "
+            f"join over {preds} (consume semantics{kept} latest arrival per predecessor); its "
             "input dict is in edge order, where ADK's follows set iteration",
         )
     if plan.wait_for_output and not plan.is_join:
@@ -893,13 +995,17 @@ def _build_spec(
         give_back: list[Place[Any]] = [_idle(n)] + ([CONCURRENCY] if conc else [])
         # A terminal run replaces the node's earlier output (ADK: node_outputs[n]).
         own = (_terminal(n),) if p.terminal else ()
-        ins = [one(_from(n, q)) for q in p.preds] if p.is_join else [one(_trigger(n))]
+        if p.is_join:
+            ins = [one(_from(n, q)) for q in p.preds if q not in p.kept]
+        else:
+            ins = [one(_trigger(n))]
         first_retry = [_retry(n, 1)] if p.attempts > 1 else []
         ts.append(
             TransitionSpec(
                 f"Wf_{n}_Run",
                 (*ins, *common_in),
                 _node_output(n, p, plans, budgets, give_back, first_retry),
+                reads=tuple(_from(n, q) for q in p.kept),
                 inhibitors=(FAILED,),
                 resets=own,
             )
@@ -977,8 +1083,8 @@ def _build_spec(
 
     # -- join arrivals -------------------------------------------------------------
     # ADK keeps a join's arrivals as a set with each predecessor's latest
-    # output, consumed when the join fires: a second arrival from the same
-    # predecessor replaces the first.
+    # output, consumed when the join fires (except a kept one, which the join
+    # reads): a second arrival from the same predecessor replaces the first.
     arrivals = tuple(_from(n, q) for n, p in plans.items() if p.is_join for q in p.preds)
     for q in arrivals:
         join, pred = q.name.split("/")[1], q.name.rsplit("/", 1)[1]
@@ -1259,7 +1365,12 @@ def _actions(cw: CompiledWorkflow, scope: TurnScope, author: str) -> dict[str, A
                     run_id = rt.parked.run_id  # ADK resumes the interrupted run
                     resume_inputs = {rt.parked.interrupt_id: rt.response}
                 elif p.is_join:
-                    token = WfToken({q: ctx.input(_from(n, q)).input for q in p.preds})
+                    token = WfToken(
+                        {
+                            q: (ctx.read if q in p.kept else ctx.input)(_from(n, q)).input
+                            for q in p.preds
+                        }
+                    )
                 else:
                     token = ctx.input(_trigger(n))
                 if not again:

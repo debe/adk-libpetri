@@ -20,8 +20,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "libpetri>=8.0,<9",
-    "google-adk~=2.13.0",
+    "libpetri>=8.1,<9",
+    "google-adk~=2.15.1",
     "opentelemetry-api>=1.30",
 ]
 
@@ -45,10 +45,11 @@ Homepage = "https://github.com/debe/adk-libpetri"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/adk_libpetri"]
-# Package data the CLI prints (`adk-libpetri schema`, `adk-libpetri guide`).
+# Package data the CLI prints (`adk-libpetri schema`, `guide`, `skill`).
 artifacts = [
     "src/adk_libpetri/net/schema.json",
     "src/adk_libpetri/net/AUTHORING.md",
+    "src/adk_libpetri/net/SKILL.md",
 ]
 
 [tool.pytest.ini_options]

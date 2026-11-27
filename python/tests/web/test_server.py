@@ -12,14 +12,12 @@ from adk_libpetri.bridge import MarkingTraces
 from adk_libpetri.web import PetriAgentLoader, build_app, server
 from adk_libpetri.web.loader import net_nodes
 
-from .conftest import LOCAL
-
 
 @pytest.fixture
 def served(agents: Path) -> Iterator[tuple[TestClient, PetriAgentLoader]]:
     loader = PetriAgentLoader(str(agents))
     app = build_app(str(agents), loader=loader)
-    with TestClient(app, client=LOCAL) as client:
+    with TestClient(app) as client:
         yield client, loader
     for root in list(loader._agent_cache.values()):
         for node in net_nodes(root):
@@ -40,40 +38,24 @@ def test_serve_points_at_adks_dev_ui_only(
     import uvicorn
 
     ran: list[int] = []
-    monkeypatch.chdir(agents)  # serve() changes directory; this restores it
     monkeypatch.setattr(uvicorn, "run", lambda app, host, port: ran.append(port))
     server.serve(str(agents), port=8123)
     assert ran == [8123]
     assert capsys.readouterr().out == "ADK dev UI: http://127.0.0.1:8123/dev-ui/\n"
 
 
-@pytest.mark.parametrize(("host", "allowed"), [("127.0.0.1", True), ("0.0.0.0", False)])
-def test_the_builder_assistant_is_served_on_a_loopback_host_only(
-    agents: Path, host: str, allowed: bool
-) -> None:
-    """ADK 2.12 serves its built-in agents only on a loopback bind it is told
-    about; ``build_app`` tells it the ``host``, as ``adk web`` does."""
-    loader = PetriAgentLoader(str(agents))
-    build_app(str(agents), loader=loader, host=host)
-    assert loader._allow_special_agents is allowed
-
-
-def test_the_builder_routes_keep_adks_loopback_guard(agents: Path) -> None:
-    """Our ``GET builder`` and ``builder/save`` stand in front of ADK's, so they
-    carry its loopback-only dependency: a remote peer is refused."""
-    loader = PetriAgentLoader(str(agents))
-    with TestClient(build_app(str(agents), loader=loader)) as remote:
-        assert remote.get("/dev/apps/race/builder").status_code == 403
-        upload = ("files", ("race/root_agent.yaml", b"name: race\n", "application/x-yaml"))
-        r = remote.post("/dev/apps/race/builder/save?tmp=true", files=[upload])
-        assert r.status_code == 403
-    assert (agents / "race" / "tmp").exists() is False
+def test_a_loopback_host_turns_on_adks_dns_rebinding_guard(agents: Path) -> None:
+    """``build_app`` passes ``host`` to ADK as its ``bind_host``, as ``adk web`` does:
+    on a loopback bind, a request addressed to another host is refused."""
+    with TestClient(build_app(str(agents), host="127.0.0.1")) as client:
+        assert client.get("/list-apps", headers={"host": "127.0.0.1:8000"}).status_code == 200
+        assert client.get("/list-apps", headers={"host": "evil.example"}).status_code == 403
 
 
 def test_a_loader_given_traces_traces_runs_through_adks_api(agents: Path) -> None:
     traces = MarkingTraces()
     loader = PetriAgentLoader(str(agents), traces=traces)
-    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as client:
+    with TestClient(build_app(str(agents), loader=loader)) as client:
         sid = client.post("/apps/race/users/u/sessions", json={}).json()["id"]
         client.post(
             "/run",
@@ -96,49 +78,6 @@ def test_a_loader_given_traces_traces_runs_through_adks_api(agents: Path) -> Non
 
 def test_a_loader_traces_nothing_by_default(agents: Path) -> None:
     assert PetriAgentLoader(str(agents)).traces is None
-
-
-def _turn(client: TestClient, app: str) -> list[object]:
-    sid = client.post(f"/apps/{app}/users/u/sessions", json={}).json()["id"]
-    events = client.post(
-        "/run",
-        json={
-            "appName": app,
-            "userId": "u",
-            "sessionId": sid,
-            "newMessage": {"role": "user", "parts": [{"text": "go"}]},
-        },
-    ).json()
-    return [e.get("output") for e in events if e.get("output") is not None]
-
-
-def test_after_save_chat_runs_the_saved_net(
-    served: tuple[TestClient, PetriAgentLoader], agents: Path
-) -> None:
-    """ADK keeps one runner per app; Save drops it, so chat and the graph panel agree."""
-    client, _ = served
-    assert "fast answer" in _turn(client, "race")
-    # The builder assistant changes the draft; the canvas saves (tmp, then real).
-    assert client.get("/dev/apps/race/builder?tmp=true").status_code == 200
-    draft = agents / "race" / "tmp" / "race"
-    code = (draft / "agent.py").read_text().replace('"fast answer"', '"NEW fast answer"')
-    (draft / "agent.py").write_text(code)
-    net = (draft / "root_agent.yaml").read_text().replace("Race_Commit", "Race_Answer")
-    (draft / "root_agent.yaml").write_text(net)
-    yaml_text = b"name: race\nagent_class: LlmAgent\n"
-    canvas = ("files", ("race/root_agent.yaml", yaml_text, "text/yaml"))
-    for tmp in ("?tmp=true", ""):
-        assert client.post(f"/dev/apps/race/builder/save{tmp}", files=[canvas]).json() is True
-    graph = client.get("/dev/apps/race/build_graph_image").json()[""]["dotSrc"]
-    assert "Race_Answer" in graph
-    outputs = _turn(client, "race")
-    assert "NEW fast answer" in outputs and "fast answer" not in outputs
-
-
-def test_the_server_finds_adks_runner_cache(agents: Path) -> None:
-    app = build_app(str(agents))
-    adk = server.adk_web_server(app)
-    assert adk is not None and isinstance(adk.runners_to_clean, set)
 
 
 def test_a_helper_package_is_not_an_app(agents: Path) -> None:
@@ -166,7 +105,7 @@ def test_a_nested_app_is_listed_and_served(agents: Path) -> None:
     group.mkdir()
     (agents / "race").rename(group / "race")
     loader = PetriAgentLoader(str(agents))
-    with TestClient(build_app(str(agents), loader=loader), client=LOCAL) as client:
+    with TestClient(build_app(str(agents), loader=loader)) as client:
         assert "group.race" in client.get("/list-apps").json()
         dot = client.get("/dev/apps/group.race/build_graph_image").json()[""]["dotSrc"]
         assert "Race_Commit" in dot
@@ -175,29 +114,9 @@ def test_a_nested_app_is_listed_and_served(agents: Path) -> None:
             node.registry.close_all()
 
 
-def test_a_missing_runner_cache_is_logged(
-    agents: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setattr(server, "adk_web_server", lambda app: None)
-    with caplog.at_level("WARNING", logger=server.__name__):
-        build_app(str(agents))
-    assert "AdkWebServer was not found" in caplog.text
-
-
-def test_serving_without_the_builder_guard_is_refused(
-    agents: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An ADK that moved its save route would let the canvas overwrite a net."""
-    from adk_libpetri.web import builder_guard
-
-    monkeypatch.setattr(builder_guard, "SAVE_PATH", "/dev/apps/{app_name}/moved")
-    with pytest.raises(RuntimeError, match="no /dev/apps/"):
-        build_app(str(agents))
-
-
 def test_the_public_surface_is_experimental() -> None:
     from adk_libpetri._experimental import is_experimental
-    from adk_libpetri.web import create_petri_builder_assistant, serve
+    from adk_libpetri.web import serve
 
-    for obj in (PetriAgentLoader, build_app, create_petri_builder_assistant, serve):
+    for obj in (PetriAgentLoader, build_app, serve):
         assert is_experimental(obj), obj

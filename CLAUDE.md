@@ -48,9 +48,10 @@ pytest tests/workflow                    # from_workflow: structure, proofs, par
 pytest -k foil                           # ADK-only foils (green-lock ADK behaviour)
 ruff check . && ruff format --check . && pyright
 PUBLICAPI_WRITE=1 pytest tests/test_public_api.py   # regenerate spec/api/python.txt
+adk-libpetri skill                       # print the coding-agent skill (net/SKILL.md)
 ```
 
-Python 3.11+, google-adk `~=2.13.0`, libpetri-py `>=8.0,<9`. `REQUIRE_Z3=1`
+Python 3.11+, google-adk `~=2.15.1`, libpetri-py `>=8.1,<9`. `REQUIRE_Z3=1`
 makes `tests/test_z3_gate.py` fail without the `z3` binary. Never name a test
 directory `docs/` (the TypeDoc rule in `.gitignore` would hide it).
 `tests/test_public_api.py` golden-checks the public API in
@@ -308,27 +309,24 @@ structural changes. Python-specific rules:
   Tests and fixture blueprints are in `tests/net/`.
 - **`web/`** (`adk-libpetri web`, ADR 0009) wraps ADK's dev server, never
   patches it or its JS. ADK's dev UI is the product: `PetriAgentLoader`
-  (traced nets, the Petri builder assistant under
-  `__adk_agent_builder_assistant`) plus routes inserted at
-  `app.router.routes[0]` that answer the UI's own requests for a net and call
-  ADK's handler for the rest: `graph_view` (graph panel DOT), `builder_guard`
-  (canvas saves cannot overwrite a net), `canvas_view` (the canvas card),
-  `proof_view` (counterexample SVGs). Load a builder draft
-  (`<app>/tmp/<app>`) only through `web/staging.staged` (a copy under a
-  package name of its own), never under its app's package name: that races
-  ADK's loader for `sys.modules`. Make drafts with `web/drafts.make_draft`
-  (it records the baseline `reconcile` needs so Save never puts back an
-  older app file). Every event under a net carries the net's name as its
-  author, so the drawing never titles or labels anything with it (ADK's
-  highlighting would light that node on every event). ADK's dev UI is the
-  only UI: do not add a page of our own. `net/report.py`, `net/graph.py`
-  and `net/counterexample.py` are the data the CLI, the routes and the
-  builder tools share; change output there, not in each caller. A UI change
-  needs a real-browser check (ADR 0009's re-check list).
+  (ADK's `NestedAgentLoader`, helper packages left out, nets traced when
+  given `traces`) plus one route inserted at `app.router.routes[0]`,
+  `graph_view` (the graph panel's DOT), that answers the UI's own request for
+  a net and calls ADK's handler for the rest. google-adk 2.15 removed ADK's
+  Visual Agent Builder, so there is no builder assistant, canvas guard or
+  counterexample route any more: nets are written in an editor or by a
+  coding agent with `adk-libpetri skill` (`net/SKILL.md`, Agent Skills
+  format, over the CLI's `check`/`verify`/`guide [section]`/`schema`). Every
+  event under a net carries the net's name as its author, so the drawing
+  never titles or labels anything with it (ADK's highlighting would light
+  that node on every event). ADK's dev UI is the only UI: do not add a page
+  of our own. `net/report.py` and `net/graph.py` are the data the CLI and
+  the graph route share; change output there, not in each caller. A UI
+  change needs a real-browser check (ADR 0009's re-check list).
 - **`_net_node.py`** (`NetNodeBase`) holds the turn and per-session runner
   logic both `PetriWorkflow` and `PetriNet` subclass; change it once.
 - **A compiled workflow is a `BaseNode`** (`PetriWorkflow`), not a
-  `BaseAgent`: ADK 2.13 runs a `BaseAgent` root on its legacy path, which has
+  `BaseAgent`: ADK 2.15 runs a `BaseAgent` root on its legacy path, which has
   no node `Context` to run child nodes with.
 - **Timed tests run on `lp.SteppedClock`** (Java's `ManualClock`):
   `.clock(c).deadline_tolerance(timedelta(0))` on the runner builder, then
