@@ -107,7 +107,11 @@ sed -i.bak -E "s/^__version__ = \"[^\"]+\"/__version__ = \"${VERSION}\"/" "$PY_D
 rm -f "$PY_DIR/src/adk_libpetri/__init__.py.bak"
 cd "$PROJECT_ROOT"
 git add python/src/adk_libpetri/__init__.py
-git diff --cached --quiet || git commit -m "release: python ${VERSION}"
+STAMPED=false
+if ! git diff --cached --quiet; then
+    git commit -m "release: python ${VERSION}"
+    STAMPED=true
+fi
 
 info "Building sdist and wheel"
 cd "$PY_DIR"
@@ -120,13 +124,17 @@ WHEEL="dist/adk_libpetri-${VERSION}-py3-none-any.whl"
 
 info "Testing the built wheel"
 if ! "$SCRIPT_DIR/test-python-wheel.sh" "$WHEEL"; then
-    info "Tests failed against the built wheel; version commit remains"
+    [[ "$STAMPED" == true ]] && info "Tests failed against the built wheel; the version commit remains"
     exit 1
 fi
 
 if [[ "$DRY_RUN" == true ]]; then
     info "Dry run complete. Artifacts in python/dist/."
-    info "Note: version commit created. Run 'git reset HEAD~1' to undo if needed."
+    if [[ "$STAMPED" == true ]]; then
+        info "Note: version commit created. Run 'git reset HEAD~1' to undo if needed."
+    else
+        info "__version__ was already ${VERSION}: no commit was made."
+    fi
     exit 0
 fi
 
