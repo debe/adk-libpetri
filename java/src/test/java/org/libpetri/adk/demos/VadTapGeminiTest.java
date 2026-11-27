@@ -76,9 +76,15 @@ class VadTapGeminiTest {
                 vadEdge(VoiceActivityType.Known.ACTIVITY_END),
                 LiveServerMessage.builder().serverContent(
                         LiveServerContent.builder().turnComplete(true).build()).build());
+        // ADK starts reading the transport on a commonPool thread and publishes
+        // to a hot PublishProcessor, so frames replayed before receive() is
+        // subscribed are dropped. A real socket delivers long after; the
+        // scripted one waits for the subscription instead.
+        var subscribed = new CompletableFuture<Void>();
         try (var client = Client.builder().apiKey("offline-test-key").build()) {
             var llm = new VadTapGemini("gemini-live-test", client,
-                    (model, config) -> CompletableFuture.completedFuture(new ScriptedTransport(frames)),
+                    (model, config) -> CompletableFuture.completedFuture(
+                            new ScriptedTransport(frames, subscribed)),
                     onSignal);
             var connection = llm.connect(LlmRequest.builder()
                     .model("gemini-live-test")
@@ -86,6 +92,7 @@ class VadTapGeminiTest {
                     .build());
             try {
                 var responses = connection.receive().test();
+                subscribed.complete(null);
                 responses.awaitDone(2, TimeUnit.SECONDS);
                 responses.assertNoErrors();
                 return responses.values().stream()
@@ -105,13 +112,15 @@ class VadTapGeminiTest {
                 .build();
     }
 
-    /** Replays fixed frames on receive, then ends the stream. */
-    private record ScriptedTransport(List<LiveServerMessage> frames) implements GeminiLiveTransport {
+    /** Replays fixed frames once {@code subscribed} completes, then ends the stream. */
+    private record ScriptedTransport(List<LiveServerMessage> frames, CompletableFuture<Void> subscribed)
+            implements GeminiLiveTransport {
         @Override
         public CompletableFuture<Void> receive(Consumer<LiveServerMessage> onMessage, Runnable onStreamEnd) {
-            frames.forEach(onMessage);
-            onStreamEnd.run();
-            return CompletableFuture.completedFuture(null);
+            return subscribed.thenRun(() -> {
+                frames.forEach(onMessage);
+                onStreamEnd.run();
+            });
         }
 
         @Override public CompletableFuture<Void> sendClientContent(LiveSendClientContentParameters p) {
