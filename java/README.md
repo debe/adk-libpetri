@@ -14,17 +14,17 @@ There is no ADK fork.
 ./mvnw test -Dtest="MultiAgentDemoTest"          # single class
 ```
 
-Java 25, Maven 3.9.x via wrapper.
+Java 25, Maven 3.10.x via wrapper.
 
 ## Dependencies
 
 | | Version |
 |---|---|
-| `org.libpetri:libpetri`              | 10.0.0 (Maven Central) |
-| `com.google.adk:google-adk`          | 1.13.0 (Maven Central) |
-| `com.google.genai:google-genai`      | 1.58.0 (transitive via google-adk) |
+| `org.libpetri:libpetri`              | 11.1.0 (Maven Central) |
+| `com.google.adk:google-adk`          | 1.15.0 (Maven Central) |
+| `com.google.genai:google-genai`      | 1.77.0 (transitive via google-adk) |
 | `io.reactivex.rxjava3:rxjava`        | 3.1.12 |
-| `io.opentelemetry:opentelemetry-api` | 1.51.0 (transitive via google-adk and libpetri); tests pin `opentelemetry-sdk-testing` 1.65.0 |
+| `io.opentelemetry:opentelemetry-api` | 1.51.0 (transitive via google-adk and libpetri); tests pin `opentelemetry-sdk-testing` 1.68.0 |
 
 Since libpetri 4.0, SMT verification runs an external `z3` binary
 (4.8 or later, on `PATH` or named by `LIBPETRI_Z3`); there are no JNI
@@ -37,7 +37,7 @@ verification suite skip silently.
 
 ### Protobuf version floor
 
-ADK 1.13.0's transitives (the `com.google.cloud` clients such as
+ADK 1.15.0's transitives (the `com.google.cloud` clients such as
 `google-cloud-aiplatform` and `google-cloud-storage`, and
 `com.google.api.grpc:proto-google-common-protos`) ship protobuf gencode
 compiled against 4.33.x. The protobuf runtime contract is "runtime at
@@ -354,7 +354,7 @@ application code.
 
 The VAD and barge-in signals (`LiveServerContent.interrupted()`,
 `LiveServerMessage.voiceActivity()`) are public on genai, but ADK Java
-1.13.0's `GeminiLlmConnection` maps a VAD-only frame to an "Unknown server
+1.15.0's `GeminiLlmConnection` maps a VAD-only frame to an "Unknown server
 message" error, so the speech-activity edges never reach a `receive()`
 consumer
 ([`VoiceVadEdgeAdkFoilTest`](src/test/java/org/libpetri/adk/demos/VoiceVadEdgeAdkFoilTest.java)).
@@ -383,13 +383,13 @@ fully-qualified names are a fork by classpath shadowing and break
 [design commitment 4](../README.md#design-commitments). Implement
 `LiveConnection` and call `bridge(...)` instead.
 
-## ADK Java 1.13.0 behaviour the argument relies on
+## ADK Java 1.15.0 behaviour the argument relies on
 
 The root README's ADK-side paragraphs rest on these facts about the
-`google-adk` 1.13.0 bytecode. No test pins them; re-check them with
+`google-adk` 1.15.0 bytecode. No test pins them; re-check them with
 `javap -c -p` on the new jar at every ADK bump, as part of the procedure
 in [ADR 0002](../docs/adr/0002-adk-version-compat.md#next-bump-re-check-procedure),
-and update the "ADK 1.13.0" mentions with them.
+and update the "ADK 1.15.0" mentions with them.
 
 - **`ParallelAgent.runAsyncImpl` is
   `Flowable.merge(branches).takeUntil(escalate)`.** The first branch to
@@ -417,8 +417,9 @@ and update the "ADK 1.13.0" mentions with them.
   subscription ([N2](../README.md#n2-not-yet-guaranteed-variable-n-fan-out)).
 
 [ADR 0004](../docs/adr/0004-libpetri-8-and-adk-1.10.md) records the move
-to ADK 1.10, and [ADR 0011](../docs/adr/0011-adk-java-1.13.md) the move to
-1.13.
+to ADK 1.10, [ADR 0011](../docs/adr/0011-adk-java-1.13.md) the move to
+1.13, and [ADR 0012](../docs/adr/0012-adk-java-1.15-and-libpetri-11.md) the
+move to 1.15.
 
 ## Source layout
 

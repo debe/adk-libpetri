@@ -118,11 +118,19 @@ existed.
 - **`ReadmeDiagramsTest` is tracked again.** A `**/docs/` rule in
   `.gitignore` hid its package from git, so CI never ran the diagram golden
   check.
-- **Dependencies**: libpetri `3.0.1` -> `10.0.0` and google-adk `1.8.0` ->
-  `1.13.0`. libpetri 9.0 and 10.0 needed no code change: their breaks
-  (`NameColouredEncoder.buildPlan`, two new `SmtProperty` records) touch
-  nothing here, and every proof keeps its verdict. ADK 1.13 moves genai to
-  `1.77.0` transitively; see [ADR 0011](docs/adr/0011-adk-java-1.13.md).
+- **Dependencies**: libpetri `3.0.1` -> `11.1.0` and google-adk `1.8.0` ->
+  `1.15.0`. libpetri 9.0 to 11.1 needed no code change: their breaks
+  (`NameColouredEncoder.buildPlan`, two new `SmtProperty` records, 11.0's
+  build-time output-spec checks and `EncodedScripts.witness`) touch nothing
+  here, and every proof keeps its verdict. ADK 1.13 moves genai to
+  `1.77.0` transitively; ADK 1.15 keeps it. See
+  [ADR 0011](docs/adr/0011-adk-java-1.13.md) and
+  [ADR 0012](docs/adr/0012-adk-java-1.15-and-libpetri-11.md).
+- **A model that throws reaches `OnModelError`.** `LlmStepSubnet`'s
+  `LlmCall` defers `generateContent`, so a `BaseLlm` that throws instead of
+  returning `Flowable.error` takes the model-error path (and its recovery
+  callback) rather than failing `LlmCall`. ADK 1.15's `BaseLlmFlow` defers
+  the call for the same reason.
 - **Live sends keep `partial`.** `BidiPetriAgent.bridge` forwards a
   `LiveRequest`'s `partial` flag (ADK 1.13) to
   `sendContent(content, partial)`, so a partial send leaves the user's turn

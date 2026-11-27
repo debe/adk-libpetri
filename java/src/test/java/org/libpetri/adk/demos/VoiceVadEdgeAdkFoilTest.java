@@ -8,6 +8,7 @@ import com.google.genai.types.LiveServerMessage;
 import com.google.genai.types.VoiceActivity;
 import com.google.genai.types.VoiceActivityType;
 import io.reactivex.rxjava3.core.Observable;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -87,13 +88,23 @@ class VoiceVadEdgeAdkFoilTest {
         assertThat(speechStart.serverContent()).isEmpty();
     }
 
-    /** ADK's real LiveServerMessage -> LlmResponse mapping, reached via reflection. */
+    /**
+     * ADK's real LiveServerMessage -> LlmResponse mapping, reached via reflection.
+     * Since ADK 1.15 it takes the connection's text buffer
+     * ({@code GeminiLlmConnection.PendingText}) as a second argument; a fresh
+     * one is what a connection holds before its first message.
+     */
     @SuppressWarnings("unchecked")
     private static List<LlmResponse> adkConvert(LiveServerMessage msg) throws Exception {
-        Method m = GeminiLlmConnection.class
-                .getDeclaredMethod("convertToServerResponse", LiveServerMessage.class);
+        Class<?> pendingTextClass =
+                Class.forName(GeminiLlmConnection.class.getName() + "$PendingText");
+        Constructor<?> newPendingText = pendingTextClass.getDeclaredConstructor();
+        newPendingText.setAccessible(true);
+        Method m = GeminiLlmConnection.class.getDeclaredMethod(
+                "convertToServerResponse", LiveServerMessage.class, pendingTextClass);
         m.setAccessible(true);
-        Observable<LlmResponse> out = (Observable<LlmResponse>) m.invoke(null, msg);
+        Observable<LlmResponse> out =
+                (Observable<LlmResponse>) m.invoke(null, msg, newPendingText.newInstance());
         return out.toList().blockingGet();
     }
 

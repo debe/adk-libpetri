@@ -32,7 +32,7 @@ cd java
 ./mvnw test -Dtest="*Streaming*"                # Wildcard
 ```
 
-Java 25 (no preview features needed). Maven 3.9.x via wrapper. SMT
+Java 25 (no preview features needed). Maven 3.10.x via wrapper. SMT
 verification (libpetri 4.0+) runs an external `z3` binary (4.8+, on
 `PATH` or via `LIBPETRI_Z3`). Tests requiring it use
 `@EnabledIf("z3Available")` (delegating to `SmtVerifier.z3Available()`)
@@ -98,12 +98,12 @@ OS, not the GitHub theme.
 Follow the re-check procedure in
 [ADR 0002](docs/adr/0002-adk-version-compat.md). Also re-check, with
 `javap -c -p` on the new `google-adk` jar, the bytecode claims in
-[java/README.md's "ADK Java 1.13.0 behaviour the argument relies on"](java/README.md#adk-java-1130-behaviour-the-argument-relies-on),
+[java/README.md's "ADK Java 1.15.0 behaviour the argument relies on"](java/README.md#adk-java-1150-behaviour-the-argument-relies-on),
 which no test pins: `ParallelAgent.runAsyncImpl` is
 `Flowable.merge(...).takeUntil(escalate)`; `InvocationContext.endInvocation`
 is a non-volatile field read only in `BaseAgent` and `BaseLlmFlow`; and
 `Functions` uses `concatMapEager`/`concatMapMaybe` and never reads
-`endInvocation`. Update the README's "ADK 1.13.0" mentions with them.
+`endInvocation`. Update the README's "ADK 1.15.0" mentions with them.
 
 ## Architecture
 

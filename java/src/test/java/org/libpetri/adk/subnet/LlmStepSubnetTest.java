@@ -164,6 +164,32 @@ class LlmStepSubnetTest {
     }
 
     @Test
+    void llm_that_throws_synchronously_takes_the_model_error_path() {
+        // A BaseLlm may throw from generateContent itself instead of returning
+        // Flowable.error. That must reach OnModelError like any other model
+        // error, not fail LlmCall (ADK 1.15's BaseLlmFlow defers the call for
+        // the same reason).
+        var baseLlm = new FakeBaseLlm(req -> { throw new IllegalStateException("no client"); });
+        var fallback = textResponse("sorry, try again");
+        var sawError = new AtomicReference<LlmStepSubnet.LlmError>();
+        var callbacks = LlmStepSubnet.Callbacks.builder()
+                .onModelError(err -> { sawError.set(err); return fallback; })
+                .build();
+
+        var fixture = run(baseLlm, callbacks, simpleRequest("q"));
+
+        assertThat(fixture.responses()).containsExactly(fallback);
+        assertThat(sawError.get().message()).isEqualTo("no client");
+        assertThat(sawError.get().exceptionType()).isEqualTo("java.lang.IllegalStateException");
+        assertThat(fixture.firedTransitionNames())
+                .containsExactly(
+                        LlmStepSubnet.Transitions.BEFORE_MODEL,
+                        LlmStepSubnet.Transitions.LLM_CALL,
+                        LlmStepSubnet.Transitions.ON_MODEL_ERROR)
+                .inOrder();
+    }
+
+    @Test
     void llm_error_without_recovery_callback_fails_on_model_error_transition() {
         var baseLlm = new FakeBaseLlm(req -> Flowable.error(new RuntimeException("network down")));
 

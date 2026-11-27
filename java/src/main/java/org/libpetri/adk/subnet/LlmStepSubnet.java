@@ -3,6 +3,7 @@ package org.libpetri.adk.subnet;
 import com.google.adk.models.BaseLlm;
 import com.google.adk.models.LlmRequest;
 import com.google.adk.models.LlmResponse;
+import io.reactivex.rxjava3.core.Flowable;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -230,7 +231,9 @@ public final class LlmStepSubnet {
         return ctx -> {
             var request = ctx.input(Places.READY_TO_CALL);
             CompletableFuture<Void> done = new CompletableFuture<>();
-            baseLlm.generateContent(request, /* stream */ false)
+            // Deferred so a BaseLlm that throws from generateContent itself
+            // reaches LLM_ERROR like one that returns Flowable.error.
+            Flowable.defer(() -> baseLlm.generateContent(request, /* stream */ false))
                     .firstOrError()
                     .subscribe(
                             response -> {

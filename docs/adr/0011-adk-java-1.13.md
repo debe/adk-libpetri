@@ -24,7 +24,7 @@ proofs included), and so do the foils.
 - **`ParallelAgent`'s escalate predicate** (1.11) now also requires a direct
   sub-agent as author: a nested agent's escalate no longer stops the
   siblings. Still `Flowable.merge(...).takeUntil(...)`, so the G4 argument
-  holds; [java/README.md](../../java/README.md#adk-java-1130-behaviour-the-argument-relies-on)
+  holds; [java/README.md](../../java/README.md#adk-java-1150-behaviour-the-argument-relies-on)
   is updated.
 - **`BaseAgent.run` became `runWithCallbacks`**. It still reads the
   non-volatile `endInvocation`, with `BaseLlmFlow.runOneStep`/`runLive`. The
