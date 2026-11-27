@@ -24,9 +24,9 @@ no publish-on-tag workflow and no token in GitHub secrets.
 Prerequisites:
   - python3 with the 'build' and 'twine' modules
   - PyPI credentials: a [pypi] section in ~/.pypirc, or TWINE_USERNAME and
-    TWINE_PASSWORD. The first upload of the project needs an account-wide
-    token; after it, switch to a token scoped to adk-libpetri.
-  - gh CLI authenticated (for the GitHub release)
+    TWINE_PASSWORD
+  - gh CLI authenticated, with an active account that can create releases
+    here, and git able to push to origin (both checked before the upload)
   - z3 on PATH (the suite's Z3 gate runs with REQUIRE_Z3=1)
 
 Arguments:

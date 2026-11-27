@@ -382,9 +382,7 @@ and not behind `origin/main`, `build` and `twine` importable by `python3`,
 `TWINE_USERNAME`/`TWINE_PASSWORD`), `gh` authenticated, git able to push to
 `origin` and the active `gh` account allowed to create releases (both proven
 before the upload, which cannot be undone), a CHANGELOG section for the
-version, and a tag that does not yet exist. The project's first
-upload needs an account-wide PyPI token; switch to a token scoped to
-`adk-libpetri` after it.
+version, and a tag that does not yet exist.
 
 **Versioning is 0.x.** A minor may break API. The turn-based path is the
 settled part; `@Experimental` surfaces (SSE, BIDI/live) may change in any
