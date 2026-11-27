@@ -509,7 +509,47 @@
             "emit"
           ],
           "description": "move (the default) or emit. Not together with node."
+        },
+        "match": {
+          "type": "object",
+          "minProperties": 2,
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "A ν-join: the transition fires only on tokens of one name across these input places. Maps each input place to where its token holds the name: a str field path (turn, job.id) of a dataclass or pydantic type, or self for a str place (the token is the name; a self input of count one is left out of the action's value when another matched input carries the name, else the first one stays in). Only input (in:) places, at least two."
+        },
+        "relay": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "With match: output places whose token carries the joined name, each mapped to where it holds it (a str field path, or self). The action puts it there (a move forwards it); the firing fails if a token there carries another name or none."
+        },
+        "mint": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          ],
+          "description": "Output places that get a fresh name, one per firing, the same in each: place (a str place: the token is the name) or place.field (a str field of the token the action puts there)."
         }
+      },
+      "dependentRequired": {
+        "relay": [
+          "match"
+        ]
       }
     },
     "port": {

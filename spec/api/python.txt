@@ -143,7 +143,7 @@ class TransferTarget(agent_name: str) -> None
 USER_IN: <Place userIn: Content>
 
 [adk_libpetri.net]
-class ActionPlan(transition: str, kind: ActionKind, takes: tuple[In, ...], reads: tuple[Place[Any], ...], branches: tuple[Branch, ...], routes: Mapping[str, int] = <factory>, default: int | None = None, error: int | None = None, node: Any = None, author: str = '') -> None  @experimental
+class ActionPlan(transition: str, kind: ActionKind, takes: tuple[In, ...], reads: tuple[Place[Any], ...], branches: tuple[Branch, ...], routes: Mapping[str, int] = <factory>, default: int | None = None, error: int | None = None, node: Any = None, author: str = '', witnesses: frozenset[str] = frozenset(), mints: tuple[tuple[str, tuple[str, ...]], ...] = ()) -> None  @experimental
     def action(self, scope: NetScope, prefix: str = '') -> Action
 BLUEPRINT_VERSION: 1
 class Blueprint(name: str, spec: NetSpec, seeds: Mapping[str, tuple[Any, ...]], env: tuple[str, ...], plans: Mapping[str, ActionPlan], mounts: tuple[Mount, ...] = (), proof: ProofPlan = <factory>, source: str | None = None, asynchronous: tuple[str, ...] = (), rest: tuple[str, ...] = (), node_transitions: tuple[str, ...] = (), release: str | None = None) -> None  @experimental

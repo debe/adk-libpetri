@@ -44,8 +44,20 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from dataclasses import dataclass, field, replace
-from typing import Any, Literal, NoReturn, TypeVar, cast
+from dataclasses import dataclass, field, is_dataclass, replace
+from dataclasses import fields as dataclass_fields
+from types import UnionType
+from typing import (
+    Any,
+    Literal,
+    NoReturn,
+    TypeVar,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from google.adk.events.event import Event
 from google.adk.models.llm_request import LlmRequest
@@ -549,6 +561,14 @@ class ActionPlan:
     error: int | None = None
     node: Any = None
     author: str = ""
+    witnesses: frozenset[str] = frozenset()
+    """Inputs of count one a ``match:`` keys by ``self``, left out of the action's
+    value: their token is just the join's name, which another matched input
+    carries. When no other matched input does, the first of them stays in, so
+    the value holds the name."""
+    mints: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    """``mint:``: per output place, the field path the firing's fresh name goes
+    into (``()``: the token is the name)."""
 
     def action(self, scope: NetScope, prefix: str = "") -> Action:
         """The action, for a blueprint mounted at ``prefix`` (``""``: the root)."""
@@ -738,7 +758,22 @@ TOP_KEYS = (
 )
 BLUEPRINT_VERSION = 1
 """The blueprint format version this release reads (``blueprint_version:``, default 1)."""
-_TRANSITION_KEYS = ("in", "out", "read", "inhibit", "reset", "priority", "timing", "node", "action")
+_TRANSITION_KEYS = (
+    "in",
+    "out",
+    "read",
+    "inhibit",
+    "reset",
+    "priority",
+    "timing",
+    "node",
+    "action",
+    "match",
+    "relay",
+    "mint",
+)
+_SELF = "self"
+"""A ``match:``/``relay:`` key or a ``mint:`` target that is the token itself (a ``str`` place)."""
 _STOCK = ("llm_agent", "llm_step", "tool_dispatch", "router")
 
 
@@ -1316,9 +1351,358 @@ def _transition(
                 "mark a place of your own next to eventOut, {and: [eventOut, answered]}, "
                 "reset it when the turn starts, and test that",
             )
-    spec = TransitionSpec(tname, inputs, output, reads, inhibitors, resets, priority, timing)
-    plan = _plan(path, spec, labels, d, nodes, net)
+    join = _match(path, d, inputs, reads, output)
+    spec = TransitionSpec(
+        tname, inputs, output, reads, inhibitors, resets, priority, timing, join.match
+    )
+    plan = _plan(path, spec, labels, d, nodes, net, join)
     return spec, plan
+
+
+# -- names: match, relay, mint ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Unresolved:
+    """A field annotation that does not resolve at run time (a ``TYPE_CHECKING`` import)."""
+
+    annotation: str
+    error: str
+
+
+def _fields_of(t: Any) -> dict[str, Any] | None:
+    """A token type's fields and their types (a dataclass's or a pydantic model's), or ``None``."""
+    from pydantic import BaseModel
+
+    if isinstance(t, type) and is_dataclass(t):
+        try:
+            hints = get_type_hints(t)
+        except Exception:  # one annotation does not resolve: resolve each field on its own
+            return {f.name: _field_hint(t, f.name, f.type) for f in dataclass_fields(t)}
+        return {f.name: hints.get(f.name, f.type) for f in dataclass_fields(t)}
+    if isinstance(t, type) and issubclass(t, BaseModel):
+        return {n: f.annotation for n, f in t.model_fields.items()}
+    return None
+
+
+def _field_hint(t: type, name: str, hint: Any) -> Any:
+    """Field ``name``'s type, resolved in the module of the class that annotates it."""
+    if not isinstance(hint, str):
+        return hint
+    owner = next((c for c in t.__mro__ if name in inspect.get_annotations(c)), t)
+    probe = type(owner.__name__, (), {"__annotations__": {name: hint}})
+    probe.__module__ = owner.__module__
+    try:
+        return get_type_hints(probe, localns=dict(vars(owner)))[name]
+    except Exception as err:
+        return _Unresolved(hint, f"{type(err).__name__}: {err}")
+
+
+def _is_str(hint: Any, mint: bool = False) -> bool:
+    """A name's type: ``str``, a str subclass (a ``StrEnum``), a ``Literal`` of strs, a
+    ``NewType`` of one, or one of these ``| None`` (a ``None`` has no name: it never joins).
+
+    ``mint``: a type the plain ``str`` of ``ctx.fresh_name()`` is, ``str`` or a
+    ``NewType`` of it.
+    """
+    if get_origin(hint) in (Union, UnionType):
+        args = [a for a in get_args(hint) if a is not type(None)]
+        return bool(args) and all(_is_str(a, mint) for a in args)
+    supertype = getattr(hint, "__supertype__", None)
+    if supertype is not None:
+        return _is_str(supertype, mint)
+    if mint:
+        return hint is str
+    if get_origin(hint) is Literal:
+        return all(isinstance(a, str) for a in get_args(hint))
+    return isinstance(hint, type) and issubclass(hint, str)
+
+
+def _not_a_mint(hint: Any) -> str | None:
+    """Why a mint cannot write a plain ``str`` into a field or place of type ``hint``."""
+    if _is_str(hint, mint=True):
+        return None
+    return f"a mint writes the plain str of ctx.fresh_name(), which is no {_type_label(hint)}"
+
+
+def _field_path(
+    path: str, p: Place[Any], raw: Any, what: str, mint: bool = False
+) -> tuple[str, ...]:
+    """Where a token of ``p`` holds its name: a ``str`` field path, ``()`` for ``self``.
+
+    ``mint``: the path a mint writes, so each field on it must be one a copy can set.
+    """
+    if p.is_unit:
+        raise BlueprintError(
+            path,
+            f"{what} {p.name!r} is a unit place: its tokens carry no name",
+            "make it a str place, or give it a type with a str field",
+        )
+    if not isinstance(raw, str) or not raw:
+        raise BlueprintError(path, f"expected a field path or {_SELF!r}, got {raw!r}")
+    if raw == _SELF:
+        if not _is_str(p.token_type):
+            raise BlueprintError(
+                path,
+                f"place {p.name!r} takes {p.type_name}, so its token itself is no name",
+                f"name a str field of {p.type_name} (field or field.sub), "
+                f"or make {p.name} a str place",
+            )
+        if mint and (why := _not_a_mint(p.token_type)):
+            raise BlueprintError(
+                path,
+                f"place {p.name!r} takes {p.type_name}: {why}",
+                f"make {p.name} a str place, or mint into a str field of its token",
+            )
+        return ()
+    t: Any = p.token_type
+    parts = tuple(raw.split("."))
+    for i, part in enumerate(parts):
+        at = ".".join((p.name, *parts[:i]))
+        if (inner := _unless_none(t)) is not t:
+            if mint:
+                raise BlueprintError(
+                    path,
+                    f"{at} is {_type_label(t)}: a mint cannot write into a None",
+                    "make the field required, or mint into another one",
+                )
+            t = inner  # a None on the way has no name: that token never joins (NU-020)
+        fields = _fields_of(t)
+        if fields is None:
+            raise BlueprintError(
+                path,
+                f"{at} is {_type_label(t)}, which has no fields",
+                f"name a field of a dataclass or pydantic type, or {_SELF} on a str place",
+            )
+        if part not in fields:
+            raise BlueprintError(
+                path,
+                f"{_type_label(t)} has no field {part!r}",
+                _suggest(part, fields) or f"its fields are {sorted(fields)}",
+            )
+        owner, t = t, fields[part]
+        if isinstance(t, _Unresolved):
+            raise BlueprintError(
+                path,
+                f"field {part!r} of {_type_label(owner)} is annotated {t.annotation!r}, "
+                f"which does not resolve ({t.error})",
+                "import the type at module level, not under TYPE_CHECKING",
+            )
+        if mint and isinstance(owner, type) and is_dataclass(owner):
+            _check_replaceable(path, owner, part)
+    if not _is_str(t):
+        raise BlueprintError(
+            path,
+            f"field {raw!r} of {p.type_name} is {_type_label(t)}, not str",
+            "a name is a str: name a str field",
+        )
+    if mint and (why := _not_a_mint(t)):
+        raise BlueprintError(
+            path,
+            f"field {raw!r} of {p.type_name} is {_type_label(t)}: {why}",
+            "mint into a str field (or a NewType of str)",
+        )
+    return parts
+
+
+def _unless_none(t: Any) -> Any:
+    """``X`` for ``X | None``, else ``t``."""
+    if get_origin(t) in (Union, UnionType):
+        args = [a for a in get_args(t) if a is not type(None)]
+        if len(args) == 1:
+            return args[0]
+    return t
+
+
+def _check_replaceable(path: str, owner: type, part: str) -> None:
+    """A mint copies ``owner`` with ``dataclasses.replace``, which must set ``part``
+    and can pass no InitVar: one without a default fails every copy."""
+    fs = {f.name: f for f in dataclass_fields(owner)}
+    if not fs[part].init:
+        raise BlueprintError(
+            path,
+            f"field {part!r} of {_type_label(owner)} is init=False, so a mint cannot set it",
+            "mint into a field the constructor takes, or drop its init=False",
+        )
+    for n, prm in inspect.signature(owner).parameters.items():
+        if n not in fs and prm.default is prm.empty:
+            raise BlueprintError(
+                path,
+                f"{_type_label(owner)} takes InitVar {n!r} with no default, so a mint "
+                "cannot copy it",
+                "give the InitVar a default, or mint into a type without one",
+            )
+
+
+def _projection(fields: tuple[str, ...]) -> Callable[[Any], Any]:
+    """A token's name: itself, or the value at ``fields`` (anything not a str has no name)."""
+
+    def key(v: Any) -> Any:
+        for f in fields:
+            v = getattr(v, f, None)
+        return v
+
+    return key
+
+
+@dataclass(frozen=True)
+class _Join:
+    """A transition's ``match:`` and ``relay:``, with the field paths :func:`_plan` checks."""
+
+    match: Match | None = None
+    keys: Mapping[str, tuple[str, ...]] = field(default_factory=dict[str, tuple[str, ...]])
+    """Per matched input, where its token holds the name (``()``: ``self``)."""
+    relays: Mapping[str, tuple[str, ...]] = field(default_factory=dict[str, tuple[str, ...]])
+    """Per relay target, where its token holds the joined name."""
+    witnesses: frozenset[str] = frozenset()
+    """See :attr:`ActionPlan.witnesses`."""
+
+
+def _timeout_places(o: Out | None) -> set[str]:
+    """The places a timeout of ``o`` marks (with a unit token: it has no name)."""
+    match o:
+        case Timeout(_, c):
+            return {p.name for p in _places_of(c)}
+        case And(cs) | Xor(cs):
+            return {p for c in cs for p in _timeout_places(c)}
+        case _:
+            return set()
+
+
+def _match(
+    path: str,
+    d: Mapping[str, Any],
+    inputs: tuple[In, ...],
+    reads: tuple[Place[Any], ...],
+    output: Out | None,
+) -> _Join:
+    """``match:`` and ``relay:``, and the inputs left out of the action's value (witnesses)."""
+    if "match" not in d:
+        if "relay" in d:
+            raise BlueprintError(
+                f"{path}.relay",
+                "a relay declares where an output carries the name a match joined, and this "
+                "transition has no match",
+                "add match: {place: field, ...} over its inputs, or drop relay:",
+            )
+        return _Join()
+    mpath = f"{path}.match"
+    raw = d["match"]
+    if not isinstance(raw, Mapping) or len(cast(Mapping[Any, Any], raw)) < 2:
+        raise BlueprintError(
+            mpath,
+            f"a match keys at least two input places, each by where its token holds the "
+            f"name, got {raw!r}",
+            "write match: {work: turn, waiting: self}",
+        )
+    by_name = {i.place.name: i for i in inputs}
+    keys: list[tuple[Place[Any], Callable[[Any], Any]]] = []
+    paths: dict[str, tuple[str, ...]] = {}
+    for pname, f in cast(Mapping[Any, Any], raw).items():
+        where = f"{mpath}.{pname}"
+        arc = by_name.get(pname)
+        if arc is None:
+            if any(p.name == pname for p in reads):
+                hint = (
+                    "libpetri joins only tokens the transition consumes (NU-020): "
+                    "make it an in: arc"
+                )
+            else:
+                hint = _suggest(str(pname), by_name) or f"key its inputs {sorted(by_name)}"
+            raise BlueprintError(where, f"{pname!r} is not an input place of the transition", hint)
+        paths[arc.place.name] = _field_path(where, arc.place, f, "match key")
+        keys.append((arc.place, _projection(paths[arc.place.name])))
+    # A self input of count one holds just the name. Another matched input carries
+    # it, so the action's value leaves it out; with none, the first one stays.
+    selves = [i.place.name for i in inputs if paths.get(i.place.name) == () and i.kind == "one"]
+    witnesses = selves if any(n not in selves for n in paths) else selves[1:]
+    relay: list[tuple[Place[Any], Callable[[Any], Any]]] = []
+    relays: dict[str, tuple[str, ...]] = {}
+    if "relay" in d:
+        rpath = f"{path}.relay"
+        rraw = d["relay"]
+        if not isinstance(rraw, Mapping) or not rraw:
+            raise BlueprintError(
+                rpath,
+                f"a relay maps output places to where their token holds the joined name, "
+                f"got {rraw!r}",
+                "write relay: {refund: turn}",
+            )
+        outs = {p.name: p for p in (_places_of(output) if output is not None else [])}
+        timed = _timeout_places(output)
+        for pname, f in cast(Mapping[Any, Any], rraw).items():
+            where = f"{rpath}.{pname}"
+            p = outs.get(pname)
+            if p is None:
+                raise BlueprintError(
+                    where,
+                    f"{pname!r} is not an output place of the transition",
+                    _suggest(str(pname), outs) or f"relay to one of its outputs {sorted(outs)}",
+                )
+            if pname in timed:
+                raise BlueprintError(
+                    where,
+                    f"the transition's timeout marks {pname!r} with a token that has no name, "
+                    "so every firing that times out fails the relay (NU-054)",
+                    "relay to a place only the action marks",
+                )
+            relays[pname] = _field_path(where, p, f, "relay target")
+            relay.append((p, _projection(relays[pname])))
+    return _Join(Match(tuple(keys), tuple(relay)), paths, relays, frozenset(witnesses))
+
+
+def _mints(
+    path: str,
+    raw: Any,
+    branches: Sequence[Branch],
+    output: Out | None,
+    relays: Mapping[str, tuple[str, ...]],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """``mint:``: ``place`` (a str place: the token is the name) or ``place.field``."""
+    items = [raw] if isinstance(raw, str) else raw
+    if not isinstance(items, list) or not items or not all(isinstance(x, str) for x in items):
+        raise BlueprintError(
+            path,
+            f"mint lists the output places a fresh name goes into, got {raw!r}",
+            "write mint: [waiting, work.turn]",
+        )
+    marked = {p.name: p for b in branches for p in b.places}
+    outs = {p.name for p in (_places_of(output) if output is not None else [])}
+    mints: dict[str, tuple[str, ...]] = {}
+    for i, item in enumerate(cast(list[str], items)):
+        where = f"{path}[{i}]"
+        pname, sep, rest = (item, "", "") if item in marked else item.partition(".")
+        if sep and rest in ("", _SELF):
+            raise BlueprintError(
+                where,
+                f"expected place or place.field, got {item!r}",
+                f"write mint: [{pname}] to mint the token itself",
+            )
+        p = marked.get(pname)
+        if p is None:
+            if pname in outs:
+                raise BlueprintError(
+                    where,
+                    f"only the transition's timeout marks {pname!r}, so its action puts no "
+                    "name there",
+                    "mint into a place the action marks",
+                )
+            raise BlueprintError(
+                where,
+                f"{pname!r} is not an output place of the transition",
+                _suggest(pname, marked) or f"mint into one of its outputs {sorted(marked)}",
+            )
+        if pname in mints:
+            raise BlueprintError(where, f"{pname!r} is minted into twice", "list it once")
+        mints[pname] = _field_path(where, p, rest or _SELF, "mint target", mint=True)
+        if relays.get(pname) == mints[pname]:
+            raise BlueprintError(
+                where,
+                f"{item!r} is a relay target: it carries the name the match joined, and a "
+                "mint writes a fresh one there, so every firing fails the relay (NU-054)",
+                "drop it from mint: or from relay:",
+            )
+    return tuple(mints.items())
 
 
 def _plan(
@@ -1328,6 +1712,7 @@ def _plan(
     d: Mapping[str, Any],
     nodes: Mapping[str, Any],
     net: str,
+    join: _Join,
 ) -> ActionPlan:
     if "node" in d and "action" in d:
         raise BlueprintError(
@@ -1370,7 +1755,12 @@ def _plan(
         else:
             branches.append(Branch(None, _branch_places(out_path, spec.output)))
 
-    coloured_in = [i for i in spec.inputs if not i.place.is_unit]
+    mints = (
+        _mints(f"{path}.mint", d["mint"], branches, spec.output, join.relays) if "mint" in d else ()
+    )
+    named = {p for p, fields in mints if not fields}
+    witnesses = join.witnesses
+    coloured_in = [i for i in spec.inputs if not i.place.is_unit and i.place.name not in witnesses]
     coloured_reads = tuple(p for p in spec.reads if not p.is_unit)
     if kind in ("move", "emit"):
         if len(branches) > 1:
@@ -1381,7 +1771,8 @@ def _plan(
                 "per branch",
             )
         outs = branches[0].places if branches else ()
-        coloured_out = [p for p in outs if not p.is_unit]
+        # A minted self place gets the fresh name, not the forwarded value.
+        coloured_out = [p for p in outs if not p.is_unit and p.name not in named]
         if (kind == "emit" or coloured_out) and (
             len(coloured_in) != 1 or coloured_in[0].kind != "one"
         ):
@@ -1406,7 +1797,17 @@ def _plan(
                     f"{getattr(want, '__name__', want)} there",
                     "give the places one type, or run a node to convert",
                 )
-        return ActionPlan(spec.name, kind, spec.inputs, (), tuple(branches), author=net)
+        _check_forwarded_relays(path, kind, coloured_in, join)
+        return ActionPlan(
+            spec.name,
+            kind,
+            spec.inputs,
+            (),
+            tuple(branches),
+            author=net,
+            witnesses=witnesses,
+            mints=mints,
+        )
 
     # A node: its route picks a labelled branch; a failure takes `error`.
     routes: dict[str, int] = {}
@@ -1422,6 +1823,21 @@ def _plan(
                         f"place {p.name!r} takes {p.type_name}; the error branch carries a "
                         "NodeError",
                         f"declare {p.name} with type: NodeError, or make it a unit place",
+                    )
+                if p.name in join.relays:
+                    raise BlueprintError(
+                        f"{path}.relay.{p.name}",
+                        f"the error branch marks {p.name!r} with a NodeError, which holds the "
+                        "node's name, not the joined one, so every failure of the node fails "
+                        "the relay (NU-054)",
+                        "relay to a place the node's own output marks",
+                    )
+                if p.name in (minted := [m for m, _ in mints]):
+                    raise BlueprintError(
+                        f"{path}.mint[{minted.index(p.name)}]",
+                        f"the error branch marks {p.name!r} with a NodeError, whose fields name "
+                        "the failed node and its error, so a mint would overwrite one",
+                        "mint into a place the node's own output marks",
                     )
         elif b.label == "default":
             default = i
@@ -1444,7 +1860,39 @@ def _plan(
         error,
         node,
         net,
+        witnesses,
+        mints,
     )
+
+
+def _check_forwarded_relays(
+    path: str, kind: ActionKind, coloured_in: Sequence[In], join: _Join
+) -> None:
+    """A move or emit puts the forwarded token on each relay target, so its name is
+    known now: the forwarded input's key must be where the relay looks."""
+    if not join.relays:
+        return
+    # The forwarded input is a matched one: only witnesses leave the value.
+    src = coloured_in[0].place
+    carried: tuple[str, ...] | None = join.keys[src.name]
+    t = src.token_type
+    if kind == "emit" and not (isinstance(t, type) and issubclass(t, Event)):
+        carried = None  # emit wraps it in a new Event, which holds no joined name
+    for pname, fields in join.relays.items():
+        if fields == carried:
+            continue
+        if carried is None:
+            why = f"emit puts a new Event on {pname!r}, not {src.name}'s token"
+            fix = "run a node that puts the joined name there, or drop the relay"
+        else:
+            why = (
+                f"{kind} forwards {src.name}'s token, which holds the joined name at "
+                f"{'.'.join(carried) or _SELF}, not at {'.'.join(fields) or _SELF}"
+            )
+            fix = f"relay: {{{pname}: {'.'.join(carried) or _SELF}}}"
+        raise BlueprintError(
+            f"{path}.relay.{pname}", f"{why}, so every firing fails the relay (NU-054)", fix
+        )
 
 
 def _is_labelled(d: Mapping[str, Any]) -> bool:
@@ -2091,7 +2539,7 @@ def _take(ctx: Ctx, plan: ActionPlan, *, with_reads: bool) -> Any:
     values: dict[str, Any] = {}
     for i in plan.takes:
         v = ctx.input(i.place) if i.kind == "one" else ctx.inputs(i.place)
-        if not i.place.is_unit:
+        if not i.place.is_unit and i.place.name not in plan.witnesses:
             values[i.place.name] = v
     if with_reads:
         for p in plan.reads:
@@ -2103,12 +2551,50 @@ def _take(ctx: Ctx, plan: ActionPlan, *, with_reads: bool) -> Any:
     return values
 
 
-def _mark(ctx: Ctx, branch: Branch, value: Any) -> None:
+def _mark(ctx: Ctx, branch: Branch, value: Any, stamp: _Stamp | None = None) -> None:
     for p in branch.places:
         if p.is_unit:
             ctx.signal(p)
         else:
-            ctx.output(p, value)
+            ctx.output(p, value if stamp is None else stamp(p, value))
+
+
+_Stamp = Callable[[Place[Any], Any], Any]
+
+
+def _stamp(plan: ActionPlan, ctx: Ctx) -> _Stamp | None:
+    """``mint:``: one fresh name for this firing, put into each minted place's token."""
+    if not plan.mints:
+        return None
+    name = ctx.fresh_name()
+    where = dict(plan.mints)
+
+    def stamp(p: Place[Any], value: Any) -> Any:
+        fields = where.get(p.name)
+        if fields is None:
+            return value
+        if not fields:
+            return name
+        try:
+            return _with_field(value, fields, name)
+        except Exception as err:
+            raise NetRunError(
+                f"transition {plan.transition!r} cannot mint into {p.name}."
+                f"{'.'.join(fields)} of {value!r}: {err}"
+            ) from err
+
+    return stamp
+
+
+def _with_field(value: Any, fields: tuple[str, ...], name: str) -> Any:
+    """``value`` with ``name`` at the field path ``fields``: frozen tokens are copied."""
+    from pydantic import BaseModel
+
+    head, *rest = fields
+    new = _with_field(getattr(value, head), tuple(rest), name) if rest else name
+    if isinstance(value, BaseModel):
+        return value.model_copy(update={head: new})
+    return replace(value, **{head: new})
 
 
 def to_event(value: Any, author: str) -> Event:
@@ -2190,7 +2676,7 @@ def _plan_action(plan: ActionPlan, scope: NetScope, prefix: str = "") -> Action:
         def move(ctx: Ctx) -> None:
             value = _take(ctx, plan, with_reads=False)
             if plan.branches:
-                _mark(ctx, plan.branches[0], value)
+                _mark(ctx, plan.branches[0], value, _stamp(plan, ctx))
 
         return move
 
@@ -2199,7 +2685,7 @@ def _plan_action(plan: ActionPlan, scope: NetScope, prefix: str = "") -> Action:
         def emit(ctx: Ctx) -> None:
             value = _take(ctx, plan, with_reads=False)
             if plan.branches:
-                _mark(ctx, plan.branches[0], to_event(value, plan.author))
+                _mark(ctx, plan.branches[0], to_event(value, plan.author), _stamp(plan, ctx))
 
         return emit
 
@@ -2241,6 +2727,18 @@ def _node_action(plan: ActionPlan, scope: NetScope, prefix: str = "") -> Action:
             )
         index: int | None = None
         tokens: list[tuple[Place[Any], Any]] = []
+        stamp = _stamp(plan, ctx)
+        minted = {p for p, fields in plan.mints if not fields}
+
+        def token_for(p: Place[Any]) -> Any:
+            if p.is_unit:
+                return None
+            if p.name in minted:  # the token is the fresh name
+                assert stamp is not None
+                return stamp(p, None)
+            value = _node_value(plan, p, outcome.output)
+            return value if stamp is None else stamp(p, value)
+
         if err is None:
             index = _route(plan, outcome.route)
             if index is None:
@@ -2251,10 +2749,7 @@ def _node_action(plan: ActionPlan, scope: NetScope, prefix: str = "") -> Action:
                 fail(WorkflowFailure(run_as, "NetRunError", msg, NetRunError(msg)), turn)
             if plan.branches:
                 try:
-                    tokens = [
-                        (p, None if p.is_unit else _node_value(plan, p, outcome.output))
-                        for p in plan.branches[index].places
-                    ]
+                    tokens = [(p, token_for(p)) for p in plan.branches[index].places]
                 except Exception as bad:  # a wrong output is the node's error
                     err = bad
         if err is not None:

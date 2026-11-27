@@ -248,6 +248,20 @@ def _t(decl: dict[str, Any], **extra: Any) -> dict[str, Any]:
     return {**P, "transitions": {"T_A": decl}, **extra}
 
 
+def _n(decl: dict[str, Any], **places: Any) -> dict[str, Any]:
+    """:func:`_t` with a third str place, two typed ones (``NodeError``: str fields)
+    and ``places``."""
+    typed = {"u": {"type": "str"}, "e": {"type": "NodeError"}, "o": {"type": "NodeError"}}
+    return {"places": {**P["places"], **typed, **places}, "transitions": {"T_A": decl}}
+
+
+SELVES = {"in": ["s", "t"], "match": {"s": "self", "t": "self"}}
+ORDER = {"w": {"type": "bp_nu_join.names.Order"}}
+TYPED = {"w": {"type": "bp_nu_join.names.Typed"}, "w2": {"type": "bp_nu_join.names.Typed"}}
+HELD = {"w": {"type": "bp_nu_join.names.Held"}, "w2": {"type": "bp_nu_join.names.Held"}}
+SEEDED = {"w": {"type": "bp_nu_join.names.Seeded"}, "w2": {"type": "bp_nu_join.names.Seeded"}}
+
+
 ERRORS: list[tuple[str, dict[str, Any], str, str]] = [
     ("unknown top key", {"transition": {}}, "transition", "did you mean 'transitions'"),
     ("no transitions", {"places": {}}, "transitions", "at least one transition"),
@@ -458,6 +472,240 @@ ERRORS: list[tuple[str, dict[str, Any], str, str]] = [
         _t({"in": ["a"], "out": {"xor": ["x", {"timeout": 50, "child": "x"}]}, "node": "f"}),
         "transitions.T_A",
         "(IO-012)",
+    ),
+    # -- names: match, relay, mint
+    (
+        "match of one place",
+        _n({"in": ["s", "t"], "match": {"s": "self"}}),
+        "transitions.T_A.match",
+        "at least two input places",
+    ),
+    (
+        "match on a read",
+        _n({"in": ["s"], "read": ["t"], "match": {"s": "self", "t": "self"}}),
+        "transitions.T_A.match.t",
+        "make it an in: arc",
+    ),
+    (
+        "match on no arc",
+        _n({"in": ["s", "t"], "match": {"s": "self", "u": "self"}}),
+        "transitions.T_A.match.u",
+        "not an input place",
+    ),
+    (
+        "match on a unit place",
+        _n({"in": ["s", "a"], "match": {"s": "self", "a": "self"}}),
+        "transitions.T_A.match.a",
+        "unit place",
+    ),
+    (
+        "self on a typed place",
+        _n({"in": ["s", "e"], "match": {"s": "self", "e": "self"}}),
+        "transitions.T_A.match.e",
+        "its token itself is no name",
+    ),
+    (
+        "match field typo",
+        _n({"in": ["s", "e"], "match": {"s": "self", "e": "nod"}}),
+        "transitions.T_A.match.e",
+        "no field 'nod'",
+    ),
+    (
+        "match field of a str",
+        _n({"in": ["s", "e"], "match": {"s": "len", "e": "node"}}),
+        "transitions.T_A.match.s",
+        "has no fields",
+    ),
+    (
+        "relay without match",
+        _n({"in": ["s"], "out": "t", "relay": {"t": "self"}}),
+        "transitions.T_A.relay",
+        "has no match",
+    ),
+    (
+        "relay to no output",
+        _n({"in": ["s", "t"], "match": {"s": "self", "t": "self"}, "relay": {"u": "self"}}),
+        "transitions.T_A.relay.u",
+        "not an output place",
+    ),
+    (
+        "mint into an input",
+        _n({"in": ["s"], "out": "t", "mint": ["s"]}),
+        "transitions.T_A.mint[0]",
+        "not an output place",
+    ),
+    (
+        "mint into a unit place",
+        _n({"in": ["s"], "out": {"and": ["t", "x"]}, "mint": ["x"]}),
+        "transitions.T_A.mint[0]",
+        "unit place",
+    ),
+    (
+        "mint into a timeout child",
+        _n(
+            {
+                "in": ["s"],
+                "out": {"xor": ["t", {"timeout": 50, "child": "u"}]},
+                "node": "f",
+                "mint": ["u"],
+            }
+        ),
+        "transitions.T_A.mint[0]",
+        "only the transition's timeout marks",
+    ),
+    (
+        "mint twice",
+        _n({"in": ["s"], "out": "t", "mint": ["t", "t"]}),
+        "transitions.T_A.mint[1]",
+        "minted into twice",
+    ),
+    (
+        "mint as a mapping",
+        _n({"in": ["s"], "out": "t", "mint": {"t": "self"}}),
+        "transitions.T_A.mint",
+        "mint lists the output places",
+    ),
+    (
+        "match value not a path",
+        _n({"in": ["s", "t"], "match": {"s": "self", "t": 5}}),
+        "transitions.T_A.match.t",
+        "expected a field path or 'self', got 5",
+    ),
+    (
+        "match on a non-str field",
+        _n({"in": ["s", "w"], "match": {"s": "self", "w": "job.n"}}, **ORDER),
+        "transitions.T_A.match.w",
+        "field 'job.n' of Order is int, not str",
+    ),
+    (
+        "match through an unresolved annotation",
+        _n(
+            {"in": ["s", "w"], "match": {"s": "self", "w": "amount"}},
+            w={"type": "bp_nu_join.names.Priced"},
+        ),
+        "transitions.T_A.match.w",
+        "'Decimal | None', which does not resolve",
+    ),
+    (
+        "empty relay",
+        _n({**SELVES, "out": "u", "relay": {}}),
+        "transitions.T_A.relay",
+        "a relay maps output places",
+    ),
+    (
+        "relay and mint on one place",
+        _n({**SELVES, "out": "u", "relay": {"u": "self"}, "mint": ["u"]}),
+        "transitions.T_A.mint[0]",
+        "'u' is a relay target",
+    ),
+    (
+        "relay to a timeout child",
+        _n(
+            {
+                **SELVES,
+                "out": {"xor": ["a", {"timeout": 50, "child": "u"}]},
+                "node": "f",
+                "relay": {"u": "self"},
+            }
+        ),
+        "transitions.T_A.relay.u",
+        "the transition's timeout marks 'u'",
+    ),
+    (
+        "relay to the error branch",
+        _n(
+            {
+                "in": ["e", "s"],
+                "match": {"e": "node", "s": "self"},
+                "out": {"xor": {"default": "u", "error": "o"}},
+                "node": "f",
+                "relay": {"o": "node"},
+            }
+        ),
+        "transitions.T_A.relay.o",
+        "the error branch marks 'o' with a NodeError",
+    ),
+    (
+        "mint into an init=False field",
+        _n({"in": ["w"], "out": "w2", "mint": ["w2.stamp"]}, **TYPED),
+        "transitions.T_A.mint[0]",
+        "field 'stamp' of Typed is init=False",
+    ),
+    (
+        "mint beside an InitVar with no default",
+        _n({"in": ["w"], "out": "w2", "mint": ["w2.turn"]}, **SEEDED),
+        "transitions.T_A.mint[0]",
+        "Seeded takes InitVar 'seed' with no default",
+    ),
+    (
+        "mint through an Optional field",
+        _n({"in": ["w"], "out": "w2", "mint": ["w2.job.id"]}, **HELD),
+        "transitions.T_A.mint[0]",
+        "w2.job is bp_nu_join.names.Job | None: a mint cannot write into a None",
+    ),
+    (
+        "mint into the error branch",
+        _n(
+            {
+                "in": ["s"],
+                "out": {"xor": {"default": "u", "error": "o"}},
+                "node": "f",
+                "mint": ["u", "o.node"],
+            }
+        ),
+        "transitions.T_A.mint[1]",
+        "the error branch marks 'o' with a NodeError",
+    ),
+    (
+        "mint into a StrEnum field",
+        _n({"in": ["w"], "out": "w2", "mint": ["w2.lane"]}, **TYPED),
+        "transitions.T_A.mint[0]",
+        "fresh_name(), which is no Lane",
+    ),
+    (
+        "mint into a str subclass place",
+        _n({"in": ["a"], "out": "z", "mint": ["z"]}, z={"type": "bp_nu_join.names.Sid"}),
+        "transitions.T_A.mint[0]",
+        "place 'z' takes Sid: a mint writes the plain str",
+    ),
+    (
+        "mint with a trailing dot",
+        _n({"in": ["s"], "out": "t", "mint": ["t."]}),
+        "transitions.T_A.mint[0]",
+        "expected place or place.field, got 't.'",
+    ),
+    (
+        "mint into place.self",
+        _n({"in": ["s"], "out": "t", "mint": ["t.self"]}),
+        "transitions.T_A.mint[0]",
+        "write mint: [t]",
+    ),
+    (
+        "move relays another field",
+        _n(
+            {
+                "in": ["e", "s"],
+                "match": {"e": "node", "s": "self"},
+                "out": "o",
+                "relay": {"o": "error_code"},
+            }
+        ),
+        "transitions.T_A.relay.o",
+        "holds the joined name at node, not at error_code",
+    ),
+    (
+        "emit relays a new Event",
+        _n(
+            {
+                "in": ["e", "s"],
+                "match": {"e": "node", "s": "self"},
+                "out": "eventOut",
+                "relay": {"eventOut": "author"},
+                "action": "emit",
+            }
+        ),
+        "transitions.T_A.relay.eventOut",
+        "emit puts a new Event",
     ),
 ]
 

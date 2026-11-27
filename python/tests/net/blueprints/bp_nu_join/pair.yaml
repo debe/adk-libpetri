@@ -1,0 +1,15 @@
+# Mints a name and joins it with itself: mounted twice by mount.yaml, each
+# instance's places and names are its own.
+agent_class: adk_libpetri.net.PetriNet
+name: nu_pair
+places:
+  ask: {type: str}
+  named: {type: str}
+  tag: {type: str}
+  held: {type: str}
+ports:
+  ask: {direction: in}
+  named: {direction: out}
+transitions:
+  Pair_Open: {in: [ask], out: {and: [tag, held]}, mint: [tag, held]}
+  Pair_Join: {in: [tag, held], match: {tag: self, held: self}, out: named}

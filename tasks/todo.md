@@ -1,3 +1,111 @@
+# ν-joins in YAML blueprints
+
+Plan: ~/.claude/plans/serialized-sniffing-key-of-501cc5b7-904e-4d93-9dc7-225288be1e43.md
+
+## Plan (tracer bullet first)
+
+### 1. Tracer: parse + run one join (check in after this)
+- [x] `blueprint.py`: add `match`, `relay`, `mint` to `_TRANSITION_KEYS`.
+  - `_match(path, d, spec, places)` builds `Match`.
+  - `_projection(path, place, field)`:
+    - `self` needs a `str` place.
+    - Otherwise a dotted field path, checked against dataclass `fields()` or
+      pydantic `model_fields` with `_suggest` did-you-mean, and the field must be `str`.
+    - The projection is `attrgetter`.
+  - Errors, each a `BlueprintError` at `transitions.T.match.<place>`:
+    - a key place that is not an `in` arc (a read gets the NU-020 hint);
+    - a unit place;
+    - fewer than 2 keys;
+    - `relay` without `match`;
+    - a relay target that is not an output of the transition.
+  - Attach `match=` in `TransitionSpec(...)` at L1319.
+- [x] `mint:` is parsed into `ActionPlan.mints` as `(place, field | None)`. Each target
+  must be an output place, and a unit place is an error. `_plan_action`/`_node_action`
+  call `ctx.fresh_name()` once per firing and write the name into each target value
+  before `ctx.output`:
+  - a str place: the token is the name;
+  - a dataclass: `dataclasses.replace`;
+  - pydantic: `model_copy(update=)`.
+  Check that mounted subnets rename the mint places (`_renamed`, L2072) the way
+  `rename_spec` renames match places.
+- [x] Fixture `tests/net/blueprints/bp_nu_join/`, the peer's motif in small:
+  - `T_Start` mints `workItem.turn` and `pending.turn`.
+  - A node turns workItem into `result` (copying `turn`).
+  - A deadline transition retires the pending token as a `retired` name.
+  - `T_DropLate` (priority 10) joins `result` with `retired` by name and discards it.
+  - The on-time path joins `result` with `pending` and emits.
+- [x] Tests:
+  - `ERRORS` entries in `test_blueprint_parse.py` (L251) for each refusal above;
+  - a run test like `test_yaml_nets.py:57`: on-time answers, late result discarded;
+  - a test that two firings mint two different names.
+
+- [x] Review/fix rounds 1-3 (Workflow): 21, 8, 6 confirmed findings, all fixed but one
+  (a test for a runtime error YAML cannot reach). Round 3 was the cap, so the rounds
+  stopped without a dry one.
+- [x] Mounted subnet: `mount.yaml` mounts `pair.yaml` twice; the keys are renamed and each
+  instance joins its own name.
+- [x] The late-reply test releases the slow answer itself after the escalation's answer
+  (a `threading.Event`), instead of racing a sleep against the timer.
+
+### 2. Proofs
+- [ ] `net/proofs.py` `_run`/`verify_blueprint`: when any transition has a match or a mint,
+  pass `mint_transitions`. With relays or carriers, also pass `fragment_mode="extended"`
+  and `carrier_places`, and add a `NetProof.notes` line saying so.
+  - Under `turn_spec`, a node transition's deposit moves to `complete:T:run`, so the
+    mint name must follow it. Settle that, and whether the verifier's in-flight split
+    needs `assume_atomic_firing`, against libpetri's own tests
+    (`libpetri/python/tests/test_nu_verification.py:431-464`, `test_nu_mint_contract.py`).
+  - Derive the carriers (mint targets, relay targets, the places names flow through by a
+    one-in drain) and check the derivation against those tests. If it can't be derived
+    soundly, add a `prove.options.carriers` override.
+- [ ] A new claim kind `joined_or_dead_lettered: place` (`ClaimKind`, `_claim` L1923,
+  `_property`). Check `report.py`/`counterexample.py` for exhaustive kind matches.
+- [ ] Tests in the style of `test_prove.py:27` (`@requires_z3`):
+  - the fixture proves deadlock_free and joined_or_dead_lettered(result);
+  - a variant without the drop transition is `Violated`, so the proof is not vacuous.
+
+### 3. Schema, docs, guide
+- [ ] `schema.json` `$defs.transition` (L443-514): add `match`, `relay` and `mint`, plus
+  `BROKEN` entries in `test_schema.py` (L80-128). The keys-parity test at L153 must stay green.
+- [ ] `AUTHORING.md`:
+  - `## The format`: match/relay/mint.
+  - `## Actions`: what mint writes.
+  - A new motif `### Late work: discard it by name` as a complete `# file:` block,
+    checked and proven by `test_authoring.py` (motif list L70).
+  - `## prove:`: the new claim, plus why env-borne names give `Unknown`.
+- [ ] `SKILL.md:25-27`: list the motif (`test_cli.py:246` runs it through `adk-libpetri guide`).
+- [ ] Regenerate `spec/api/python.txt` if `ClaimKind`/`ActionPlan` show (`PUBLICAPI_WRITE=1`) and
+  review the diff.
+- [ ] `CHANGELOG.md` Unreleased: add `### Python` (there is none yet; L15).
+
+### 4. Release and reply (only on the engineer's word)
+- [ ] Release 0.2.1 by the Python ritual in CLAUDE.md (dating commit, `--dry-run`, then the real run).
+- [ ] `borg tell 2a436aac-2edb-45fb-a0e5-f34cf837f8cb --re mbf67cb61acfb "..."` with the
+  release, plus how the design differs from the request: a mapping not pairs, inputs not
+  reads, and `mint:` instead of node-side `fresh_name()`.
+
+Out of scope: drawing match arcs in `graph.py` (a UI change needs ADR 0009's
+real-browser check), and the workflow compiler's match-free over-approximation
+(its names come from the environment).
+
+## Risks
+- The carrier derivation is the part most likely to be unsound. It gets a `Violated`
+  control test, and an explicit override if derivation falls short.
+- A node that fails to copy the name breaks the verifier's drain assumption (EXTENDED
+  reads a one-in transition as name-preserving), and libpetri checks only relays. Document it.
+  A runtime check is a possible follow-up.
+
+## Verification
+```bash
+cd python && . .venv/bin/activate
+pytest tests/net -k "nu or match or mint" && REQUIRE_Z3=1 pytest
+ruff check . && ruff format --check . && pyright
+adk-libpetri check tests/net/blueprints/bp_nu_join/root.yaml
+adk-libpetri verify tests/net/blueprints/bp_nu_join/root.yaml
+adk-libpetri guide "late work"
+```
+The CI `python-wheel` job (`scripts/test-python-wheel.sh`) runs again before the release.
+
 # Dependency bump, 2026-11-27 (branch `deps/bump-2026-11`)
 
 ## Java: done

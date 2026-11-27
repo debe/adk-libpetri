@@ -78,6 +78,9 @@ def test_the_minimal_net_validates() -> None:
     assert not errors(MINIMAL)
 
 
+TWO = {"userIn": "self", "eventOut": "self"}
+"""A match the schema accepts: it cannot tell inputs from outputs."""
+
 BROKEN = [
     pytest.param(broken(transitons={}), id="unknown top-level key"),
     pytest.param(broken(args={}), id="args"),
@@ -102,6 +105,16 @@ BROKEN = [
     ),
     pytest.param(broken(transitions__N_Emit__timing={"delay": 5}), id="unknown timing"),
     pytest.param(broken(transitions__N_Emit__priority="high"), id="priority not int"),
+    pytest.param(broken(transitions__N_Emit__match={"userIn": "self"}), id="match of one place"),
+    pytest.param(broken(transitions__N_Emit__relay={"eventOut": "self"}), id="relay, no match"),
+    pytest.param(broken(transitions__N_Emit__mint=[]), id="empty mint"),
+    pytest.param(
+        broken(transitions__N_Emit__match=TWO, transitions__N_Emit__relay={}), id="empty relay"
+    ),
+    pytest.param(
+        broken(transitions__N_Emit__match={**TWO, "userIn": 5}), id="match value not a path"
+    ),
+    pytest.param(broken(transitions__N_Emit__mint=[5]), id="mint item not a string"),
     pytest.param(broken(places={"a/b": {}}), id="slash in place name"),
     pytest.param(broken(places={"args": {}}), id="place named args"),
     pytest.param(
@@ -142,6 +155,29 @@ def test_the_loader_rejects_what_the_schema_rejects(data: dict[str, Any]) -> Non
     body = {k: v for k, v in data.items() if k not in ("agent_class", "name")}
     with pytest.raises(BlueprintError):
         parse_blueprint("n", body)
+
+
+STR = {"type": "str"}
+ACCEPTED = [
+    pytest.param(
+        {
+            "in": ["s", "t"],
+            "match": {"s": "self", "t": "self"},
+            "out": "u",
+            "relay": {"u": "self"},
+        },
+        id="relay",
+    ),
+    pytest.param({"in": ["s"], "out": "u", "mint": "u"}, id="mint as one string"),
+]
+"""Transition forms no sample blueprint uses: the schema and the loader both accept them."""
+
+
+@pytest.mark.parametrize("decl", ACCEPTED)
+def test_the_schema_and_the_loader_accept_each_name_form(decl: dict[str, Any]) -> None:
+    body = {"places": {"s": STR, "t": STR, "u": STR}, "transitions": {"T_A": decl}}
+    assert not errors({**MINIMAL, **body}), errors({**MINIMAL, **body})
+    parse_blueprint("n", body)
 
 
 def test_the_schema_names_every_key_the_loader_accepts() -> None:

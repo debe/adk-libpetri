@@ -1,0 +1,40 @@
+# A ν-join: each turn mints a name. A reply joins its own turn's clock by
+# name; one that comes after the escalation joins the retired name and is
+# dropped, whichever turn it belongs to.
+agent_class: adk_libpetri.net.PetriNet
+name: nu_join
+nodes:
+  - [.agent.open_work]
+  - [.agent.specialist]
+  - [.agent.canned_reply]
+places:
+  work: {type: .agent.Work}
+  waiting: {type: str}
+  reply: {type: .agent.Work}
+  retired: {type: str}
+  due: {}
+  fallback: {type: str}
+  dropped: {type: .agent.Work}
+transitions:
+  Nu_Start:
+    in: [userIn]
+    out: {and: [work, waiting]}
+    node: open_work
+    mint: [work.turn, waiting]
+  Nu_Ask: {in: [work], out: reply, node: specialist}
+  Nu_Reply:
+    in: [reply, waiting]
+    match: {reply: turn, waiting: self}
+    out: eventOut
+    priority: 10
+    action: emit
+  Nu_Escalate:
+    in: [waiting]
+    out: {and: [retired, due]}
+    timing: {delayed: 2000}
+  Nu_Fallback: {in: [due], out: fallback, node: canned_reply}
+  Nu_FallbackEmit: {in: [fallback], out: eventOut, action: emit}
+  Nu_DropLate:
+    in: [reply, retired]
+    match: {reply: turn, retired: self}
+    out: dropped

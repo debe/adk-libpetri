@@ -1,0 +1,17 @@
+# nu_pair mounted twice: a mounted mint and match work on the prefixed places.
+agent_class: adk_libpetri.net.PetriNet
+name: nu_mount
+nodes:
+  - [pair.yaml]
+  - [.agent.both]
+places:
+  q1: {type: str}
+  q2: {type: str}
+  joined: {type: str}
+subnets:
+  first: {net: nu_pair, bind: {ask: q1, named: r1}}
+  second: {net: nu_pair, bind: {ask: q2, named: r2}}
+transitions:
+  Mount_Ask: {in: [userIn], out: {and: [q1, q2]}, mint: [q1, q2]}
+  Mount_Both: {in: [r1, r2], out: joined, node: both}
+  Mount_Emit: {in: [joined], out: eventOut, action: emit}
