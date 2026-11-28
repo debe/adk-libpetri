@@ -45,7 +45,7 @@ from ._spec import (
     xor,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     "IMMEDIATE",

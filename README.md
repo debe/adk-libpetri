@@ -829,7 +829,7 @@ blueprints.
 
 | Port | ADK | libpetri | Release |
 |---|---|---|---|
-| **Python** ([`python/`](python/)) | ADK Python 2.15 (`google-adk~=2.15.1`) | `libpetri>=8.1,<9` (PyPI, over the Rust runtime) | 0.2.1 |
+| **Python** ([`python/`](python/)) | ADK Python 2.15 (`google-adk~=2.15.1`) | `libpetri>=8.1,<9` (PyPI, over the Rust runtime) | 0.2.2 |
 | **Java** ([`java/`](java/)) | ADK Java 1.15.0 | `org.libpetri:libpetri:11.1.0` | 0.4.0, unreleased |
 | TypeScript, Rust | reserved | | |
 
