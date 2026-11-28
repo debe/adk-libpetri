@@ -211,7 +211,14 @@ signalled by the runner. Toolsets and instruction providers are rejected.
 `verify()` call, each with an optional `label` and `options` laid over the
 shared ones key by key. Options are `initial_marking`, `environment`
 (`always`, `arrivals`, `bounded`; one mode for all places), `sinks`,
-`sinks_when`, `assume_atomic_firing` and `assume_atomic_nodes`. With no
+`sinks_when`, `assume_atomic_firing`, `assume_atomic_nodes` and
+`budget_places` (libpetri's NU-040 budget, passed unless a transition takes
+a budget token and puts down a name it neither took nor mints, since libpetri
+reads that name as fresh, or a `match:` transition takes a key place with
+`all` or `at_least`, since name-blind libpetri drains every name's tokens
+there and a proven could be false; a violated safety claim that libpetri decided
+name-blind with the budget, under an `always` or `bounded` environment, is
+decided again without it). With no
 `environment`, the inputs come as a session's turns do: `userIn` holds one
 input, and the next arrives only after an answer is on `eventOut` and no
 node run is in flight (a verification-only `turn:next`; each node transition

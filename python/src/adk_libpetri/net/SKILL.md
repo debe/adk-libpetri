@@ -58,7 +58,12 @@ unknown.
    or an `env:` place), and for a missing `mint:` or `relay:` they suggest a
    line to add; run `check` after adding it. Otherwise the usual cause is a
    state space too large to close: bound the environment (`prove: options:
-   environment:`) or prove a smaller net. Check that `z3` is installed.
+   environment:`), declare the budget place that bounds the names
+   (`budget_places:`, `adk-libpetri guide "prove:"`), which takes safety
+   claims off the name-aware graph (a truncated `deadlock_free` or
+   `joined_or_dead_lettered` then goes to libpetri's name-coloured encoding,
+   which may still answer unknown), or prove a smaller net. Check that `z3`
+   is installed.
 
 ## Report
 

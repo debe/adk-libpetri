@@ -321,6 +321,28 @@ existed.
   `StreamingLlmAgentSubnet.Config` drops `chunkBudget` too. Remove the
   `.chunkBudget(n)` call; nothing replaces it.
 
+### Python
+
+- **`prove.options.budget_places`.** On a net with `match:`, name the places
+  whose tokens bound the live names it mints (libpetri's budget places), so
+  `adk-libpetri verify` proves safety claims such as `place_bound` without
+  the name-aware graph, which a place growing without bound truncates (its
+  reason said the graph was truncated). Outside an `always` or `bounded`
+  environment, a `deadlock_free` or `joined_or_dead_lettered` that the
+  truncated graph left unknown goes to libpetri's name-coloured encoding
+  instead, which may decide it or still answer unknown; under one, the
+  budget is not passed for those two claims, and a note says so. libpetri reads a
+  name that a transition taking a budget token puts down without taking one
+  as fresh, so `verify` passes the budget unless such a transition does not
+  mint it; a note then names the transition. Nor is it passed when a
+  `match:` transition takes a key place with `all` or `at_least`, since
+  name-blind libpetri drains every name's tokens there and a proven could
+  be false. Under an `always` or `bounded` environment libpetri decides a
+  budgeted bound name-blind: a proven stands, and a violated claim is
+  verified again without the budget, with a note, since its run may join
+  two different names. On a net without `match:` the option has no effect,
+  and a note says so.
+
 ### Docs
 
 - **The root README covers both ports.** It gains a Java and Python names

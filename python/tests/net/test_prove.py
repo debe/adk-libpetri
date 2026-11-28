@@ -47,6 +47,7 @@ def test_the_inhibitor_race_violates_its_claim() -> None:
     [proof] = load(RACE / "race_inhibitor.yaml").verify()
     assert proof.violated, proof.result.report
     assert not proof.proven
+    assert proof.notes == ()  # no budget_places: the name-blind fallback stays off
 
 
 @requires_z3

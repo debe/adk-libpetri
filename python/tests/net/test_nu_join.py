@@ -11,6 +11,7 @@ import dataclasses
 from typing import Any, cast
 
 import libpetri as lp
+import pytest
 import yaml
 from google.adk.agents.config_agent_utils import from_config
 from google.adk.workflow import FunctionNode
@@ -1131,7 +1132,9 @@ def test_a_mounted_join_proves_on_its_prefixed_places() -> None:
 
 ENV_NOTE = (
     "job is an env: place, and a join keys on the name its tokens carry: verify cannot assume "
-    "a name from outside is fresh (VER-006), so every claim stays unknown; mint the name in "
+    "a name from outside is fresh (VER-006), so it decides no claim by name: deadlock_free "
+    "and joined_or_dead_lettered stay unknown, and so does every other claim unless "
+    "budget_places is declared, which decides a safety claim name-blind; mint the name in "
     "the net, and carry the outside value in another field"
 )
 
@@ -1157,3 +1160,366 @@ def test_a_name_from_an_env_place_says_so_and_asks_for_no_mint() -> None:
     if lp.z3_available():
         # Every claim, the safety one too: libpetri refuses a name from outside.
         assert [p.result.verdict for p in verify_blueprint(bp)] == ["unknown", "unknown"]
+
+
+@requires_z3
+def test_with_a_budget_a_name_from_an_env_place_leaves_only_quiescence_unknown() -> None:
+    # The budget takes the safety claim off the name-aware graph, which refuses the
+    # name from outside: it is decided name-blind, and the note says so.
+    data: dict[str, Any] = {
+        "env": ["job"],
+        "places": {"job": S, "waiting": S, "done": S, "budget": {"seed": 1}},
+        "transitions": {
+            "J_Start": {"in": ["job", "budget"], "out": "waiting"},
+            "J_Answer": {"in": ["userIn"], "out": "eventOut", "action": "emit"},
+            "J_Join": {
+                "in": ["job", "waiting"],
+                "match": {"job": "self", "waiting": "self"},
+                "out": {"and": ["done", "budget"]},
+            },
+        },
+        "prove": {
+            "options": {"sinks": ["eventOut", "waiting"], "budget_places": ["budget"]},
+            "claims": ["deadlock_free", {"place_bound": {"place": "waiting", "bound": 1}}],
+        },
+    }
+    proofs = verify_blueprint(parse_blueprint("n", data))
+    assert [p.result.verdict for p in proofs] == ["unknown", "proven"]
+    assert all(ENV_NOTE in p.notes for p in proofs), [p.notes for p in proofs]
+
+
+# -- budget_places ------------------------------------------------------------
+
+
+def budget_net(
+    *, budget: Any = ("budget",), bound: int = 2, copier: bool = False, **claim: Any
+) -> dict[str, Any]:
+    """Unbounded arrivals, each minting a name that a join retires; ``budget`` (seed 2)
+    gates the mint and the join gives it back. ``copier`` adds a relay that takes a
+    budget token and a name, and puts the name down twice."""
+    transitions: dict[str, Any] = {
+        "B_Answer": {"in": ["userIn"], "out": "eventOut", "action": "emit"},
+        "B_Start": {
+            "in": ["job", "budget"],
+            "out": {"and": ["pending", "reply"]},
+            "mint": ["pending", "reply"],
+        },
+        "B_Join": {
+            "in": ["pending", "reply"],
+            "match": {"pending": "self", "reply": "self"},
+            "out": {"and": ["budget", "done"]},
+        },
+    }
+    if copier:
+        transitions["B_Copy"] = {"in": ["reply", "budget"], "out": {"and": ["reply", "pending"]}}
+    options: dict[str, Any] = {"environment": {"job": "always", "userIn": "always"}}
+    if budget is not None:
+        options["budget_places"] = list(budget)
+    return {
+        "env": ["job"],
+        "places": {"job": {}, "budget": {"seed": 2}, "pending": S, "reply": S, "done": {}},
+        "transitions": transitions,
+        "prove": {
+            "options": options,
+            "claims": [{"place_bound": {"place": "pending", "bound": bound}, **claim}],
+        },
+    }
+
+
+def test_budget_places_reach_libpetri_while_every_consumer_mints_or_takes_a_name() -> None:
+    bp = parse_blueprint("n", budget_net())
+    assert claim_options(bp, bp.proof.claims[0])["budget_places"] == ["budget"]
+    # B_Copy takes the name it puts down: libpetri reads it as a relay (NU-051), not a mint.
+    bp = parse_blueprint("n", budget_net(copier=True))
+    [claim] = bp.proof.claims
+    assert claim_options(bp, claim)["budget_places"] == ["budget"]
+    assert not any("budget_places is not passed" in n for n in verify_notes(bp, claim))
+
+
+@requires_z3
+def test_a_relay_that_takes_the_budget_is_proven_with_it() -> None:
+    [proven] = verify_blueprint(parse_blueprint("n", budget_net(copier=True)))
+    assert proven.proven, proven.result.reason or proven.result.report
+    # The violation is found name-blind with the budget, and decided again without it.
+    [violated] = verify_blueprint(parse_blueprint("n", budget_net(copier=True, bound=1)))
+    assert violated.violated
+    assert any("budget_places is not used for this verdict" in n for n in violated.notes)
+
+
+@pytest.mark.parametrize(
+    ("place", "node"),
+    [("waiting", "canned_reply"), ("work", "open_work")],
+    ids=["onto a key", "onto a carrier"],
+)
+def test_a_budget_consumer_that_puts_a_name_down_without_taking_one_must_mint(
+    place: str, node: str
+) -> None:
+    # Nu_Copy takes the uncoloured `due` and the budget: libpetri would read what it
+    # puts down as a fresh name (NU-040), which it does not mint. `work` is a carrier
+    # (Nu_Ask carries its name to reply), no match key.
+    copy = {"in": ["due", "budget"], "out": place, "node": node}
+    bp = nu_variant({"budget": {"seed": 1}}, Nu_Copy=copy)
+    nu = names(bp)
+    assert nu is not None
+    assert (nu.mints, nu.carriers, nu.declared) == (("Nu_Start",), ("work",), True)
+    bp = replace_options(bp, budget_places=("budget",))
+    [claim, *_] = bp.proof.claims
+    assert "budget_places" not in claim_options(bp, claim)
+    notes = verify_notes(bp, claim)
+    assert any("budget_places is not passed" in n and "Nu_Copy" in n for n in notes), notes
+
+
+def test_a_budget_consumer_that_puts_no_name_down_need_not_mint() -> None:
+    # B_Gate takes the budget and marks only the uncoloured `gated`: it mints nothing,
+    # so the budget still reaches libpetri.
+    data = budget_net()
+    data["places"]["gated"] = {}
+    data["transitions"]["B_Gate"] = {"in": ["job", "budget"], "out": "gated"}
+    data["transitions"]["B_Start"]["in"] = ["gated"]
+    bp = parse_blueprint("n", data)
+    [claim] = bp.proof.claims
+    assert claim_options(bp, claim)["budget_places"] == ["budget"]
+    assert not any("budget_places is not passed" in n for n in verify_notes(bp, claim))
+
+
+def drain_net(form: dict[str, Any]) -> dict[str, Any]:
+    """F1 mints n on A and B, F2 mints m on A and ready; J joins n with a key arc of
+    ``form`` on A, and G fires on m's A token left over: X is marked."""
+    return {
+        "places": {
+            "go1": {"seed": 1},
+            "go2": {"seed": 1},
+            "budget": {"seed": 2},
+            "A": S,
+            "B": S,
+            "ready": {},
+            "done": {},
+            "X": {},
+        },
+        "transitions": {
+            "F1": {"in": ["go1", "budget"], "out": {"and": ["A", "B"]}, "mint": ["A", "B"]},
+            "F2": {"in": ["go2", "budget"], "out": {"and": ["A", "ready"]}, "mint": ["A"]},
+            "J": {
+                "in": [{"place": "A", **form}, "B", "ready"],
+                "match": {"A": "self", "B": "self"},
+                "out": "done",
+            },
+            "G": {"in": ["A", "done"], "out": "X"},
+        },
+        "prove": {
+            "options": {"assume_atomic_firing": True, "budget_places": ["budget"]},
+            "claims": [{"place_bound": {"place": "X", "bound": 0}}],
+        },
+    }
+
+
+@requires_z3
+@pytest.mark.parametrize("form", [{"all": True}, {"at_least": 1}], ids=["all", "at_least"])
+def test_a_join_that_drains_a_key_place_keeps_the_budget_out(form: dict[str, Any]) -> None:
+    # Name-blind, J's arc drains every name's A tokens, so G never fires and libpetri,
+    # given the budget, would keep that flat proven. The executor takes only n's.
+    bp = parse_blueprint("n", drain_net(form))
+    [claim] = bp.proof.claims
+    assert "budget_places" not in claim_options(bp, claim)
+    [p] = verify_blueprint(bp)
+    assert p.result.verdict == "unknown", p.result.report
+    assert any("budget_places is not passed: J takes a matched key place" in n for n in p.notes)
+
+
+def verify_notes(bp: Blueprint, claim: Any) -> tuple[str, ...]:
+    from adk_libpetri.net.proofs import _run
+
+    return _run(bp, claim, None).notes
+
+
+def test_budget_places_on_a_net_without_a_match_has_no_effect() -> None:
+    data: dict[str, Any] = {
+        "places": {"budget": {"seed": 1}},
+        "transitions": {
+            "N_Emit": {"in": ["userIn", "budget"], "out": "eventOut", "action": "emit"}
+        },
+        "prove": {"options": {"budget_places": ["budget"]}, "claims": ["deadlock_free"]},
+    }
+    bp = parse_blueprint("n", data)
+    [claim] = bp.proof.claims
+    assert "budget_places" not in claim_options(bp, claim)
+    assert "budget_places has no effect: no transition joins by name" in verify_notes(bp, claim)
+
+
+def test_budget_places_wait_for_declared_names() -> None:
+    # Names not declared (a key on another field than the one minted): no budget either.
+    reply = {"in": ["reply", "waiting"], "match": {"reply": "text", "waiting": "self"}}
+    data = yaml.safe_load((NU / "root.yaml").read_text())
+    bp = nu_variant(
+        {"budget": {"seed": 1}},
+        Nu_Reply={**data["transitions"]["Nu_Reply"], **reply},
+    )
+    bp = replace_options(bp, budget_places=("budget",))
+    [claim, *_] = bp.proof.claims
+    assert "budget_places" not in claim_options(bp, claim)
+    assert any("the names are not declared" in n for n in verify_notes(bp, claim))
+
+
+def replace_options(bp: Blueprint, **options: Any) -> Blueprint:
+    from dataclasses import replace
+
+    return replace(bp, proof=replace(bp.proof, options=replace(bp.proof.options, **options)))
+
+
+def test_a_split_mint_node_that_takes_the_budget_still_passes_it() -> None:
+    # Over two ordered turns Nu_Start is split: libpetri sees start:Nu_Start take the
+    # budget, while the declared mint is complete:Nu_Start:run. The budget passes because
+    # Nu_Start is a declared mint.
+    start = {
+        "in": ["userIn", "budget"],
+        "out": {"and": ["work", "waiting"]},
+        "node": "open_work",
+        "mint": ["work.turn", "waiting"],
+    }
+    bp = nu_variant({"budget": {"seed": 1}}, Nu_Start=start)
+    bp = replace_options(bp, budget_places=("budget",))
+    deadlock, *_ = bp.proof.claims
+    opts = claim_options(bp, deadlock)
+    assert opts["mint_transitions"] == ["complete:Nu_Start:run"]
+    assert opts["budget_places"] == ["budget"]
+
+
+@requires_z3
+def test_a_budgeted_violation_on_the_name_aware_graph_stands_as_it_is() -> None:
+    # One budget token and two ordered turns: the second turn cannot start, so
+    # deadlock_free is violated. libpetri decides it on its name-aware graph
+    # (Route B), so it stands, with no second, budget-free verification.
+    start = {
+        "in": ["userIn", "budget"],
+        "out": {"and": ["work", "waiting"]},
+        "node": "open_work",
+        "mint": ["work.turn", "waiting"],
+    }
+    bp = nu_variant({"budget": {"seed": 1}}, Nu_Start=start)
+    bp = replace_options(bp, budget_places=("budget",))
+    deadlock, *_ = verify_blueprint(bp)
+    assert deadlock.violated
+    assert deadlock.result.route == "nu-scg"
+    assert not any("budget_places is not used" in n for n in deadlock.notes), deadlock.notes
+
+
+def test_a_claims_own_budget_places_lay_over_the_shared_ones() -> None:
+    data = budget_net(budget=["job"])
+    first = data["prove"]["claims"][0]
+    data["prove"]["claims"] = [{**first, "options": {"budget_places": ["budget"]}}, first]
+    bp = parse_blueprint("n", data)
+    assert bp.proof.options.budget_places == ("job",)
+    own, shared = (claim_options(bp, c) for c in bp.proof.claims)
+    # The claim's own list wins over the shared one; a claim without one gets the shared list.
+    assert own["budget_places"] == ["budget"]
+    assert shared["budget_places"] == ["job"]
+
+
+def test_a_budget_place_no_transition_takes_is_passed_with_a_note() -> None:
+    data = budget_net(budget=("budget", "spare"))
+    data["places"]["spare"] = {"seed": 1}
+    bp = parse_blueprint("n", data)
+    [claim] = bp.proof.claims
+    assert claim_options(bp, claim)["budget_places"] == ["budget", "spare"]
+    note = "budget place spare is consumed by no transition, so it bounds nothing"
+    assert note in verify_notes(bp, claim)
+
+
+@requires_z3
+def test_declared_budget_places_prove_a_bound_the_name_aware_graph_truncated() -> None:
+    # The seed already bounds the names. The graph (Route B) truncates because `done`
+    # and `eventOut` grow without bound under `always`; the declaration moves the claim
+    # off it.
+    [without] = verify_blueprint(parse_blueprint("n", budget_net(budget=None)))
+    assert without.result.verdict == "unknown"
+    assert "truncated" in (without.result.reason or "")
+    [proven] = verify_blueprint(parse_blueprint("n", budget_net()))
+    assert proven.proven, proven.result.reason or proven.result.report
+    # Not vacuous: the seed is 2, so a bound of 1 is broken.
+    [violated] = verify_blueprint(parse_blueprint("n", budget_net(bound=1)))
+    assert violated.violated
+
+
+@requires_z3
+@pytest.mark.parametrize(
+    "claim", [{"joined_or_dead_lettered": "pending"}, "deadlock_free"], ids=["joined", "deadlock"]
+)
+def test_under_always_a_quiescence_claim_is_checked_without_the_budget(claim: Any) -> None:
+    # With the budget libpetri would send the truncated claim to its name-coloured
+    # encoding, which does not model injection, and report the flat encoding's reason.
+    data = budget_net()
+    data["prove"]["claims"] = [claim]
+    bp = parse_blueprint("n", data)
+    [c] = bp.proof.claims
+    assert "budget_places" not in claim_options(bp, c)
+    [p] = verify_blueprint(bp)
+    assert p.result.verdict == "unknown"
+    assert "truncated" in (p.result.reason or ""), p.result.reason
+    assert any("budget_places is not passed for this claim" in n for n in p.notes), p.notes
+
+
+def two_mints(environment: Any, *, budget: bool = True, bound: int = 0) -> Blueprint:
+    """F1 and F2 mint different names, so J, which joins them by name, never fires."""
+    options: dict[str, Any] = {"environment": {"job": environment, "job2": environment}}
+    if budget:
+        options["budget_places"] = ["budget"]
+    return parse_blueprint(
+        "n",
+        {
+            "env": ["job", "job2"],
+            "places": {"job": {}, "job2": {}, "budget": {"seed": 2}, "A": S, "B": S, "done": {}},
+            "transitions": {
+                "F1": {"in": ["job", "budget"], "out": "A", "mint": ["A"]},
+                "F2": {"in": ["job2", "budget"], "out": "B", "mint": ["B"]},
+                "J": {
+                    "in": ["A", "B"],
+                    "match": {"A": "self", "B": "self"},
+                    "out": {"and": ["budget", "done"]},
+                },
+            },
+            "prove": {
+                "options": options,
+                "claims": [{"place_bound": {"place": "done", "bound": bound}}],
+            },
+        },
+    )
+
+
+@requires_z3
+@pytest.mark.parametrize("environment", ["always", {"bounded": 1}], ids=["always", "bounded"])
+def test_a_name_blind_violation_with_a_budget_is_decided_again_without_it(
+    environment: Any,
+) -> None:
+    # With the budget libpetri decides the claim name-blind here (the name-coloured
+    # encoding does not model injection): its run joins F1's name with F2's.
+    [p] = verify_blueprint(two_mints(environment))
+    assert p.proven, p.result.reason or p.result.report
+    assert any("budget_places is not used for this verdict" in n for n in p.notes), p.notes
+    # A proven with the budget stands as it is.
+    [bounded] = verify_blueprint(two_mints(environment, bound=1))
+    assert bounded.proven
+    assert not any("budget_places is not used" in n for n in bounded.notes)
+    # A true violation stays violated: budget_net's bound of 1 is broken. libpetri finds
+    # it name-blind with the budget, and the run without the budget finds it by name.
+    [violated] = verify_blueprint(parse_blueprint("n", budget_net(bound=1)))
+    assert violated.violated
+    assert any("budget_places is not used for this verdict" in n for n in violated.notes)
+
+
+@requires_z3
+def test_under_arrivals_a_budget_decides_the_two_mints_by_name() -> None:
+    [p] = verify_blueprint(two_mints({"arrivals": 2}))
+    assert p.proven, p.result.reason or p.result.report
+    assert p.notes == ()
+    # Route B (nu-scg) proves it too without the budget; the budget sends it to the
+    # name-coloured encoding.
+    assert p.result.route == "smt", p.result.route
+    assert "name-colouring over k colour slots" in (p.result.report or "")
+    [blind] = verify_blueprint(two_mints({"arrivals": 2}, budget=False))
+    assert blind.proven and blind.result.route == "nu-scg", blind.result.route
+    # A violation decided by name (Route A) stands as it is.
+    data = budget_net(bound=1)
+    data["prove"]["options"]["environment"] = {"job": {"arrivals": 3}, "userIn": {"arrivals": 3}}
+    [violated] = verify_blueprint(parse_blueprint("n", data))
+    assert violated.violated
+    assert not any("budget_places is not used" in n for n in violated.notes)

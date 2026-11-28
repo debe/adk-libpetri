@@ -1,3 +1,38 @@
+# budget_places and release 0.2.2
+
+Plan: ~/.claude/plans/serialized-sniffing-key-of-501cc5b7-904e-4d93-9dc7-225288be1e43.md
+
+### 1. `budget_places` end to end
+- [x] Loader (`_options`: a non-empty list of known places, no duplicates), `ProofOptions`
+  with `over()`, `_nu_kwargs` (extracted from `_run`) and `_budget` (NU-040 gate).
+- [x] Tests: Unknown → Proven → Violated control, the copier gate, no `match:`, names not
+  declared, a split mint node, the per-claim override, parse and schema refusals.
+- [x] Docs: AUTHORING.md (`prove:` block, Budgets bullet, children through the parent),
+  SKILL.md step 5, schema, ADR 0008, NET-011, CHANGELOG Unreleased `### Python`.
+- [x] Static analysis: ruff, format, pyright clean. Ad hoc: strict pyright on proofs.py
+  fixed 4 untyped sets; 2 private-helper imports reported, not changed.
+- [x] Complexity (C901): `_run` 21 → 19, `_nu_kwargs` 6, `_budget` 5, `_options` 6 → 9,
+  `names` 47 (slice 2). `names()` 0.06 ms, 14 calls per 3-claim verify: no cache.
+- [x] Mutation check: 7 guards, each caught by a test.
+- [ ] Review/fix rounds (Workflow).
+  - [x] A round: a join that takes a key place with `all`/`at_least` keeps the budget
+    out (`_drains`); docs say a budget sends a truncated quiescence claim to Route A
+    outside `always`/`bounded` (corrected in the next round: Route A may still answer
+    unknown, so not "decided"); tests pin `_by_name`'s Route B half, the no-budget
+    guard of the fallback and the fallback's note.
+  - [x] A round: the env-name note says a budget decides a safety claim name-blind;
+    under `always`/`bounded` a quiescence claim gets no budget (its truncation reason
+    kept, with a note); docs say a `relay:` join gives no budget back (NU-053) and that
+    Route A may still answer unknown; the vacuous spinner test is gone; the two-mints
+    test pins the name-coloured route; `claim_options` docstring names the fallback.
+
+### 2. Complexity: split `names()` (behaviour-preserving)
+- [ ] Split into phases, each ≤ 15; golden `repr(names(bp))` guard; own commit.
+
+### 3. Release 0.2.2 and reply
+- [ ] Dating commit, dry run, real run (gh `debe`, then back), check PyPI/tag/release.
+- [ ] Reply to the peer (m96e902bf8bd6).
+
 # ν-joins in YAML blueprints
 
 Plan: ~/.claude/plans/serialized-sniffing-key-of-501cc5b7-904e-4d93-9dc7-225288be1e43.md
@@ -92,10 +127,13 @@ Plan: ~/.claude/plans/serialized-sniffing-key-of-501cc5b7-904e-4d93-9dc7-225288b
   "add mint:" note no longer advises a mint there; a note of its own says so (test).
 
 ### 4. Release and reply (only on the engineer's word)
-- [ ] Release 0.2.1 by the Python ritual in CLAUDE.md (dating commit, `--dry-run`, then the real run).
-- [ ] `borg tell 2a436aac-2edb-45fb-a0e5-f34cf837f8cb --re mbf67cb61acfb "..."` with the
-  release, plus how the design differs from the request: a mapping not pairs, inputs not
-  reads, and `mint:` instead of node-side `fresh_name()`.
+- [x] Released 0.2.1 (dating commit `aa71fbe`, dry run, then the real run): on PyPI, tag
+  `python/v0.2.1`, GitHub release.
+- [x] Replied to the peer (mc9294ae2741e) with the release and the design differences.
+- [x] Synchronous function action: dropped (the peer agreed, mf345e3a5cf83). Asked why it was needed (med53e4982770):
+  a sync action blocks the session's net while it runs, its deposit is invisible to the rest
+  of its firing pass (EXEC-003), and a seeded accumulator proves the store fold today
+  (place_bound(store, 1) proven, the inhibitor shape violated).
 
 Out of scope: drawing match arcs in `graph.py` (a UI change needs ADR 0009's
 real-browser check), and the workflow compiler's match-free over-approximation

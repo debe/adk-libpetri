@@ -728,6 +728,15 @@
         "assume_atomic_nodes": {
           "type": "boolean",
           "description": "Your word that assume_atomic_firing is exact although the net runs nodes: the claim's counterexample without it needs only move and emit transitions to be atomic. The verdict then rests on that."
+        },
+        "budget_places": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/placeRef"
+          },
+          "description": "On a net with match:, places whose tokens bound the live names it mints (libpetri's budget_places): a transition that mints takes a token, and the join or drop that retires the name gives it back (a relay: join does not, or the budget no longer bounds the names). It takes safety claims such as place_bound off the name-aware graph, which any place growing without bound truncates. Outside an always or bounded environment, a truncated deadlock_free or joined_or_dead_lettered then goes to libpetri's name-coloured encoding, which may still answer unknown; under one, verify does not pass the budget for those two claims. A name that a transition taking a budget token puts down without taking one is read as fresh, so verify passes the budget only when each such transition mints it (mint:), and no match: transition takes a key place with all or at_least (name-blind, that arc drains every name's tokens, so a proven could be false)."
         }
       }
     },

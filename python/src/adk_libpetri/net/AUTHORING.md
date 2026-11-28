@@ -85,8 +85,9 @@ cannot close.
   - `mint: [p, q.field]` puts one fresh name per firing on its output
     places: as p's token itself (a `str` place), or into q's token's field
     (a `str` field). Mint in the net, where a turn starts: `verify` cannot
-    assume a name from an `env:` place is fresh, so every claim on the net
-    stays unknown.
+    assume a name from an `env:` place is fresh, so no claim on the net is
+    decided by name: every claim stays unknown, except a safety claim on a
+    net that declares `budget_places:`, which is decided name-blind.
 - **`env: [p]`** adds environment places: an approval, a webhook, a
   sensor. Fill one with `PetriNet.inject(session, place, value)` while a
   turn runs. A turn blocks until `eventOut`, so the value comes from another
@@ -674,6 +675,7 @@ prove:
     sinks_when:       {marker: [place]}     # ...and these, while marker is marked
     assume_atomic_firing: true
     assume_atomic_nodes: true               # needed with the line above on a net with nodes
+    budget_places:    [place]               # match: nets: places whose tokens bound the names
   claims:
     - deadlock_free
     - place_bound: {place: p, bound: n}
@@ -733,8 +735,44 @@ prove:
   it, and if the place it names cannot hold a name, put the `mint:` on the
   first transition that writes a `str` place or a `str` field instead.
   `verify` also cannot assume a name from an `env:` place is fresh, so such
-  a name makes every claim unknown: mint the name in the net and carry the
-  outside value in another field.
+  a name makes every claim unknown (with `budget_places:`, a safety claim
+  is decided name-blind): mint the name in the net and carry the outside
+  value in another field. A child blueprint that takes names on
+  its ports is proven through its parent: `verify --recursive` checks it
+  alone, with those names arriving from outside.
+- **Budgets.** On a `match:` net `verify` follows names through a
+  name-aware graph that stops at 100000 classes. Its reason then says the
+  graph was truncated and the live correlation pool is not bounded, but
+  any place that grows without bound truncates it, for example a sink
+  under an `always` environment, even when the names are bounded. A budget
+  place bounds the names: seed it with k tokens, let each transition that
+  mints take one and the join or drop that retires the name give it back,
+  and name it under `budget_places:`. A join that passes the name on under
+  `relay:` gives nothing back: the token it freed could mint a name past
+  the k live ones (NU-053). The declaration tells `verify` the names are
+  bounded, so safety claims such as `place_bound` skip the name-aware
+  graph. `verify` passes the budget unless a transition takes a budget
+  token and puts down a name it neither took nor declares under `mint:`,
+  since libpetri would read that name as fresh; a note then names the
+  transition. Nor does it pass the budget when a `match:` transition takes
+  a key place with `all` or `at_least`: name-blind, libpetri drains every
+  name's tokens there, not only the matched name's, so a proven could be
+  false. Under `arrivals: k` the budget decides such bounds by name. Under
+  an `always` or `bounded` environment it follows no names: a proven
+  stands, but a violated run may join two different names, so `verify`
+  decides that claim again without the budget, and a note says so.
+  `deadlock_free` and `joined_or_dead_lettered` still go through the
+  name-aware graph first. If that graph is truncated and a budget is
+  declared, libpetri hands the claim to its name-coloured encoding (under
+  `arrivals: k` or the default turns, not under an `always` or `bounded`
+  environment). That encoding may still answer unknown, so a budget is not
+  a sure remedy for a truncated quiescence claim. Under an `always` or
+  `bounded` environment `verify` does not pass the budget for
+  `deadlock_free` or `joined_or_dead_lettered`, so the graph's own reason
+  is kept, and a note says so. There `deadlock_free` stays unknown unless
+  every environment place is a sink, because the name-aware graph models
+  such a place only as an inexhaustible input, but
+  `joined_or_dead_lettered` can still be proven or violated there.
 - Proofs check the structure only and never run an action. A node with an
   xor may take any branch. They are untimed: a `delayed` transition may
   fire as soon as it is enabled, so state what a delay ensures with an arc
@@ -748,7 +786,8 @@ prove:
   with `match:` they say where a name is lost, and for a missing `mint:` or
   `relay:` they suggest a line to add (run `check` after adding it).
   Otherwise the usual cause is a state space too large to close. Bound the
-  environment, or check a smaller net.
+  environment, declare the budget place that bounds the names
+  (`budget_places:`, see Budgets above), or check a smaller net.
 
 ## Reading a counterexample
 

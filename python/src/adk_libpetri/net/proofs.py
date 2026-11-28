@@ -402,7 +402,7 @@ def names(bp: Blueprint) -> Names | None:
                     )
     key_of = {p.name: t.name for t in joins if t.match for p, _ in t.match.keys}
     for t in joins:
-        own = {p.name for p, _ in t.match.relay_to} if t.match else set()
+        own: set[str] = {p.name for p, _ in t.match.relay_to} if t.match else set()
         for o in sorted(_outs(t) & leads - own - minted.get(t.name, frozenset())):
             q = _nearest_key(o, key_of, plain, ins, passed, leads)
             j = key_of[q]
@@ -418,7 +418,7 @@ def names(bp: Blueprint) -> Names | None:
     for t in spec.transitions:
         if t.name not in minted:
             continue
-        own = {p.name for p, _ in t.match.relay_to} if t.match else set()
+        own: set[str] = {p.name for p, _ in t.match.relay_to} if t.match else set()
         if t.match is not None and (remint := sorted(minted[t.name] & coloured - own)):
             shown = ", ".join(remint)
             verb = "carries" if len(remint) == 1 else "carry"
@@ -468,14 +468,19 @@ def names(bp: Blueprint) -> Names | None:
     # its tokens hold no fresh name, and libpetri's reason names it with the
     # nodes that only pass the name on.
     producers = {p for t in spec.transitions for p in _outs(t)}
-    # A name from outside: libpetri refuses every claim (VER-006), and a mint: on
-    # the transition that takes it would not change that.
+    # A name from outside: libpetri refuses every claim it would decide by name
+    # (VER-006), and a mint: on the transition that takes it would not change that.
+    # With budget_places a safety claim skips the name-aware graph and is decided
+    # name-blind.
     outside = sorted(p for p in bp.env if p in coloured)
     for p in outside:
         notes.append(
             f"{p} is an env: place, and a join keys on the name its tokens carry: verify "
-            "cannot assume a name from outside is fresh (VER-006), so every claim stays "
-            "unknown; mint the name in the net, and carry the outside value in another field"
+            "cannot assume a name from outside is fresh (VER-006), so it decides no claim "
+            "by name: deadlock_free and joined_or_dead_lettered stay unknown, and so does "
+            "every other claim unless budget_places is declared, which decides a safety "
+            "claim name-blind; mint the name in the net, and carry the outside value in "
+            "another field"
         )
     starts: dict[str, set[str]] = {}
     for q in sorted(key_of):
@@ -668,8 +673,115 @@ def turn_spec(bp: Blueprint) -> NetSpec | None:
 def split_nodes(bp: Blueprint) -> tuple[str, ...]:
     """The ``node:`` transitions :func:`turn_spec` splits (all but the ν relays)."""
     nu = names(bp)
-    relays = set(nu.relays) if nu is not None else set()
+    relays: set[str] = set(nu.relays) if nu is not None else set()
     return tuple(t for t in bp.node_transitions if t not in relays)
+
+
+def _nu_kwargs(
+    bp: Blueprint, o: ProofOptions, turns: int | None, injecting: bool
+) -> tuple[dict[str, Any], list[str]]:
+    """The ν keywords for ``libpetri.verify`` (:func:`names`), and their notes.
+
+    ``injecting``: the claim is a quiescence claim under an ``always`` or
+    ``bounded`` environment, where a budget cannot decide it.
+    """
+    nu = names(bp)
+    if nu is None:
+        if o.budget_places:
+            return {}, ["budget_places has no effect: no transition joins by name"]
+        return {}, []
+    kwargs: dict[str, Any] = {}
+    notes = list(nu.notes)
+    if nu.declared:
+        ordered = turns is not None and turns > 1 and bp.release is None
+        split: set[str] = set(split_nodes(bp)) if ordered else set()
+        # A split node's deposit is its complete:T:run step: that step mints.
+        kwargs["mint_transitions"] = [f"complete:{t}:run" if t in split else t for t in nu.mints]
+        kwargs["fragment_mode"] = "extended"
+        kwargs["carrier_places"] = list(nu.carriers)
+    if o.budget_places and injecting:
+        # libpetri would hand the claim its name-aware graph left unknown to the
+        # name-coloured encoding, which does not model injection: the flat
+        # encoding's reason would replace the graph's.
+        notes.append(
+            "budget_places is not passed for this claim: under an always or bounded "
+            "environment libpetri's name-coloured encoding does not apply to deadlock_free "
+            "or joined_or_dead_lettered (VER-006), so a budget cannot decide it, and the "
+            "name-aware graph's own reason is kept"
+        )
+    elif o.budget_places:
+        budget, budget_notes = _budget(bp, o.budget_places, nu)
+        notes.extend(budget_notes)
+        if budget:
+            kwargs["budget_places"] = budget
+    return kwargs, notes
+
+
+def _budget(bp: Blueprint, places: tuple[str, ...], nu: Names) -> tuple[list[str], list[str]]:
+    """The ``budget_places`` to pass, and their notes.
+
+    libpetri reads a transition that takes a budget token as a mint when it puts
+    down a place that carries a name and takes none (NU-040 with NU-010): what it
+    writes there is read as a fresh name. One that takes a name is read as a join
+    or a relay (NU-051) whatever the budget. So the budget is passed only when
+    every consumer that puts a name down without taking one is a declared mint.
+
+    Nor is it passed where a join takes a key place with ``all`` or ``at_least``:
+    with a budget libpetri keeps the name-blind verdict of a safety claim it cannot
+    decide by name, and name-blind that arc drains every name's tokens there, not
+    only the matched name's, so the run the executor takes is not among the ones
+    it checks and a proven could be false.
+    """
+    if not nu.declared:
+        return [], ["budget_places is not passed: the names are not declared (see the notes)"]
+    spec = bp.spec
+    drains = _drains(spec)
+    if drains:
+        return [], [
+            "budget_places is not passed: "
+            + ", ".join(drains)
+            + " takes a matched key place with all or at_least; name-blind, libpetri drains "
+            "every name's tokens there, not only the matched name's, so a proven with the "
+            "budget could be false"
+        ]
+    joins = [t.match for t in spec.transitions if t.match is not None]
+    coloured = {p.name for m in joins for p, _ in (*m.keys, *m.relay_to)} | set(nu.carriers)
+    mints = set(nu.mints)
+    ins = {t.name: {i.place.name for i in t.inputs} for t in spec.transitions}
+    notes: list[str] = []
+    copying: list[str] = []
+    for place in places:
+        consumers = [t for t in spec.transitions if place in ins[t.name]]
+        if not consumers:
+            notes.append(f"budget place {place} is consumed by no transition, so it bounds nothing")
+        copying += [
+            t.name
+            for t in consumers
+            if t.name not in mints and _outs(t) & coloured and not ins[t.name] & coloured
+        ]
+    if copying:
+        shown = ", ".join(sorted(set(copying)))
+        notes.append(
+            "budget_places is not passed: libpetri reads a transition that takes a budget "
+            "token, and puts down names without taking one, as minting them (NU-040), but "
+            f"{shown} does not mint them; take the budget in the transition that mints, or "
+            "add the names to its mint:"
+        )
+        return [], notes
+    return list(places), notes
+
+
+def _drains(spec: NetSpec) -> list[str]:
+    """The joins that take a key place with ``all`` or ``at_least``."""
+    return sorted(
+        t.name
+        for t in spec.transitions
+        if t.match is not None
+        and any(
+            i.kind in ("all", "at_least") and i.place.name in {p.name for p, _ in t.match.keys}
+            for i in t.inputs
+        )
+    )
 
 
 def _run(bp: Blueprint, claim: Claim, k: int | None) -> _Run:
@@ -731,18 +843,10 @@ def _run(bp: Blueprint, claim: Claim, k: int | None) -> _Run:
         kwargs["sink_places"] = sinks
         if o.sinks_when is not None:
             kwargs["sink_places_when"] = {m: list(ps) for m, ps in o.sinks_when.items()}
-    nu = names(bp)
-    if nu is not None:
-        ordered = turns is not None and turns > 1 and bp.release is None
-        if nu.declared:
-            split = set(split_nodes(bp)) if ordered else set()
-            # A split node's deposit is its complete:T:run step: that step mints.
-            kwargs["mint_transitions"] = [
-                f"complete:{t}:run" if t in split else t for t in nu.mints
-            ]
-            kwargs["fragment_mode"] = "extended"
-            kwargs["carrier_places"] = list(nu.carriers)
-        notes.extend(nu.notes)
+    injecting = quiescent and mode is not None and mode[0] != "arrivals"
+    nu_kwargs, nu_notes = _nu_kwargs(bp, o, turns, injecting)
+    kwargs.update(nu_kwargs)
+    notes.extend(nu_notes)
     if o.assume_atomic_firing is not None:
         kwargs["assume_atomic_firing"] = o.assume_atomic_firing
     if o.assume_atomic_firing:
@@ -757,7 +861,11 @@ def _run(bp: Blueprint, claim: Claim, k: int | None) -> _Run:
 
 
 def claim_options(bp: Blueprint, claim: Claim, k: int | None = None) -> dict[str, Any]:
-    """The ``libpetri.verify`` keywords ``claim`` is checked under, on :func:`claim_spec`."""
+    """The keywords ``claim``'s first ``libpetri.verify`` call gets, on :func:`claim_spec`.
+
+    A budgeted claim that libpetri finds violated without following names is
+    decided again without ``budget_places`` (:func:`_verify`).
+    """
     return _run(bp, claim, k).kwargs
 
 
@@ -806,6 +914,40 @@ def verify_blueprint(bp: Blueprint, k: int | None = None, **verify_options: Any)
             spec = turn_spec(bp) if ordered else bp.spec
             assert spec is not None
             nets[ordered] = _built(untimed(spec))
-        result = lp.verify(nets[ordered], _property(c), **run.kwargs, **verify_options)
-        proofs.append(NetProof(c.label, result, c.kind, run.scope, run.notes))
+        result, notes = _verify(nets[ordered], c, run, verify_options)
+        proofs.append(NetProof(c.label, result, c.kind, run.scope, notes))
     return proofs
+
+
+_NAME_BLIND = (
+    "budget_places is not used for this verdict: with it, libpetri decided the claim "
+    "name-blind (under an always or bounded environment, or where the name-coloured "
+    "encoding does not apply), where a violated run may join two different names (NU-050); "
+    "a proven with the budget would stand (budget_places is not passed where a join takes "
+    "a key place with all or at_least)"
+)
+
+
+def _verify(
+    net: lp.BuiltNet, c: Claim, run: _Run, verify_options: dict[str, Any]
+) -> tuple[lp.VerificationResult, tuple[str, ...]]:
+    """``c``'s verdict, and its notes.
+
+    With ``budget_places`` libpetri keeps a safety claim off its name-aware graph.
+    Where its name-coloured encoding does not apply either (an environment that
+    injects, VER-006), it decides the claim name-blind: a proven is sound
+    (:func:`_budget` keeps the budget out where a join takes a key place with
+    ``all`` or ``at_least``), a violated may join two different names. Such a
+    violated is decided again without the budget, by name or as unknown.
+    """
+    result = lp.verify(net, _property(c), **run.kwargs, **verify_options)
+    if "budget_places" not in run.kwargs or not result.is_violated() or _by_name(result):
+        return result, run.notes
+    kwargs = {key: v for key, v in run.kwargs.items() if key != "budget_places"}
+    return lp.verify(net, _property(c), **kwargs, **verify_options), (*run.notes, _NAME_BLIND)
+
+
+def _by_name(result: lp.VerificationResult) -> bool:
+    """Whether libpetri followed names to ``result``: its name-aware graph (Route B)
+    or its name-coloured encoding (Route A, NU-053)."""
+    return result.route == "nu-scg" or "name-colouring over k colour slots" in result.report

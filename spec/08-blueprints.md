@@ -72,7 +72,16 @@ config; ADK's loader builds it and the node serves it under the stock
   `deadlock_free` and `joined_or_dead_lettered`. Every `env:` place, and for a
   safety claim `turnAbort`, arrives; an explicit `environment` that leaves out
   an `env:` place is a load error, as is `assume_atomic_firing` on a net with
-  nodes without `assume_atomic_nodes`. `on_load: true` fails the load on a
+  nodes without `assume_atomic_nodes`. `budget_places` is passed to libpetri
+  only on a net with `match:` whose names are declared, and only when every
+  transition with an input arc on a budget place that puts down a name
+  without taking one is a declared mint, and no `match:` transition takes a
+  key place with `all` or `at_least`. Under an `always` or `bounded`
+  environment it is not passed for `deadlock_free` or
+  `joined_or_dead_lettered`, with a note. A violated claim that libpetri
+  decided with the budget but not by name (no name-aware graph and no
+  name-coloured encoding) is verified again without the budget, with a note.
+  `on_load: true` fails the load on a
   claim not proven. A violated claim is reported as violated, not as an error.
 - **NET-012** The CLI: `adk-libpetri check FILE` validates and builds a
   blueprint without Z3; `adk-libpetri verify FILE [--k N] [--recursive]`

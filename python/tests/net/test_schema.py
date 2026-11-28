@@ -143,6 +143,11 @@ BROKEN = [
         id="unknown environment mode",
     ),
     pytest.param(broken(prove={"options": {"sink": ["eventOut"]}}), id="unknown option"),
+    pytest.param(broken(prove={"options": {"budget_places": []}}), id="empty budget_places"),
+    pytest.param(
+        broken(prove={"options": {"budget_places": ["eventOut", "eventOut"]}}),
+        id="budget place twice",
+    ),
     pytest.param(broken(prove={"onload": True}), id="unknown prove key"),
 ]
 """Rejected by the schema; every one past the first five is also a loader error."""
@@ -181,6 +186,14 @@ def test_the_schema_and_the_loader_accept_each_name_form(decl: dict[str, Any]) -
     body = {"places": {"s": STR, "t": STR, "u": STR}, "transitions": {"T_A": decl}}
     assert not errors({**MINIMAL, **body}), errors({**MINIMAL, **body})
     parse_blueprint("n", body)
+
+
+def test_the_schema_and_the_loader_accept_budget_places() -> None:
+    # No sample blueprint uses budget_places, so its accepted form is checked here.
+    data = {**MINIMAL, "prove": {"options": {"budget_places": ["eventOut"]}}}
+    assert not errors(data), errors(data)
+    body = {k: v for k, v in data.items() if k not in ("agent_class", "name")}
+    assert parse_blueprint("n", body).proof.options.budget_places == ("eventOut",)
 
 
 def test_the_schema_names_every_key_the_loader_accepts() -> None:

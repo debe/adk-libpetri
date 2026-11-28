@@ -407,6 +407,36 @@ ERRORS: list[tuple[str, dict[str, Any], str, str]] = [
         "two places",
     ),
     (
+        "budget_places, unknown place",
+        _t({"in": ["a"]}, prove={"options": {"budget_places": ["nope"]}}),
+        "prove.options.budget_places[0]",
+        "unknown place 'nope'",
+    ),
+    (
+        "budget_places, not a list",
+        _t({"in": ["a"]}, prove={"options": {"budget_places": "a"}}),
+        "prove.options.budget_places",
+        "one or more places",
+    ),
+    (
+        "budget_places, empty",
+        _t({"in": ["a"]}, prove={"options": {"budget_places": []}}),
+        "prove.options.budget_places",
+        "one or more places",
+    ),
+    (
+        "budget_places, twice",
+        _t({"in": ["a"]}, prove={"options": {"budget_places": ["a", "a"]}}),
+        "prove.options.budget_places",
+        "listed twice",
+    ),
+    (
+        "budget_places, not a name",
+        _t({"in": ["a"]}, prove={"options": {"budget_places": [1]}}),
+        "prove.options.budget_places[0]",
+        "unknown place 1",
+    ),
+    (
         "joined_or_dead_lettered, a list",
         _t({"in": ["a"]}, prove={"claims": [{"joined_or_dead_lettered": ["a"]}]}),
         "prove.claims[0].joined_or_dead_lettered",

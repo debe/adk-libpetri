@@ -620,6 +620,10 @@ class ProofOptions:
     assume_atomic_firing: bool | None = None
     assume_atomic_nodes: bool | None = None
     """The author's word that ``assume_atomic_firing`` is exact on a net with nodes."""
+    budget_places: tuple[str, ...] | None = None
+    """Places whose tokens bound the live names a net mints (libpetri's ``budget_places``,
+    NU-040): a transition that takes one and puts down a name without taking one is
+    read as minting it."""
 
     def over(self, base: ProofOptions) -> ProofOptions:
         """These options, falling back to ``base`` key by key."""
@@ -635,6 +639,7 @@ class ProofOptions:
             pick(self.sinks_when, base.sinks_when),
             pick(self.assume_atomic_firing, base.assume_atomic_firing),
             pick(self.assume_atomic_nodes, base.assume_atomic_nodes),
+            pick(self.budget_places, base.budget_places),
         )
 
 
@@ -2253,6 +2258,7 @@ _OPTION_KEYS = (
     "sinks_when",
     "assume_atomic_firing",
     "assume_atomic_nodes",
+    "budget_places",
 )
 _CLAIMS: tuple[ClaimKind, ...] = (
     "deadlock_free",
@@ -2376,7 +2382,21 @@ def _options(path: str, raw: Any, names: _Names) -> ProofOptions:
         }
     atomic = _bool(path, d, "assume_atomic_firing")
     atomic_nodes = _bool(path, d, "assume_atomic_nodes")
-    return ProofOptions(initial, env, mode, sinks, when, atomic, atomic_nodes)
+    budget = None
+    if "budget_places" in d:
+        bpath = f"{path}.budget_places"
+        raw_budget = d["budget_places"]
+        if not isinstance(raw_budget, list) or not raw_budget:
+            raise BlueprintError(
+                bpath,
+                f"budget_places lists one or more places, got {raw_budget!r}",
+                "write budget_places: [turnBudget]",
+            )
+        budget = tuple(names.known(f"{bpath}[{i}]", b) for i, b in enumerate(raw_budget))
+        twice = sorted({b for b in budget if budget.count(b) > 1})
+        if twice:
+            raise BlueprintError(bpath, f"{twice[0]!r} is listed twice", "list each place once")
+    return ProofOptions(initial, env, mode, sinks, when, atomic, atomic_nodes, budget)
 
 
 def _claim(path: str, raw: Any, names: _Names) -> Claim:
