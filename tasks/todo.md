@@ -27,7 +27,11 @@ Plan: ~/.claude/plans/serialized-sniffing-key-of-501cc5b7-904e-4d93-9dc7-225288b
     test pins the name-coloured route; `claim_options` docstring names the fallback.
 
 ### 2. Complexity: split `names()` (behaviour-preserving)
-- [ ] Split into phases, each ≤ 15; golden `repr(names(bp))` guard; own commit.
+- [x] Split into a `_Graph` and 13 phases: `names` 47 → 4, the largest phase `_reach` 11.
+- [x] Golden: `repr(names(bp))` over tests/net, tests/demos, tests/readme_diagrams, 38 nets
+  with names (36 more are `None`), identical before and after the split and after the
+  review round's fixes (typed `_mint_verdict`, slimmer `_Graph`, `_nearest_key(g, o)`).
+- [x] One review round (equivalence, readability): 3 confirmed, fixed.
 
 ### 3. Release 0.2.2 and reply
 - [ ] Dating commit, dry run, real run (gh `debe`, then back), check PyPI/tag/release.

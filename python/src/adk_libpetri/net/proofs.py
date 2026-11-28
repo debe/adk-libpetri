@@ -50,7 +50,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Literal, assert_never
 
 import libpetri as lp
 
@@ -287,29 +287,6 @@ def _carried(t: str, f: _Flow | None, o: str, got: _Reach) -> _Reach:
     return out
 
 
-def _nearest_key(
-    o: str,
-    keyed: Mapping[str, object],
-    plain: list[TransitionSpec],
-    ins: Mapping[str, set[str]],
-    passed: Mapping[str, set[str]],
-    leads: set[str],
-) -> str:
-    """The first key lead ``o`` reaches over plain transitions (breadth first)."""
-    frontier, seen = [o], {o}
-    while frontier:
-        nxt: list[str] = []
-        for q in frontier:
-            if q in keyed:
-                return q
-            for s in plain:
-                if q in ins[s.name]:
-                    nxt += sorted(passed[s.name] & leads - seen)
-                    seen |= passed[s.name] & leads
-        frontier = nxt
-    raise AssertionError(f"lead {o} reaches no key")
-
-
 def names(bp: Blueprint) -> Names | None:
     """``bp``'s :class:`Names`, or ``None`` when no transition has a ``match:``.
 
@@ -338,12 +315,85 @@ def names(bp: Blueprint) -> Names | None:
     rule), the note names the one transition after it that takes them all on toward
     the key and can, or else says only where a ``mint:`` goes.
     """
+    g = _graph(bp)
+    if g is None:
+        return None
+    notes = _relay_notes(g)
+    mints, mint_notes, mint_breaks = _mint_check(g)
+    notes += mint_notes
+    outside = sorted(p for p in bp.env if p in g.coloured)
+    notes += [_outside_note(p) for p in outside]
+    notes += _missing_mint_notes(g, outside)
+    broken = _key_breaks(g) + mint_breaks
+    relays = _relays(bp, g)
+    if broken:
+        notes.extend(
+            f"{b}: names are not declared, so libpetri cannot use its ν route" for b in broken
+        )
+        return Names((), (), relays, tuple(notes), declared=False)
+    matched = {t.name for t in g.joins}
+    contract = [r for r in relays if r not in matched]
+    if contract:
+        node = "node" if len(contract) == 1 else "nodes"
+        notes.append(
+            f"relay contract (NU-051) assumed for {node} {', '.join(contract)}: a run puts the "
+            "name it took into each place it marks that carries one, in the same field"
+        )
+    return Names(tuple(mints), tuple(sorted(g.carriers)), relays, tuple(notes))
+
+
+@dataclass(frozen=True)
+class _Graph:
+    """How names flow through a net with ``match:``: what :func:`names` checks."""
+
+    spec: NetSpec
+    flows: dict[str, _Flow]
+    joins: list[TransitionSpec]
+    minted: dict[str, frozenset[str]]
+    """Transition -> the places it marks with a fresh name."""
+    plain: list[TransitionSpec]
+    """The transitions without ``match:``."""
+    ins: dict[str, set[str]]
+    """Transition -> its input places that carry a value (unit places left out)."""
+    passed: dict[str, set[str]]
+    """The places a plain transition marks that do not get a fresh name there."""
+    leads: set[str]
+    """The places a key can be reached from."""
+    reach: dict[str, _Reach]
+    carriers: set[str]
+    coloured: set[str]
+    """Every place that holds a name: keys, relay targets and carriers."""
+    key_of: dict[str, str]
+    """Key place -> the join that keys it."""
+
+
+def _nearest_key(g: _Graph, o: str) -> tuple[str, str, _Path | None]:
+    """The first key lead ``o`` reaches over plain transitions (breadth first),
+    the join that keys it, and the path that join reads (``None`` if unknown)."""
+    frontier, seen = [o], {o}
+    while frontier:
+        nxt: list[str] = []
+        for q in frontier:
+            if q in g.key_of:
+                j = g.key_of[q]
+                fj = g.flows.get(j)
+                return q, j, fj.keys.get(q) if fj is not None else None
+            for s in g.plain:
+                if q in g.ins[s.name]:
+                    nxt += sorted(g.passed[s.name] & g.leads - seen)
+                    seen |= g.passed[s.name] & g.leads
+        frontier = nxt
+    raise AssertionError(f"lead {o} reaches no key")
+
+
+def _graph(bp: Blueprint) -> _Graph | None:
     spec = bp.spec
     joins = [t for t in spec.transitions if t.match is not None]
     if not joins:
         return None
     flows = _flows(bp)
-    keyed = {p.name for t in joins if t.match for p, _ in t.match.keys}
+    key_of = {p.name: t.name for t in joins if t.match for p, _ in t.match.keys}
+    keyed = set(key_of)
     relayed = {p.name for t in joins if t.match for p, _ in t.match.relay_to}
     minted = {t: frozenset(f.mints) for t, f in flows.items() if f.mints}
     plain = [t for t in spec.transitions if t.match is None]
@@ -351,12 +401,49 @@ def names(bp: Blueprint) -> Names | None:
         t.name: {i.place.name for i in t.inputs if not i.place.is_unit} for t in spec.transitions
     }
     passed = {t.name: _outs(t) - minted.get(t.name, frozenset()) for t in plain}
+    leads = _leads(keyed, plain, ins, passed)
+    reach = _reach(flows, plain, ins, passed, leads)
+    named = {p for p, r in reach.items() if r}
+    carriers = (named & leads) - keyed - relayed
+    return _Graph(
+        spec=spec,
+        flows=flows,
+        joins=joins,
+        minted=minted,
+        plain=plain,
+        ins=ins,
+        passed=passed,
+        leads=leads,
+        reach=reach,
+        carriers=carriers,
+        coloured=keyed | relayed | carriers,
+        key_of=key_of,
+    )
+
+
+def _leads(
+    keyed: set[str],
+    plain: list[TransitionSpec],
+    ins: dict[str, set[str]],
+    passed: dict[str, set[str]],
+) -> set[str]:
+    """The places a key can be reached from, over plain transitions."""
     leads = set(keyed)
     while True:
         more = {p for t in plain if passed[t.name] & leads for p in ins[t.name]} - leads
         if not more:
-            break
+            return leads
         leads |= more
+
+
+def _reach(
+    flows: dict[str, _Flow],
+    plain: list[TransitionSpec],
+    ins: dict[str, set[str]],
+    passed: dict[str, set[str]],
+    leads: set[str],
+) -> dict[str, _Reach]:
+    """Where the names reaching each place sit, from the mints, relays and keys on."""
     reach: dict[str, _Reach] = {}
     for t, f in flows.items():
         for how, origin in (
@@ -381,17 +468,24 @@ def names(bp: Blueprint) -> Names | None:
                     if path not in have:
                         have[path] = origin
                         changed = True
-    named = {p for p, r in reach.items() if r}
-    carriers = (named & leads) - keyed - relayed
-    coloured = keyed | relayed | carriers
+    return reach
+
+
+def _relays(bp: Blueprint, g: _Graph) -> tuple[str, ...]:
+    """The ``node:`` transitions that take a name-carrying place (:attr:`Names.relays`)."""
     nodes = set(bp.node_transitions)
-    relays = tuple(t.name for t in spec.transitions if t.name in nodes and ins[t.name] & coloured)
-    notes: list[str] = []
+    return tuple(
+        t.name for t in g.spec.transitions if t.name in nodes and g.ins[t.name] & g.coloured
+    )
+
+
+def _key_breaks(g: _Graph) -> list[str]:
+    """Each key reached by a token that does not hold its name in the field it reads."""
     broken: list[str] = []
-    for t in joins:
-        f = flows.get(t.name)
+    for t in g.joins:
+        f = g.flows.get(t.name)
         for q, key in f.keys.items() if f is not None else ():
-            for path, origin in reach.get(q, {}).items():
+            for path, origin in g.reach.get(q, {}).items():
                 if isinstance(path, _Lost):
                     onto = f", and that token reaches {q}" if path.at != q else ""
                     broken.append(f"{t.name} keys {q} by {_field(key)}, but {path.why}{onto}")
@@ -400,171 +494,199 @@ def names(bp: Blueprint) -> Names | None:
                         f"{t.name} keys {q} by {_field(key)}, but the name reaches it at "
                         f"{_field(path)} ({origin})"
                     )
-    key_of = {p.name: t.name for t in joins if t.match for p, _ in t.match.keys}
-    for t in joins:
+    return broken
+
+
+def _relay_notes(g: _Graph) -> list[str]:
+    """A note for each join output that leads to a key without a ``relay:``."""
+    notes: list[str] = []
+    for t in g.joins:
         own: set[str] = {p.name for p, _ in t.match.relay_to} if t.match else set()
-        for o in sorted(_outs(t) & leads - own - minted.get(t.name, frozenset())):
-            q = _nearest_key(o, key_of, plain, ins, passed, leads)
-            j = key_of[q]
-            fj = flows.get(j)
-            field = _field(fj.keys[q]) if fj is not None and q in fj.keys else "<field>"
+        for o in sorted(_outs(t) & g.leads - own - g.minted.get(t.name, frozenset())):
+            q, j, key = _nearest_key(g, o)
+            field = _field(key) if key is not None else "<field>"
             where = f"which is {j}'s key" if q == o else f"which reaches {j}'s key {q}"
             notes.append(
                 f"{t.name} puts its token on {o}, {where}, but does not relay the name it "
                 "joined there, so that name is not followed to the key and the claims stay "
                 f"unknown; add relay: {{{o}: {field}}} to {t.name}"
             )
+    return notes
+
+
+_MintKind = Literal["mint", "note", "broken", "skip"]
+
+
+def _mint_check(g: _Graph) -> tuple[list[str], list[str], list[str]]:
+    """The declared mints, the notes on the undeclared ones, and the broken contracts."""
     mints: list[str] = []
-    for t in spec.transitions:
-        if t.name not in minted:
+    notes: list[str] = []
+    broken: list[str] = []
+    for t in g.spec.transitions:
+        if t.name not in g.minted:
             continue
-        own: set[str] = {p.name for p, _ in t.match.relay_to} if t.match else set()
-        if t.match is not None and (remint := sorted(minted[t.name] & coloured - own)):
-            shown = ", ".join(remint)
-            verb = "carries" if len(remint) == 1 else "carry"
-            notes.append(
-                f"{t.name} is a join and mints into {shown}, which {verb} a name a join keys: "
-                "libpetri gives a join no mint role and reads that output as a re-mint "
-                "(NU-010, NU-054), so the claims stay unknown; mint the new name "
-                "in a plain transition after the join"
-            )
-            continue
-        taken = sorted(ins[t.name] & coloured) if t.match is None else []
-        if taken and not minted[t.name] & coloured:
-            # Its fresh names reach no key: libpetri reads it as a forward or drain
-            # of what it takes, so it is no ν mint.
-            continue
-        if taken:
-            broken.append(
-                f"{t.name} takes the name on {', '.join(taken)} and mints a fresh one, so "
-                "libpetri reads it as a relay of the name it took (NU-051)"
-            )
-            continue
-        f = flows[t.name]
-        rest = _outs(t) & coloured - minted[t.name] - own
-        fixable = sorted(rest & f.marks)
-        fixed = sorted(rest - f.marks)  # the error branch's NodeError, or a timeout's token
-        if fixable or fixed:
-            parts: list[str] = []
-            if fixable:
-                shown = ", ".join(fixable)
-                verb = "carries" if len(fixable) == 1 else "carry"
-                parts.append(f"{shown} {verb} a name it does not mint; add {shown} to its mint:")
-            if fixed:
-                shown = ", ".join(fixed)
-                parts.append(
-                    f"its error branch or timeout marks {shown}, whose token holds no name it "
-                    f"mints (a NodeError holds the node's name), so no join may key {shown} "
-                    "and no name may flow into it"
-                )
-            notes.append(
-                f"{t.name} is not declared to mint, so the names it starts are not told "
-                "apart and the claims stay unknown: " + "; ".join(parts)
-            )
-        else:
-            mints.append(t.name)
-    # A transition with no mint: that starts the tokens a join keys (followed back
-    # from the key over plain transitions to one that takes no produced token):
-    # its tokens hold no fresh name, and libpetri's reason names it with the
-    # nodes that only pass the name on.
-    producers = {p for t in spec.transitions for p in _outs(t)}
+        kind, text = _mint_verdict(g, t)
+        match kind:
+            case "mint":
+                mints.append(t.name)
+            case "note":
+                notes.append(text)
+            case "broken":
+                broken.append(text)
+            case "skip":
+                pass
+            case _:
+                assert_never(kind)
+    return mints, notes, broken
+
+
+def _mint_verdict(g: _Graph, t: TransitionSpec) -> tuple[_MintKind, str]:
+    """How the mint check reads ``t``: ``"mint"`` (libpetri may be told of it),
+    ``"note"`` or ``"broken"`` with the text, or ``"skip"`` (no ν mint)."""
+    minted = g.minted[t.name]
+    own: set[str] = {p.name for p, _ in t.match.relay_to} if t.match else set()
+    if t.match is not None and (remint := sorted(minted & g.coloured - own)):
+        shown = ", ".join(remint)
+        verb = "carries" if len(remint) == 1 else "carry"
+        return (
+            "note",
+            f"{t.name} is a join and mints into {shown}, which {verb} a name a join keys: "
+            "libpetri gives a join no mint role and reads that output as a re-mint "
+            "(NU-010, NU-054), so the claims stay unknown; mint the new name "
+            "in a plain transition after the join",
+        )
+    taken = sorted(g.ins[t.name] & g.coloured) if t.match is None else []
+    if taken and not minted & g.coloured:
+        # Its fresh names reach no key: libpetri reads it as a forward or drain
+        # of what it takes, so it is no ν mint.
+        return ("skip", "")
+    if taken:
+        return (
+            "broken",
+            f"{t.name} takes the name on {', '.join(taken)} and mints a fresh one, so "
+            "libpetri reads it as a relay of the name it took (NU-051)",
+        )
+    f = g.flows[t.name]
+    rest = _outs(t) & g.coloured - minted - own
+    fixable = sorted(rest & f.marks)
+    fixed = sorted(rest - f.marks)  # the error branch's NodeError, or a timeout's token
+    if not (fixable or fixed):
+        return ("mint", "")
+    parts: list[str] = []
+    if fixable:
+        shown = ", ".join(fixable)
+        verb = "carries" if len(fixable) == 1 else "carry"
+        parts.append(f"{shown} {verb} a name it does not mint; add {shown} to its mint:")
+    if fixed:
+        shown = ", ".join(fixed)
+        parts.append(
+            f"its error branch or timeout marks {shown}, whose token holds no name it "
+            f"mints (a NodeError holds the node's name), so no join may key {shown} "
+            "and no name may flow into it"
+        )
+    return (
+        "note",
+        f"{t.name} is not declared to mint, so the names it starts are not told "
+        "apart and the claims stay unknown: " + "; ".join(parts),
+    )
+
+
+def _outside_note(p: str) -> str:
     # A name from outside: libpetri refuses every claim it would decide by name
     # (VER-006), and a mint: on the transition that takes it would not change that.
     # With budget_places a safety claim skips the name-aware graph and is decided
     # name-blind.
-    outside = sorted(p for p in bp.env if p in coloured)
-    for p in outside:
-        notes.append(
-            f"{p} is an env: place, and a join keys on the name its tokens carry: verify "
-            "cannot assume a name from outside is fresh (VER-006), so it decides no claim "
-            "by name: deadlock_free and joined_or_dead_lettered stay unknown, and so does "
-            "every other claim unless budget_places is declared, which decides a safety "
-            "claim name-blind; mint the name in the net, and carry the outside value in "
-            "another field"
-        )
+    return (
+        f"{p} is an env: place, and a join keys on the name its tokens carry: verify "
+        "cannot assume a name from outside is fresh (VER-006), so it decides no claim "
+        "by name: deadlock_free and joined_or_dead_lettered stay unknown, and so does "
+        "every other claim unless budget_places is declared, which decides a safety "
+        "claim name-blind; mint the name in the net, and carry the outside value in "
+        "another field"
+    )
+
+
+def _starts(g: _Graph, outside: list[str]) -> dict[str, set[str]]:
+    """Each transition with no ``mint:`` that starts tokens a key is reached by
+    (followed back from the key over plain transitions to one that takes no token
+    another transition puts down), and the keys it reaches."""
+    producers = {p for t in g.spec.transitions for p in _outs(t)}
     starts: dict[str, set[str]] = {}
-    for q in sorted(key_of):
+    for q in sorted(g.key_of):
         frontier, seen = {q}, {q}
         while frontier:
             nxt: set[str] = set()
-            for s in plain:
-                if s.name in minted or not passed[s.name] & frontier:
+            for s in g.plain:
+                if s.name in g.minted or not g.passed[s.name] & frontier:
                     continue
-                if s.name in flows and not ins[s.name] & (producers | set(outside)):
+                if s.name in g.flows and not g.ins[s.name] & (producers | set(outside)):
                     starts.setdefault(s.name, set()).add(q)
-                nxt |= ins[s.name] & leads - seen
+                nxt |= g.ins[s.name] & g.leads - seen
             seen |= nxt
             frontier = nxt
+    return starts
 
-    def mint_line(s: str) -> list[str] | None:
-        """The ``mint:`` entries ``s`` needs, or ``None`` when one of its outputs
-        toward a key cannot take a mint (``check``'s rule for a ``mint:``)."""
-        paths: list[str] = []
-        for o in sorted(passed[s] & leads):
-            q = _nearest_key(o, key_of, plain, ins, passed, leads)
-            fj = flows.get(key_of[q])
-            key = fj.keys.get(q) if fj is not None else None
-            if key is None:
-                paths.append(f"{o}.<field>")
-                continue
-            place = spec.place_named(o)
-            try:
-                if place is not None:
-                    _field_path(s, place, _field(key), "mint target", mint=True)
-            except BlueprintError:
-                return None
-            paths.append(o if key == () else f"{o}.{_field(key)}")
-        return paths
 
-    for start, qs in sorted(starts.items()):
-        at, line, seen_at = start, mint_line(start), {start}
-        while line is None:
-            # The tokens it starts cannot hold a name: the mint goes on the one
-            # transition that takes all of them on toward the key.
-            toward = passed[at] & leads
-            onward = [
-                s.name
-                for s in plain
-                if s.name in flows and s.name not in minted and s.name not in seen_at
-                if toward <= ins[s.name] and passed[s.name] & leads
-            ]
-            if len(onward) != 1:
-                break
-            at = onward[0]
-            seen_at.add(at)
-            line = mint_line(at)
-        if line is None:
-            fix = (
-                "add mint: to the first transition that writes the name into a str place "
-                "or a str field"
-            )
-        elif at != start:
-            fix = (
-                f"{start}'s tokens cannot hold a name, so add mint: [{', '.join(line)}] "
-                f"to {at}, which takes them on toward the keys"
-            )
-        else:
-            fix = f"add mint: [{', '.join(line)}] to {start}"
-        notes.append(
-            f"{start} has no mint:, yet its tokens reach the join keys {', '.join(sorted(qs))}: "
-            "they hold no fresh name, so the joins cannot tell them apart and the claims "
-            "stay unknown (libpetri's reason may also name a node that only passes "
-            f"the name on, which needs no mint:); {fix}"
+def _mint_line(g: _Graph, s: str) -> list[str] | None:
+    """The ``mint:`` entries ``s`` needs, or ``None`` when one of its outputs
+    toward a key cannot take a mint (``check``'s rule for a ``mint:``)."""
+    paths: list[str] = []
+    for o in sorted(g.passed[s] & g.leads):
+        _, _, key = _nearest_key(g, o)
+        if key is None:
+            paths.append(f"{o}.<field>")
+            continue
+        place = g.spec.place_named(o)
+        try:
+            if place is not None:
+                _field_path(s, place, _field(key), "mint target", mint=True)
+        except BlueprintError:
+            return None
+        paths.append(o if key == () else f"{o}.{_field(key)}")
+    return paths
+
+
+def _missing_mint_fix(g: _Graph, start: str) -> str:
+    """What to add for ``start``'s missing ``mint:``."""
+    at, line, seen_at = start, _mint_line(g, start), {start}
+    while line is None:
+        # The tokens it starts cannot hold a name: the mint goes on the one
+        # transition that takes all of them on toward the key.
+        toward = g.passed[at] & g.leads
+        onward = [
+            s.name
+            for s in g.plain
+            if s.name in g.flows and s.name not in g.minted and s.name not in seen_at
+            if toward <= g.ins[s.name] and g.passed[s.name] & g.leads
+        ]
+        if len(onward) != 1:
+            break
+        at = onward[0]
+        seen_at.add(at)
+        line = _mint_line(g, at)
+    if line is None:
+        return (
+            "add mint: to the first transition that writes the name into a str place or a str field"
         )
-    if broken:
-        notes.extend(
-            f"{b}: names are not declared, so libpetri cannot use its ν route" for b in broken
+    if at != start:
+        return (
+            f"{start}'s tokens cannot hold a name, so add mint: [{', '.join(line)}] "
+            f"to {at}, which takes them on toward the keys"
         )
-        return Names((), (), relays, tuple(notes), declared=False)
-    matched = {t.name for t in joins}
-    contract = [r for r in relays if r not in matched]
-    if contract:
-        node = "node" if len(contract) == 1 else "nodes"
-        notes.append(
-            f"relay contract (NU-051) assumed for {node} {', '.join(contract)}: a run puts the "
-            "name it took into each place it marks that carries one, in the same field"
-        )
-    return Names(tuple(mints), tuple(sorted(carriers)), relays, tuple(notes))
+    return f"add mint: [{', '.join(line)}] to {start}"
+
+
+def _missing_mint_notes(g: _Graph, outside: list[str]) -> list[str]:
+    """A note for each transition that starts the tokens a key is reached by without a
+    ``mint:``: its tokens hold no fresh name, and libpetri's reason names it with the
+    nodes that only pass the name on."""
+    return [
+        f"{start} has no mint:, yet its tokens reach the join keys {', '.join(sorted(qs))}: "
+        "they hold no fresh name, so the joins cannot tell them apart and the claims "
+        "stay unknown (libpetri's reason may also name a node that only passes "
+        f"the name on, which needs no mint:); {_missing_mint_fix(g, start)}"
+        for start, qs in sorted(_starts(g, outside).items())
+    ]
 
 
 @dataclass(frozen=True)
